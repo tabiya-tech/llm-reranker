@@ -1,0 +1,102 @@
+{
+  "metadata": {
+    "description": "Job attribute schema for KESCO occupations in Kenya",
+    "version": "1.0.0",
+    "last_updated": "2025-01"
+  },
+  "attributes": [
+    {
+      "name": "earnings_per_month",
+      "label": "Monthly Earnings",
+      "group": "Financial",
+      "type": "ordered",
+      "coding": "linear",
+      "levels": [
+        { "id": "earn_lt10k",    "label": "Below KES 10,000" },
+        { "id": "earn_10_20k",   "label": "KES 10,000 - 19,999" },
+        { "id": "earn_20_35k",   "label": "KES 20,000 - 34,999" },
+        { "id": "earn_35_50k",   "label": "KES 35,000 - 49,999" },
+        { "id": "earn_50_80k",   "label": "KES 50,000 - 79,999" },
+        { "id": "earn_80_120k",  "label": "KES 80,000 - 119,999" },
+        { "id": "earn_120_180k", "label": "KES 120,000 - 179,999" },
+        { "id": "earn_180_300k", "label": "KES 180,000 - 299,999" },
+        { "id": "earn_300k_plus","label": "KES 300,000 or more" }
+      ]
+    },
+    {
+      "name": "task_content",
+      "label": "Task Content",
+      "group": "Job Quality",
+      "type": "categorical",
+      "coding": "dummy",
+      "base_level_id": "task_routine",
+      "levels": [
+        { "id": "task_routine", "label": "Mostly routine work that follows clear instructions" },
+        { "id": "task_mix", "label": "A mix of routine work and problem-solving" },
+        { "id": "task_creative", "label": "Mostly problem-solving or creative work" }
+      ]
+    },
+    {
+      "name": "physical_demand",
+      "label": "Physical Demand & Risk",
+      "group": "Work Environment",
+      "type": "categorical",
+      "coding": "dummy",
+      "base_level_id": "phys_light",
+      "levels": [
+        { "id": "phys_light", "label": "Light physical work and generally safe" },
+        { "id": "phys_heavy", "label": "Heavy physical work or higher risk of injury" }
+      ]
+    },
+    {
+      "name": "work_flexibility",
+      "label": "Work Flexibility",
+      "group": "Work-Life Balance",
+      "type": "categorical",
+      "coding": "dummy",
+      "base_level_id": "flex_fixed",
+      "levels": [
+        { "id": "flex_fixed", "label": "Fixed place and hours, closely supervised" },
+        { "id": "flex_some", "label": "Some flexibility in hours or how work is done" },
+        { "id": "flex_high", "label": "High flexibility, with freedom over time or place of work" }
+      ]
+    },
+    {
+      "name": "social_interaction",
+      "label": "Social Interaction",
+      "group": "Work Environment",
+      "type": "categorical",
+      "coding": "dummy",
+      "base_level_id": "soc_alone",
+      "levels": [
+        { "id": "soc_alone", "label": "Mostly working alone" },
+        { "id": "soc_people", "label": "Regularly working with other people" }
+      ]
+    },
+    {
+      "name": "career_growth",
+      "label": "Career Growth",
+      "group": "Future Prospects",
+      "type": "ordered",
+      "coding": "dummy",
+      "base_level_id": "growth_low",
+      "levels": [
+        { "id": "growth_low", "label": "Few chances to learn new skills or move ahead" },
+        { "id": "growth_med", "label": "Some chances to build skills or improve your future options" },
+        { "id": "growth_high", "label": "Strong chances to learn skills and grow into better opportunities" }
+      ]
+    },
+    {
+      "name": "social_meaning",
+      "label": "Social Meaning",
+      "group": "Purpose",
+      "type": "categorical",
+      "coding": "dummy",
+      "base_level_id": "mean_low",
+      "levels": [
+        { "id": "mean_low", "label": "Limited contribution beyond earning income" },
+        { "id": "mean_high", "label": "Clear contribution to helping others or the community" }
+      ]
+    }
+  ]
+}

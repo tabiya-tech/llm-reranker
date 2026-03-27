@@ -1,0 +1,6 @@
+# Runtime + tooling (one file for every environment: local, CI, teammates)
+pymongo>=4.6.0
+python-dotenv>=1.0.0
+certifi>=2024.0.0
+google-cloud-aiplatform>=1.70.0
+pytest>=8.0.0

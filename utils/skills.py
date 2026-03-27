@@ -1,0 +1,262 @@
+"""ESCO skill extraction from classifier output, prompt payloads, JSON parse, label→URI mapping."""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from difflib import SequenceMatcher
+from typing import Any
+
+from app.job_context import JobDescriptionContext
+
+
+def _norm_label(s: str) -> str:
+    return " ".join(s.strip().lower().split())
+
+
+# ESCO HTTP URIs end with the concept UUID, e.g. .../skill/5247a6ce-6ed0-4fb3-b121-758921dcc44e
+_ESCO_URI_LAST_SEGMENT_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _esco_concept_uuid_from_uri(uri: str) -> str | None:
+    """Return the ESCO concept UUID from the last path segment of an ESCO ``uri``, if present."""
+    if not uri or not uri.strip():
+        return None
+    part = uri.strip().rstrip("/").rsplit("/", 1)[-1]
+    if _ESCO_URI_LAST_SEGMENT_UUID.match(part):
+        return part.lower()
+    return None
+
+
+@dataclass(frozen=True)
+class EscoSkillCandidate:
+    label: str
+    uri: str
+    similarity_score: float | None = None
+    # Parsed from ``uri`` only (ESCO concept UUID).
+    esco_uuid: str | None = None
+
+
+@dataclass
+class MappedEscoSkills:
+    essential_uris: list[str] = field(default_factory=list)
+    optional_uris: list[str] = field(default_factory=list)
+    # Parallel to essential_uris / optional_uris — ESCO UUIDs from each uri (empty string if unparseable).
+    essential_skills_uuids: list[str] = field(default_factory=list)
+    optional_skills_uuids: list[str] = field(default_factory=list)
+    unmatched_essential: list[str] = field(default_factory=list)
+    unmatched_optional: list[str] = field(default_factory=list)
+
+
+def build_reranked_skills_uuids(mapped: MappedEscoSkills) -> dict[str, list[str]]:
+    """``essential_skills_uuids`` and ``optional_skills_uuids`` (non-empty ESCO UUIDs only)."""
+    return {
+        "essential_skills_uuids": [x for x in mapped.essential_skills_uuids if x],
+        "optional_skills_uuids": [x for x in mapped.optional_skills_uuids if x],
+    }
+
+
+def extract_esco_skill_candidates(classified_doc: dict[str, Any]) -> list[EscoSkillCandidate]:
+    """
+    Collect ESCO-linked skills from ``classification.entities`` (skill spans + linked_entities).
+
+    Each candidate gets ``esco_uuid`` by parsing the concept id from ``uri`` (last path segment).
+    """
+    by_uri: dict[str, EscoSkillCandidate] = {}
+    cls = classified_doc.get("classification") or {}
+    entities = cls.get("entities") or []
+    for ent in entities:
+        if ent.get("entity_type") != "skill":
+            continue
+        for le in ent.get("linked_entities") or []:
+            if (le.get("taxonomy") or "").lower() != "esco":
+                continue
+            label = (le.get("label") or "").strip()
+            uri = (le.get("uri") or "").strip()
+            if not label or not uri:
+                continue
+            raw_score = le.get("similarity_score")
+            score = float(raw_score) if raw_score is not None else None
+            eu = _esco_concept_uuid_from_uri(uri)
+            prev = by_uri.get(uri)
+            if prev is None:
+                by_uri[uri] = EscoSkillCandidate(
+                    label=label, uri=uri, similarity_score=score, esco_uuid=eu
+                )
+            elif score is not None and (
+                prev.similarity_score is None or score > prev.similarity_score
+            ):
+                by_uri[uri] = EscoSkillCandidate(
+                    label=label, uri=uri, similarity_score=score, esco_uuid=eu
+                )
+    return list(by_uri.values())
+
+
+def job_identifier(ctx: JobDescriptionContext, doc: dict[str, Any]) -> str:
+    """Stable id for logging: fingerprint, job id, or Mongo ``_id``."""
+    if ctx.job_fingerprint:
+        return ctx.job_fingerprint
+    if ctx.job_id is not None:
+        return str(ctx.job_id)
+    return str(doc.get("_id", ""))
+
+
+def skills_cell(doc: dict[str, Any]) -> str:
+    """Semicolon-separated ESCO candidate labels for display/logging."""
+    candidates = extract_esco_skill_candidates(doc)
+    return "; ".join(c.label for c in candidates)
+
+
+def skills_to_prompt_dicts(candidates: list[EscoSkillCandidate]) -> list[dict[str, Any]]:
+    """Serialize candidates for :func:`app.prompts.build_skill_ranker_prompt`."""
+    out: list[dict[str, Any]] = []
+    for c in candidates:
+        d: dict[str, Any] = {"label": c.label, "uri": c.uri}
+        if c.similarity_score is not None:
+            d["similarity_score"] = c.similarity_score
+        out.append(d)
+    return out
+
+
+def full_details_from_context(ctx: JobDescriptionContext) -> str:
+    """Single text block for the skill ranker (title, employer, JD, requirements, key metadata)."""
+    parts: list[str] = []
+    if ctx.title:
+        parts.append(f"Title: {ctx.title}")
+    if ctx.employer:
+        parts.append(f"Employer: {ctx.employer}")
+    if ctx.category:
+        parts.append(f"Category: {ctx.category}")
+    if ctx.employment_type:
+        parts.append(f"Employment type: {ctx.employment_type}")
+    if ctx.city:
+        parts.append(f"City: {ctx.city}")
+    if ctx.county:
+        parts.append(f"County: {ctx.county}")
+    if ctx.salary:
+        parts.append(f"Salary: {ctx.salary}")
+    if ctx.raw_job_description:
+        parts.append(f"Description:\n{ctx.raw_job_description}")
+    if ctx.requirements_text:
+        parts.append(f"Requirements:\n{ctx.requirements_text}")
+    return "\n\n".join(parts) if parts else "(no opportunity details)"
+
+
+def strip_json_fence(text: str) -> str:
+    t = text.strip()
+    if not t.startswith("```"):
+        return t
+    t = re.sub(r"^```(?:json)?\s*", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s*```\s*$", "", t)
+    return t.strip()
+
+
+def parse_skill_ranker_json(raw_text: str) -> tuple[list[str], list[str]]:
+    """Parse ``essential_skills`` and ``optional_skills`` from model output (JSON object)."""
+    cleaned = strip_json_fence(raw_text)
+    data = json.loads(cleaned)
+    if not isinstance(data, dict):
+        raise ValueError("Skill ranker JSON must be an object")
+    ess = data.get("essential_skills")
+    opt = data.get("optional_skills")
+    if not isinstance(ess, list) or not isinstance(opt, list):
+        raise ValueError("essential_skills and optional_skills must be lists")
+    essential = [str(x) for x in ess if isinstance(x, str) and x.strip()]
+    optional = [str(x) for x in opt if isinstance(x, str) and x.strip()]
+    return essential, optional
+
+
+# Minimum similarity for fuzzy label match (0–1)
+FUZZY_LABEL_MIN_RATIO = 0.82
+
+
+def _best_fuzzy_label(
+    query: str,
+    candidates: list[EscoSkillCandidate],
+) -> EscoSkillCandidate | None:
+    nq = _norm_label(query)
+    if not nq:
+        return None
+    best: EscoSkillCandidate | None = None
+    best_ratio = 0.0
+    for c in candidates:
+        r = SequenceMatcher(None, nq, _norm_label(c.label)).ratio()
+        if r > best_ratio:
+            best_ratio = r
+            best = c
+    if best is not None and best_ratio >= FUZZY_LABEL_MIN_RATIO:
+        return best
+    return None
+
+
+def _resolve_label_to_candidate(
+    lab: str,
+    candidates: list[EscoSkillCandidate],
+    by_norm: dict[str, EscoSkillCandidate],
+) -> EscoSkillCandidate | None:
+    cand = by_norm.get(_norm_label(lab))
+    if cand is not None:
+        return cand
+    return _best_fuzzy_label(lab, candidates)
+
+
+def map_skill_labels_to_esco_uris(
+    essential: list[str],
+    optional: list[str],
+    candidates: list[EscoSkillCandidate],
+) -> MappedEscoSkills:
+    """Map model skill labels to ESCO URIs and concept UUIDs (from each candidate uri). Exact match, then fuzzy; dedupe by URI."""
+    if not candidates:
+        return MappedEscoSkills(
+            unmatched_essential=list(essential),
+            unmatched_optional=list(optional),
+        )
+
+    by_norm: dict[str, EscoSkillCandidate] = {}
+    for c in candidates:
+        by_norm[_norm_label(c.label)] = c
+
+    seen: set[str] = set()
+    out_ess: list[str] = []
+    out_opt: list[str] = []
+    ess_uuid: list[str] = []
+    opt_uuid: list[str] = []
+    un_ess: list[str] = []
+    un_opt: list[str] = []
+
+    for lab in essential:
+        cand = _resolve_label_to_candidate(lab, candidates, by_norm)
+        if cand is None:
+            un_ess.append(lab)
+            continue
+        uri = cand.uri
+        if uri in seen:
+            continue
+        seen.add(uri)
+        out_ess.append(uri)
+        ess_uuid.append(cand.esco_uuid or "")
+
+    for lab in optional:
+        cand = _resolve_label_to_candidate(lab, candidates, by_norm)
+        if cand is None:
+            un_opt.append(lab)
+            continue
+        uri = cand.uri
+        if uri in seen:
+            continue
+        seen.add(uri)
+        out_opt.append(uri)
+        opt_uuid.append(cand.esco_uuid or "")
+
+    return MappedEscoSkills(
+        essential_uris=out_ess,
+        optional_uris=out_opt,
+        essential_skills_uuids=ess_uuid,
+        optional_skills_uuids=opt_uuid,
+        unmatched_essential=un_ess,
+        unmatched_optional=un_opt,
+    )
