@@ -32,7 +32,7 @@ from app.schemas import (
     load_onet_work_activities,
     parse_job_attributes_response,
 )
-from utils.skills import (
+from utils.classifier_linked_entities import (
     MappedEscoSkills,
     extract_esco_skill_candidates,
     full_details_from_context,

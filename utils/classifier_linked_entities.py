@@ -1,4 +1,4 @@
-"""ESCO skill extraction from classifier output, prompt payloads, JSON parse, label→URI mapping."""
+"""Classifier output: ESCO ``linked_entities`` extraction (skills, occupations, …) and skill-ranker helpers."""
 
 from __future__ import annotations
 
@@ -8,7 +8,11 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Any
 
+from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
+
+# Linked entities always use ESCO taxonomy in classifier output.
+LINKED_ENTITY_TAXONOMY_ESCO = "esco"
 
 
 def _norm_label(s: str) -> str:
@@ -30,6 +34,18 @@ def _esco_concept_uuid_from_uri(uri: str) -> str | None:
     if _ESCO_URI_LAST_SEGMENT_UUID.match(part):
         return part.lower()
     return None
+
+
+@dataclass(frozen=True)
+class LinkedEntityCandidate:
+    """One linked taxonomy hit from classifier ``classification.entities[].linked_entities``."""
+
+    entity_type: str
+    label: str
+    uri: str
+    similarity_score: float | None = None
+    # Parsed from ``uri`` last segment when it looks like a concept UUID (e.g. ESCO).
+    concept_uuid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,20 +76,30 @@ def build_reranked_skills_uuids(mapped: MappedEscoSkills) -> dict[str, list[str]
     }
 
 
-def extract_esco_skill_candidates(classified_doc: dict[str, Any]) -> list[EscoSkillCandidate]:
+def extract_linked_entity_candidates(
+    classified_doc: dict[str, Any],
+    settings: Settings | None = None,
+) -> list[LinkedEntityCandidate]:
     """
-    Collect ESCO-linked skills from ``classification.entities`` (skill spans + linked_entities).
+    Collect linked taxonomy candidates for configured ``entity_type`` values (e.g. skill, occupation).
 
-    Each candidate gets ``esco_uuid`` by parsing the concept id from ``uri`` (last path segment).
+    Uses ``Settings.classified_linked_entity_types`` and linked_entities with taxonomy ``esco`` only.
+    Dedupes by (entity_type, uri), keeping best similarity_score.
     """
-    by_uri: dict[str, EscoSkillCandidate] = {}
+    s = settings or get_settings()
+    wanted = frozenset(s.classified_linked_entity_types)
+    by_key: dict[tuple[str, str], LinkedEntityCandidate] = {}
     cls = classified_doc.get("classification") or {}
     entities = cls.get("entities") or []
     for ent in entities:
-        if ent.get("entity_type") != "skill":
+        et_raw = ent.get("entity_type")
+        if not isinstance(et_raw, str) or not et_raw.strip():
+            continue
+        et = et_raw.strip().lower()
+        if et not in wanted:
             continue
         for le in ent.get("linked_entities") or []:
-            if (le.get("taxonomy") or "").lower() != "esco":
+            if (le.get("taxonomy") or "").lower() != LINKED_ENTITY_TAXONOMY_ESCO:
                 continue
             label = (le.get("label") or "").strip()
             uri = (le.get("uri") or "").strip()
@@ -81,19 +107,56 @@ def extract_esco_skill_candidates(classified_doc: dict[str, Any]) -> list[EscoSk
                 continue
             raw_score = le.get("similarity_score")
             score = float(raw_score) if raw_score is not None else None
-            eu = _esco_concept_uuid_from_uri(uri)
-            prev = by_uri.get(uri)
+            cu = _esco_concept_uuid_from_uri(uri)
+            key = (et, uri)
+            prev = by_key.get(key)
+            cand = LinkedEntityCandidate(
+                entity_type=et,
+                label=label,
+                uri=uri,
+                similarity_score=score,
+                concept_uuid=cu,
+            )
             if prev is None:
-                by_uri[uri] = EscoSkillCandidate(
-                    label=label, uri=uri, similarity_score=score, esco_uuid=eu
-                )
+                by_key[key] = cand
             elif score is not None and (
                 prev.similarity_score is None or score > prev.similarity_score
             ):
-                by_uri[uri] = EscoSkillCandidate(
-                    label=label, uri=uri, similarity_score=score, esco_uuid=eu
-                )
-    return list(by_uri.values())
+                by_key[key] = cand
+    return list(by_key.values())
+
+
+def group_linked_entities_by_type(
+    classified_doc: dict[str, Any],
+    settings: Settings | None = None,
+) -> dict[str, list[LinkedEntityCandidate]]:
+    """Candidates grouped by ``entity_type`` (lowercase keys)."""
+    out: dict[str, list[LinkedEntityCandidate]] = {}
+    for c in extract_linked_entity_candidates(classified_doc, settings):
+        out.setdefault(c.entity_type, []).append(c)
+    return out
+
+
+def extract_esco_skill_candidates(classified_doc: dict[str, Any]) -> list[EscoSkillCandidate]:
+    """
+    ESCO-linked **skills** only (``entity_type`` skill), for the skill ranker.
+
+    Delegates to :func:`extract_linked_entity_candidates` and maps to ``EscoSkillCandidate``.
+    """
+    settings = get_settings()
+    out: list[EscoSkillCandidate] = []
+    for c in extract_linked_entity_candidates(classified_doc, settings):
+        if c.entity_type != "skill":
+            continue
+        out.append(
+            EscoSkillCandidate(
+                label=c.label,
+                uri=c.uri,
+                similarity_score=c.similarity_score,
+                esco_uuid=c.concept_uuid,
+            )
+        )
+    return out
 
 
 def job_identifier(ctx: JobDescriptionContext, doc: dict[str, Any]) -> str:

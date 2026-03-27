@@ -22,6 +22,12 @@ def repo_root() -> Path:
 load_dotenv(_repo_root() / ".env", override=False)
 
 
+def _entity_types_tuple(value: str | None, *, default: str = "skill,occupation") -> tuple[str, ...]:
+    """Lowercase entity types from comma-separated env (Classifier ``entity_type`` values)."""
+    t = _comma_keys(value, default)
+    return tuple(x.strip().lower() for x in t if x.strip())
+
+
 def _comma_keys(value: str | None, default: str) -> tuple[str, ...]:
     """Split comma-separated keys; empty env / whitespace-only falls back to ``default``."""
     raw = (value if value is not None else default).strip()
@@ -156,6 +162,9 @@ class Settings:
     # Target collection: flush Mongo bulk_write after this many upserts (see ``BULK_WRITE_BATCH_SIZE``).
     bulk_write_batch_size: int
 
+    # Classifier ``classification.entities[].linked_entities`` with taxonomy ``esco`` (fixed).
+    classified_linked_entity_types: tuple[str, ...]
+
     @staticmethod
     def from_env() -> Settings:
         root = _repo_root()
@@ -250,6 +259,9 @@ class Settings:
             vertex_model=os.environ.get("VERTEX_MODEL", "gemini-2.0-flash-001"),
             google_application_credentials_resolved=creds_resolved,
             bulk_write_batch_size=_int_env("BULK_WRITE_BATCH_SIZE", 100),
+            classified_linked_entity_types=_entity_types_tuple(
+                os.environ.get("CLASSIFIED_LINKED_ENTITY_TYPES")
+            ),
         )
 
 

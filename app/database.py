@@ -18,7 +18,7 @@ from app.logging_config import sanitize_mongodb_uri
 from app.schemas import JobAttributesResult
 
 if TYPE_CHECKING:
-    from utils.skills import MappedEscoSkills
+    from utils.classifier_linked_entities import MappedEscoSkills
 
 logger = logging.getLogger(__name__)
 _mongo_client_connection_logged = False

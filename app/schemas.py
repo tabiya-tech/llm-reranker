@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings, get_settings
-from utils.skills import strip_json_fence
+from utils.classifier_linked_entities import strip_json_fence
 
 
 @dataclass(frozen=True)

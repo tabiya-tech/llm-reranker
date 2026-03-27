@@ -21,7 +21,7 @@ from app.logging_config import configure_logging
 from app.llm_service import run_job_attributes_for_job, run_skill_ranker_for_job
 from app.prompt_debug import dump_prompt_debug_first_row
 from app.schemas import JobAttributesResult
-from utils.skills import (
+from utils.classifier_linked_entities import (
     MappedEscoSkills,
     extract_esco_skill_candidates,
     job_identifier,
@@ -81,12 +81,14 @@ def run() -> None:
     pending: list[UpdateOne] = []
 
     logger.info(
-        "Batch start: limit=%s dry_run=%s target=%s bulk_batch_size=%s job_attributes_schema=%s",
+        "Batch start: limit=%s dry_run=%s target=%s bulk_batch_size=%s job_attributes_schema=%s "
+        "classified_linked_entity_types=%s",
         args.limit,
         args.dry_run,
         settings.mongodb_target_collection,
         batch_size,
         settings.job_attributes_schema_path,
+        list(settings.classified_linked_entity_types),
     )
 
     n = 0

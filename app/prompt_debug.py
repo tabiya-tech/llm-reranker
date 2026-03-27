@@ -10,7 +10,11 @@ from app.config import Settings
 from app.job_context import JobDescriptionContext
 from app.llm_service import build_job_attributes_prompt_for_job
 from app.prompts import build_skill_ranker_prompt
-from utils.skills import extract_esco_skill_candidates, full_details_from_context, skills_to_prompt_dicts
+from utils.classifier_linked_entities import (
+    extract_esco_skill_candidates,
+    full_details_from_context,
+    skills_to_prompt_dicts,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -8,30 +8,49 @@ from typing import Any
 from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
 from app.schemas import JobAttributesResult, load_onet_work_activities
-from utils.skills import MappedEscoSkills, extract_esco_skill_candidates
+from utils.classifier_linked_entities import (
+    LinkedEntityCandidate,
+    MappedEscoSkills,
+    group_linked_entities_by_type,
+)
 
-PIPELINE_SCHEMA_VERSION = "3"
+PIPELINE_SCHEMA_VERSION = "6"
 
 
-def classified_skills_payload(
-    classified_doc: dict[str, Any],
+def _classified_rows_and_uuids(
+    candidates: list[LinkedEntityCandidate],
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """ESCO candidates from classifier: serializable rows + deduped UUID list."""
-    candidates = extract_esco_skill_candidates(classified_doc)
-    skills: list[dict[str, Any]] = []
+    """Serialize linked entities for Mongo (same shape for skills and occupations)."""
+    rows: list[dict[str, Any]] = []
     uuids: list[str] = []
     for c in candidates:
-        skills.append(
+        rows.append(
             {
                 "label": c.label,
                 "uri": c.uri,
-                "esco_uuid": c.esco_uuid,
+                "esco_uuid": c.concept_uuid,
                 "similarity_score": c.similarity_score,
             }
         )
-        if c.esco_uuid:
-            uuids.append(c.esco_uuid)
-    return skills, uuids
+        if c.concept_uuid:
+            uuids.append(c.concept_uuid)
+    return rows, uuids
+
+
+def _classified_linked_by_type(
+    by_type: dict[str, list[LinkedEntityCandidate]],
+    settings: Settings,
+) -> dict[str, dict[str, Any]]:
+    """
+    One entry per configured ``entity_type``: ``items`` (row dicts) and ``uuids`` (concept UUIDs).
+
+    Covers every value in ``settings.classified_linked_entity_types`` (empty lists when none extracted).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for et in settings.classified_linked_entity_types:
+        rows, uuids = _classified_rows_and_uuids(by_type.get(et, []))
+        out[et] = {"items": rows, "uuids": uuids}
+    return out
 
 
 def work_activity_names_for_ids(
@@ -70,6 +89,7 @@ def build_llm_reranker_meta(settings: Settings) -> dict[str, Any]:
         "job_attributes_model": settings.vertex_model,
         "gcp_location": settings.gcp_location,
         "schema_version": PIPELINE_SCHEMA_VERSION,
+        "classified_linked_entity_types": list(settings.classified_linked_entity_types),
     }
 
 
@@ -92,7 +112,12 @@ def build_ranked_job_document(
         return None
 
     now = datetime.now(timezone.utc)
-    classified_skills, classified_skills_uuids = classified_skills_payload(classified_doc)
+    by_type = group_linked_entities_by_type(classified_doc, settings)
+    classified_skills, classified_skills_uuids = _classified_rows_and_uuids(by_type.get("skill", []))
+    classified_occupations, classified_occupations_uuids = _classified_rows_and_uuids(
+        by_type.get("occupation", [])
+    )
+    classified_linked_by_type = _classified_linked_by_type(by_type, settings)
     wa_ids = list(ja.work_activity_ids)
     wa_names = work_activity_names_for_ids(ja.work_activity_ids, settings=settings)
 
@@ -113,6 +138,9 @@ def build_ranked_job_document(
         "source_classified_id": classified_doc.get("_id"),
         "classified_skills": classified_skills,
         "classified_skills_uuids": classified_skills_uuids,
+        "classified_occupations": classified_occupations,
+        "classified_occupations_uuids": classified_occupations_uuids,
+        "classified_linked_by_type": classified_linked_by_type,
         "occupation_skills": [],
         "occupation_skills_uuids": [],
         "essential_skills": essential,

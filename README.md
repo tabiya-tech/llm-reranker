@@ -8,7 +8,7 @@ Batch pipeline over classified job documents in MongoDB: Vertex AI (Gemini) rera
 |------|---------|
 | `main.py` | CLI and orchestration |
 | `app/` | Config, MongoDB (read + target upsert), prompts, Vertex, schemas, logging |
-| `utils/` | ESCO skill extraction and label mapping |
+| `utils/` | `classifier_linked_entities.py`: ESCO linked-entity extraction, skill-ranker helpers |
 | `resources/` | Prompt templates, job attribute schema JSON(s), ONET reference data |
 
 ## Prerequisites
@@ -25,7 +25,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Configure `.env`: `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_SOURCE_COLLECTION`, `MONGODB_TARGET_COLLECTION`, optional `BULK_WRITE_BATCH_SIZE` (default `100`), optional `JOB_ATTRIBUTES_SCHEMA` (path to job-attributes JSON; default `resources/job_attributes_reduced.json` under `RESOURCES_DIR`), Vertex (`GCP_PROJECT_ID`, `GCP_LOCATION`, `VERTEX_MODEL`, credentials). Set `LOG_LEVEL` as needed.
+Configure `.env`: `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_SOURCE_COLLECTION`, `MONGODB_TARGET_COLLECTION`, optional `BULK_WRITE_BATCH_SIZE` (default `100`), optional `JOB_ATTRIBUTES_SCHEMA`, optional `CLASSIFIED_LINKED_ENTITY_TYPES` (default `skill,occupation`; linked taxonomy is always ESCO), Vertex (`GCP_PROJECT_ID`, `GCP_LOCATION`, `VERTEX_MODEL`, credentials). Set `LOG_LEVEL` as needed.
 
 ## Usage
 
@@ -41,4 +41,6 @@ Each run performs **both** LLM steps (skill ranker when ESCO candidates exist, t
 | `--verbose` | Extra per-job counts on stderr |
 | `--dump-prompts DIR` | Write prompts for the first document only (debug) |
 | `--bulk-batch-size N` | Flush MongoDB writes every N upserts (overrides `BULK_WRITE_BATCH_SIZE`) |
+
+Target documents (see `app/ranked_job_schema.py`) include **`classified_linked_by_type`**: a map keyed by each configured `CLASSIFIED_LINKED_ENTITY_TYPES` value, with `items` and `uuids` per type. Legacy flat fields `classified_skills` / `classified_occupations` remain for convenience.
 
