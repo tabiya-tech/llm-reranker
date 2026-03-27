@@ -9,7 +9,7 @@ Batch pipeline over classified job documents in MongoDB: Vertex AI (Gemini) rera
 | `main.py` | CLI and orchestration |
 | `app/` | Config, MongoDB (read + target upsert), prompts, Vertex, schemas, logging |
 | `utils/` | ESCO skill extraction and label mapping |
-| `resources/` | Prompt templates, attribute schema, ONET reference data |
+| `resources/` | Prompt templates, job attribute schema JSON(s), ONET reference data |
 
 ## Prerequisites
 
@@ -25,7 +25,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Configure `.env`: `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_SOURCE_COLLECTION`, `MONGODB_TARGET_COLLECTION`, optional`BULK_WRITE_BATCH_SIZE` (default `100`: ), Vertex (`GCP_PROJECT_ID`, `GCP_LOCATION`, `VERTEX_MODEL`, credentials). Set `LOG_LEVEL` as needed.
+Configure `.env`: `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_SOURCE_COLLECTION`, `MONGODB_TARGET_COLLECTION`, optional `BULK_WRITE_BATCH_SIZE` (default `100`), optional `JOB_ATTRIBUTES_SCHEMA` (path to job-attributes JSON; default `resources/job_attributes_reduced.json` under `RESOURCES_DIR`), Vertex (`GCP_PROJECT_ID`, `GCP_LOCATION`, `VERTEX_MODEL`, credentials). Set `LOG_LEVEL` as needed.
 
 ## Usage
 

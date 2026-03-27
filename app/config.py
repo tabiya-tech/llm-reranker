@@ -55,6 +55,32 @@ def _unique_key_order(*groups: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _resolve_job_attributes_schema_path(
+    repo_root: Path,
+    resources_dir: Path,
+    raw: str | None,
+) -> Path:
+    """
+    Path to the job-attributes JSON (same structure for any number of attributes).
+
+    ``JOB_ATTRIBUTES_SCHEMA`` / ``JOB_ATTRIBUTES_SCHEMA_FILE``:
+    absolute path, or relative to ``resources_dir`` (preferred), or relative to repo root.
+    Default basename: ``job_attributes_reduced.json`` under ``resources_dir``.
+    """
+    default_name = "job_attributes_reduced.json"
+    if raw is None or not str(raw).strip():
+        return (resources_dir / default_name).resolve()
+    s = str(raw).strip()
+    p = Path(s)
+    if p.is_absolute():
+        return p.resolve()
+    under_res = (resources_dir / p).resolve()
+    if under_res.is_file():
+        return under_res
+    under_root = (repo_root / p).resolve()
+    return under_root if under_root.is_file() else under_res
+
+
 def _resources_dir(repo_root: Path) -> Path:
     """
     Versioned prompts and schema live under ``resources/`` at the repo root.
@@ -95,6 +121,9 @@ class Settings:
     mongodb_tls_ca_file: str | None
     mongodb_tls_insecure: bool
     resources_dir: Path
+
+    # Resolved path to job attributes JSON (see ``JOB_ATTRIBUTES_SCHEMA``).
+    job_attributes_schema_path: Path
 
     # Mongo filter keys (document field names used in find_one)
     mongo_field_job_id: str
@@ -151,6 +180,12 @@ class Settings:
             or "ClassifiedJobs"
         ).strip()
         target_coll = (os.environ.get("MONGODB_TARGET_COLLECTION") or source_coll).strip()
+        ja_schema_raw = os.environ.get("JOB_ATTRIBUTES_SCHEMA") or os.environ.get(
+            "JOB_ATTRIBUTES_SCHEMA_FILE"
+        )
+        job_attributes_schema_path = _resolve_job_attributes_schema_path(
+            root, resources, ja_schema_raw
+        )
         return Settings(
             mongodb_uri=os.environ.get("MONGODB_URI", "mongodb://localhost:27017"),
             mongodb_database=os.environ.get("MONGODB_DATABASE", "ZambiaJobs"),
@@ -160,6 +195,7 @@ class Settings:
             mongodb_tls_insecure=os.environ.get("MONGODB_TLS_INSECURE", "").lower()
             in ("1", "true", "yes"),
             resources_dir=resources,
+            job_attributes_schema_path=job_attributes_schema_path,
             mongo_field_job_id=os.environ.get("CLASSIFIED_MONGO_FIELD_JOB_ID", "job_id"),
             mongo_field_job_fingerprint=os.environ.get(
                 "CLASSIFIED_MONGO_FIELD_JOB_FINGERPRINT", "job_fingerprint"

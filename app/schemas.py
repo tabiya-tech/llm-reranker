@@ -1,4 +1,4 @@
-"""Load job attribute enums and ONET work-activity lists from JSON under ``Settings.resources_dir`` (``job_attributes_schema.json`` at the root)."""
+"""Load job attribute enums and ONET work-activity lists from JSON (path from ``Settings.job_attributes_schema_path``)."""
 
 from __future__ import annotations
 
@@ -53,8 +53,9 @@ class JobAttributesResult:
 
 
 def job_attributes_schema_path(settings: Settings | None = None) -> Path:
+    """Resolved path from env (see ``JOB_ATTRIBUTES_SCHEMA`` in ``app.config``)."""
     settings = settings or get_settings()
-    return settings.resources_dir / "job_attributes_schema.json"
+    return settings.job_attributes_schema_path
 
 
 def onet_work_activities_path(settings: Settings | None = None) -> Path:

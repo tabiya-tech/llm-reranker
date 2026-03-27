@@ -81,11 +81,12 @@ def run() -> None:
     pending: list[UpdateOne] = []
 
     logger.info(
-        "Batch start: limit=%s dry_run=%s target=%s bulk_batch_size=%s",
+        "Batch start: limit=%s dry_run=%s target=%s bulk_batch_size=%s job_attributes_schema=%s",
         args.limit,
         args.dry_run,
         settings.mongodb_target_collection,
         batch_size,
+        settings.job_attributes_schema_path,
     )
 
     n = 0
