@@ -12,19 +12,20 @@ from app.schemas import JobAttributesSchema, OnetWorkActivity, load_job_attribut
 
 
 def _format_labeled_list(potential_skills: list[dict[str, Any]]) -> str:
-    """Format ESCO candidates for the ranker prompt; model must return these labels verbatim."""
+    """Format skill menu for the ranker: label, optional description; model returns labels verbatim."""
     lines: list[str] = []
     for i, s in enumerate(potential_skills, 1):
         label = s.get("label") or ""
-        uri = s.get("uri") or ""
-        score = s.get("similarity_score")
-        if score is not None:
-            lines.append(f"{i}. {label} (match score: {float(score):.4f})")
-        else:
-            lines.append(f"{i}. {label}")
-        if uri:
-            lines.append(f"   URI: {uri}")
+        desc = (s.get("description") or "").strip()
+        lines.append(f"{i}. {label}")
+        if desc:
+            lines.append(f"   Description: {desc}")
     return "\n".join(lines)
+
+
+def format_skill_ranker_skills_text(potential_skills: list[dict[str, Any]]) -> str:
+    """The ``skills_text`` argument passed to ``str.format`` for ``Skills_reranker_prompts.md``."""
+    return _format_labeled_list(potential_skills)
 
 
 def build_skill_ranker_prompt(
@@ -36,7 +37,7 @@ def build_skill_ranker_prompt(
     """
     Skill ranker user message from ``resources/Skills_reranker_prompts.md``.
 
-    ``potential_skills``: dicts with ``label``, ``uri``, optional ``similarity_score``.
+    ``potential_skills``: dicts with ``label`` and optional ``description`` (no URIs or scores).
     """
     skills_text = _format_labeled_list(potential_skills)
     template = load_skills_ranker_prompt_template(settings or get_settings())

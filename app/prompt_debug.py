@@ -19,6 +19,7 @@ from utils.occupation_to_skills_mapping import (
     merge_esco_candidates_with_occupation_taxonomy,
     occupation_skill_taxonomy_for_settings,
 )
+from utils.skill_descriptions import load_skill_description_by_esco
 from utils.uuid_to_tabiya_id import load_skills_uuid_tabiya_map
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,14 @@ def dump_prompt_debug_first_row(
     skills_uuid_tabiya_map = load_skills_uuid_tabiya_map(
         str(settings.skills_csv_path.resolve())
     )
+    skill_desc_by_esco: dict[str, str] = {}
+    if settings.skills_csv_include_descriptions and (
+        settings.skills_csv_description_column or ""
+    ).strip():
+        skill_desc_by_esco = load_skill_description_by_esco(
+            str(settings.skills_csv_path.resolve()),
+            settings.skills_csv_description_column.strip(),
+        )
     base = extract_esco_skill_candidates(doc)
     merge_esco_candidates_with_occupation_taxonomy(
         doc,
@@ -49,7 +58,12 @@ def dump_prompt_debug_first_row(
         settings=settings,
     )
     skills_prompt = build_skill_ranker_prompt(
-        full, skills_to_prompt_dicts(base), settings=settings
+        full,
+        skills_to_prompt_dicts(
+            base,
+            description_by_esco=skill_desc_by_esco if skill_desc_by_esco else None,
+        ),
+        settings=settings,
     )
     attrs_prompt = build_job_attributes_prompt_for_job(ctx, settings=settings)
     (out_dir / "01_skills_prompt.txt").write_text(skills_prompt, encoding="utf-8")

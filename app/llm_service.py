@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.prompts import (
     build_job_attributes_metadata_block,
     build_job_attributes_prompt,
     build_skill_ranker_prompt,
+    format_skill_ranker_skills_text,
 )
 from app.schemas import (
     JobAttributesResult,
@@ -140,13 +142,13 @@ def _call_vertex_json_model(prompt: str, *, settings: Settings) -> str:
 def call_skill_ranker_model(prompt: str, *, settings: Settings | None = None) -> str:
     """Send the skill-ranker prompt to Gemini on Vertex; expect JSON in the response body."""
     s = settings or get_settings()
-    logger.info(
+    logger.debug(
         "LLM call 1 (skill ranker): invoking model=%s project=%s",
         s.vertex_model,
         s.gcp_project_id or "(unset)",
     )
     out = _call_vertex_json_model(prompt, settings=s)
-    logger.info("LLM call 1 (skill ranker): completed")
+    logger.debug("LLM call 1 (skill ranker): completed")
     return out
 
 
@@ -233,12 +235,18 @@ def run_skill_ranker_for_job(
     *,
     settings: Settings | None = None,
     esco_candidates: list[EscoSkillCandidate] | None = None,
+    log_llm1_prompt: bool = False,
+    log_llm1_job_label: str = "",
+    description_by_esco: dict[str, str] | None = None,
 ) -> tuple[list[str], list[str], MappedEscoSkills, str]:
     """
     Skill ranker: ESCO candidates, JD text, LLM call, JSON parse, label→URI/UUID map.
 
     Pass ``esco_candidates`` to override the menu (default ``extract_esco_skill_candidates(ctx.classified)``).
     Occupation taxonomy skills are **not** included here; they are merged only for storage / relations.
+
+    Set ``log_llm1_prompt`` to log ``full_details``, ``skills_to_prompt_dicts``, ``skills_text``, and the
+    full assembled user message (template from ``resources/Skills_reranker_prompts.md``).
 
     Returns essential labels, optional labels, ``MappedEscoSkills``, and raw model text.
     """
@@ -250,7 +258,31 @@ def run_skill_ranker_for_job(
     )
     full_details = full_details_from_context(ctx)
     s = settings or get_settings()
-    prompt = build_skill_ranker_prompt(full_details, skills_to_prompt_dicts(candidates), settings=s)
+    skill_dicts = skills_to_prompt_dicts(
+        candidates, description_by_esco=description_by_esco
+    )
+    skills_text = format_skill_ranker_skills_text(skill_dicts)
+    prompt = build_skill_ranker_prompt(full_details, skill_dicts, settings=s)
+
+    if log_llm1_prompt:
+        sep = "-" * 80
+        label = (log_llm1_job_label or "").strip() or "(job)"
+        logger.info("%s", sep)
+        logger.info(
+            "LLM1 skill ranker | job=%s | template=resources/Skills_reranker_prompts.md | candidates=%s",
+            label,
+            len(skill_dicts),
+        )
+        logger.info("LLM1 parameter `full_details` (%s chars):\n%s", len(full_details), full_details)
+        logger.info(
+            "LLM1 parameter `potential_skills` (JSON, %s rows):\n%s",
+            len(skill_dicts),
+            json.dumps(skill_dicts, ensure_ascii=False, indent=2),
+        )
+        logger.info("LLM1 derived `skills_text` (%s chars):\n%s", len(skills_text), skills_text)
+        logger.info("LLM1 assembled user prompt (%s chars):\n%s", len(prompt), prompt)
+        logger.info("%s", sep)
+
     raw = call_skill_ranker_model(prompt, settings=s)
     essential, optional = parse_skill_ranker_json(raw)
     mapped = map_skill_labels_to_esco_uris(essential, optional, candidates)

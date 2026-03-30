@@ -72,6 +72,14 @@ def _int_env(name: str, default: int, *, min_v: int = 1, max_v: int = 10_000) ->
     return max(min_v, min(n, max_v))
 
 
+def _bool_env(name: str, *, default: bool = False) -> bool:
+    """Parse ``1`` / ``true`` / ``yes`` / ``on`` as True (case-insensitive); unset → ``default``."""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _unique_key_order(*groups: tuple[str, ...]) -> tuple[str, ...]:
     """Concatenate key tuples, keeping first occurrence of each field name."""
     seen: set[str] = set()
@@ -237,6 +245,11 @@ class Settings:
     # ``skills.csv``: Tabiya skill ``ID`` / ESCO uuid → ``PREFERREDLABEL`` (see ``SKILLS_CSV``).
     skills_csv_path: Path
 
+    # If True, LLM1 skill menu includes descriptions from ``SKILLS_CSV_DESCRIPTION_COLUMN`` (see ``SKILLS_CSV_INCLUDE_DESCRIPTIONS``).
+    skills_csv_include_descriptions: bool
+    # CSV column name for definition text when include is True (``SKILLS_CSV_DESCRIPTION_COLUMN``).
+    skills_csv_description_column: str
+
     # Mongo filter keys (document field names used in find_one)
     mongo_field_job_id: str
     mongo_field_job_fingerprint: str
@@ -309,6 +322,8 @@ class Settings:
         occupations_csv_path = _resolve_occupations_csv_path(root, resources, occ_csv_raw)
         skills_csv_raw = os.environ.get("SKILLS_CSV")
         skills_csv_path = _resolve_skills_csv_path(root, resources, skills_csv_raw)
+        skills_include_desc = _bool_env("SKILLS_CSV_INCLUDE_DESCRIPTIONS", default=False)
+        skills_desc_col = (os.environ.get("SKILLS_CSV_DESCRIPTION_COLUMN") or "").strip()
         return Settings(
             mongodb_uri=os.environ.get("MONGODB_URI", "mongodb://localhost:27017"),
             mongodb_database=os.environ.get("MONGODB_DATABASE", "ZambiaJobs"),
@@ -322,6 +337,8 @@ class Settings:
             occupation_to_skill_relations_path=occupation_to_skill_relations_path,
             occupations_csv_path=occupations_csv_path,
             skills_csv_path=skills_csv_path,
+            skills_csv_include_descriptions=skills_include_desc,
+            skills_csv_description_column=skills_desc_col,
             mongo_field_job_id=os.environ.get("CLASSIFIED_MONGO_FIELD_JOB_ID", "job_id"),
             mongo_field_job_fingerprint=os.environ.get(
                 "CLASSIFIED_MONGO_FIELD_JOB_FINGERPRINT", "job_fingerprint"

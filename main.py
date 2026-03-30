@@ -34,6 +34,7 @@ from utils.occupation_to_skills_mapping import (
     merge_esco_candidates_with_occupation_taxonomy,
     occupation_skill_taxonomy_for_settings,
 )
+from utils.skill_descriptions import load_skill_description_by_esco
 from utils.uuid_to_tabiya_id import load_skills_uuid_tabiya_map
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,12 @@ def _parse_args() -> argparse.Namespace:
         help="Per job: extra counts on stderr",
     )
     p.add_argument(
+        "--log-llm1-prompt",
+        action="store_true",
+        help="Per job: log LLM1 (skill ranker) full_details, potential_skills, skills_text, assembled "
+        "prompt (from resources/Skills_reranker_prompts.md); skip other per-job INFO logs",
+    )
+    p.add_argument(
         "--bulk-batch-size",
         type=int,
         default=None,
@@ -125,6 +132,14 @@ def run() -> None:
     skills_uuid_tabiya_map = load_skills_uuid_tabiya_map(
         str(settings.skills_csv_path.resolve())
     )
+    skill_desc_by_esco: dict[str, str] = {}
+    if settings.skills_csv_include_descriptions and (
+        settings.skills_csv_description_column or ""
+    ).strip():
+        skill_desc_by_esco = load_skill_description_by_esco(
+            str(settings.skills_csv_path.resolve()),
+            settings.skills_csv_description_column.strip(),
+        )
 
     logger.info(
         "Batch start: limit=%s dry_run=%s target=%s bulk_batch_size=%s job_attributes_schema=%s "
@@ -190,44 +205,50 @@ def run() -> None:
             )
             if base_skills:
                 essential, optional, skill_mapped, skill_raw = run_skill_ranker_for_job(
-                    ctx, settings=settings, esco_candidates=base_skills
+                    ctx,
+                    settings=settings,
+                    esco_candidates=base_skills,
+                    log_llm1_prompt=args.log_llm1_prompt,
+                    log_llm1_job_label=ident,
+                    description_by_esco=skill_desc_by_esco if skill_desc_by_esco else None,
                 )
                 ran_skill = True
-            elif args.verbose:
+            elif args.verbose and not args.log_llm1_prompt:
                 logger.info("Skill ranker skipped (no classifier ESCO skills): id=%s", ident)
 
             ja = run_job_attributes_for_job(ctx, settings=settings)
             ran_ja = True
 
-        occ_labels = _classified_occupation_labels_for_log(doc, settings)
-        logger.info(
-            "Processing job: %s (id=%s) classified_occupations: %s",
-            title or "(no title)",
-            ident,
-            occ_labels,
-        )
-        if occ_stats is not None:
-            for line in occ_stats.format_log_lines():
-                logger.info("%s", line)
-        if ran_skill and skill_mapped is not None and occupation_relation_skill_uuids:
-            oe, oo, ou = _occupation_ranker_counts(occupation_relation_skill_uuids, skill_mapped)
+        if not args.log_llm1_prompt:
+            occ_labels = _classified_occupation_labels_for_log(doc, settings)
             logger.info(
-                "ranker: total_essential=%s total_optional=%s | among_occupation_relation_skills: "
-                "essential=%s optional=%s unranked=%s",
-                len(essential),
-                len(optional),
-                oe,
-                oo,
-                ou,
+                "Processing job: %s (id=%s) classified_occupations: %s",
+                title or "(no title)",
+                ident,
+                occ_labels,
             )
-        elif ran_skill and skill_mapped is not None:
-            logger.info(
-                "ranker: total_essential=%s total_optional=%s (no occupation relation skills on this job)",
-                len(essential),
-                len(optional),
-            )
+            if occ_stats is not None:
+                for line in occ_stats.format_log_lines():
+                    logger.info("%s", line)
+            if ran_skill and skill_mapped is not None and occupation_relation_skill_uuids:
+                oe, oo, ou = _occupation_ranker_counts(occupation_relation_skill_uuids, skill_mapped)
+                logger.info(
+                    "ranker: total_essential=%s total_optional=%s | among_occupation_relation_skills: "
+                    "essential=%s optional=%s unranked=%s",
+                    len(essential),
+                    len(optional),
+                    oe,
+                    oo,
+                    ou,
+                )
+            elif ran_skill and skill_mapped is not None:
+                logger.info(
+                    "ranker: total_essential=%s total_optional=%s (no occupation relation skills on this job)",
+                    len(essential),
+                    len(optional),
+                )
 
-        if args.verbose:
+        if args.verbose and not args.log_llm1_prompt:
             parts: list[str] = []
             if ran_skill:
                 parts.append(f"LLM1: ess={len(essential)} opt={len(optional)}")

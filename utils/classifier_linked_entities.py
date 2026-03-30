@@ -205,13 +205,25 @@ def skills_cell(doc: dict[str, Any]) -> str:
     return "; ".join(c.label for c in candidates)
 
 
-def skills_to_prompt_dicts(candidates: list[EscoSkillCandidate]) -> list[dict[str, Any]]:
-    """Serialize candidates for :func:`app.prompts.build_skill_ranker_prompt`."""
+def skills_to_prompt_dicts(
+    candidates: list[EscoSkillCandidate],
+    *,
+    description_by_esco: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Serialize candidates for :func:`app.prompts.build_skill_ranker_prompt`.
+
+    ``description_by_esco``: optional lowercase ESCO uuid → text from ``skills.csv`` (see
+    :mod:`utils.skill_descriptions`). URIs and classifier scores are omitted from the prompt.
+    """
     out: list[dict[str, Any]] = []
     for c in candidates:
-        d: dict[str, Any] = {"label": c.label, "uri": c.uri}
-        if c.similarity_score is not None:
-            d["similarity_score"] = c.similarity_score
+        d: dict[str, Any] = {"label": c.label}
+        u = (c.esco_uuid or "").strip().lower()
+        if description_by_esco and u:
+            desc = description_by_esco.get(u)
+            if desc and str(desc).strip():
+                d["description"] = str(desc).strip()
         out.append(d)
     return out
 
