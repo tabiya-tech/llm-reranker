@@ -22,10 +22,33 @@ def repo_root() -> Path:
 load_dotenv(_repo_root() / ".env", override=False)
 
 
+def _normalize_classifier_entity_type_token(raw: str) -> str:
+    """
+    Map common env plural forms to classifier ``entity_type`` values (ESCO uses singular).
+
+    Classifier JSON uses ``skill`` and ``occupation``; env often uses ``skills`` / ``occupations``.
+    """
+    t = raw.strip().lower()
+    if t == "skills":
+        return "skill"
+    if t == "occupations":
+        return "occupation"
+    return t
+
+
 def _entity_types_tuple(value: str | None, *, default: str = "skill,occupation") -> tuple[str, ...]:
     """Lowercase entity types from comma-separated env (Classifier ``entity_type`` values)."""
     t = _comma_keys(value, default)
-    return tuple(x.strip().lower() for x in t if x.strip())
+    out: list[str] = []
+    seen: set[str] = set()
+    for x in t:
+        if not str(x).strip():
+            continue
+        n = _normalize_classifier_entity_type_token(str(x))
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return tuple(out)
 
 
 def _comma_keys(value: str | None, default: str) -> tuple[str, ...]:
@@ -87,6 +110,80 @@ def _resolve_job_attributes_schema_path(
     return under_root if under_root.is_file() else under_res
 
 
+def _resolve_occupation_to_skill_relations_path(
+    repo_root: Path,
+    resources_dir: Path,
+    raw: str | None,
+) -> Path:
+    """
+    Path to occupation→skill relations CSV (see ``OCCUPATION_TO_SKILL_RELATIONS_CSV``).
+
+    Default: ``resources/occupation_to_skill_relations.csv`` (file may be created later).
+    """
+    default_name = "occupation_to_skill_relations.csv"
+    if raw is None or not str(raw).strip():
+        return (resources_dir / default_name).resolve()
+    s = str(raw).strip()
+    p = Path(s)
+    if p.is_absolute():
+        return p.resolve()
+    under_res = (resources_dir / p).resolve()
+    if under_res.is_file():
+        return under_res
+    under_root = (repo_root / p).resolve()
+    return under_root if under_root.is_file() else under_res
+
+
+def _resolve_occupations_csv_path(
+    repo_root: Path,
+    resources_dir: Path,
+    raw: str | None,
+) -> Path:
+    """
+    Tabiya ``occupations.csv``: ``ID`` + ``UUIDHISTORY`` / ``ORIGINURI``.
+
+    Row ``ID`` must match ``OCCUPATIONID`` in ``occupation_to_skill_relations.csv``.
+
+    ``OCCUPATIONS_CSV``; default ``resources/occupations.csv``.
+    """
+    default_name = "occupations.csv"
+    if raw is None or not str(raw).strip():
+        return (resources_dir / default_name).resolve()
+    s = str(raw).strip()
+    p = Path(s)
+    if p.is_absolute():
+        return p.resolve()
+    under_res = (resources_dir / p).resolve()
+    if under_res.is_file():
+        return under_res
+    under_root = (repo_root / p).resolve()
+    return under_root if under_root.is_file() else under_res
+
+
+def _resolve_skills_csv_path(
+    repo_root: Path,
+    resources_dir: Path,
+    raw: str | None,
+) -> Path:
+    """
+    Tabiya ``skills.csv``: ``ID`` + ``PREFERREDLABEL`` + ``UUIDHISTORY`` / ``ORIGINURI``.
+
+    ``SKILLS_CSV``; default ``resources/skills.csv``.
+    """
+    default_name = "skills.csv"
+    if raw is None or not str(raw).strip():
+        return (resources_dir / default_name).resolve()
+    s = str(raw).strip()
+    p = Path(s)
+    if p.is_absolute():
+        return p.resolve()
+    under_res = (resources_dir / p).resolve()
+    if under_res.is_file():
+        return under_res
+    under_root = (repo_root / p).resolve()
+    return under_root if under_root.is_file() else under_res
+
+
 def _resources_dir(repo_root: Path) -> Path:
     """
     Versioned prompts and schema live under ``resources/`` at the repo root.
@@ -130,6 +227,15 @@ class Settings:
 
     # Resolved path to job attributes JSON (see ``JOB_ATTRIBUTES_SCHEMA``).
     job_attributes_schema_path: Path
+
+    # ESCO occupation→skill relations CSV (see ``OCCUPATION_TO_SKILL_RELATIONS_CSV``).
+    occupation_to_skill_relations_path: Path
+
+    # ``occupations.csv``: classifier → Tabiya occupation ``ID`` (see ``OCCUPATIONS_CSV``).
+    occupations_csv_path: Path
+
+    # ``skills.csv``: Tabiya skill ``ID`` / ESCO uuid → ``PREFERREDLABEL`` (see ``SKILLS_CSV``).
+    skills_csv_path: Path
 
     # Mongo filter keys (document field names used in find_one)
     mongo_field_job_id: str
@@ -195,6 +301,14 @@ class Settings:
         job_attributes_schema_path = _resolve_job_attributes_schema_path(
             root, resources, ja_schema_raw
         )
+        occ_skill_raw = os.environ.get("OCCUPATION_TO_SKILL_RELATIONS_CSV")
+        occupation_to_skill_relations_path = _resolve_occupation_to_skill_relations_path(
+            root, resources, occ_skill_raw
+        )
+        occ_csv_raw = os.environ.get("OCCUPATIONS_CSV")
+        occupations_csv_path = _resolve_occupations_csv_path(root, resources, occ_csv_raw)
+        skills_csv_raw = os.environ.get("SKILLS_CSV")
+        skills_csv_path = _resolve_skills_csv_path(root, resources, skills_csv_raw)
         return Settings(
             mongodb_uri=os.environ.get("MONGODB_URI", "mongodb://localhost:27017"),
             mongodb_database=os.environ.get("MONGODB_DATABASE", "ZambiaJobs"),
@@ -205,6 +319,9 @@ class Settings:
             in ("1", "true", "yes"),
             resources_dir=resources,
             job_attributes_schema_path=job_attributes_schema_path,
+            occupation_to_skill_relations_path=occupation_to_skill_relations_path,
+            occupations_csv_path=occupations_csv_path,
+            skills_csv_path=skills_csv_path,
             mongo_field_job_id=os.environ.get("CLASSIFIED_MONGO_FIELD_JOB_ID", "job_id"),
             mongo_field_job_fingerprint=os.environ.get(
                 "CLASSIFIED_MONGO_FIELD_JOB_FINGERPRINT", "job_fingerprint"

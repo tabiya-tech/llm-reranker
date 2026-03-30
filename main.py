@@ -7,6 +7,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 from app.config import get_settings, vertex_project_unset_message
 from pymongo.operations import UpdateOne
@@ -22,13 +23,50 @@ from app.llm_service import run_job_attributes_for_job, run_skill_ranker_for_job
 from app.prompt_debug import dump_prompt_debug_first_row
 from app.schemas import JobAttributesResult
 from utils.classifier_linked_entities import (
+    EscoSkillCandidate,
     MappedEscoSkills,
     extract_esco_skill_candidates,
+    group_linked_entities_by_type,
     job_identifier,
-    skills_cell,
 )
+from utils.occupation_to_skills_mapping import (
+    load_occupations_lookup,
+    merge_esco_candidates_with_occupation_taxonomy,
+    occupation_skill_taxonomy_for_settings,
+)
+from utils.uuid_to_tabiya_id import load_skills_uuid_tabiya_map
 
 logger = logging.getLogger(__name__)
+
+
+def _classified_occupation_labels_for_log(classified_doc: dict[str, Any], settings) -> str:
+    """Short list of classifier occupation labels for logs (no skill candidates)."""
+    by_t = group_linked_entities_by_type(classified_doc, settings)
+    occ = by_t.get("occupation", [])
+    if not occ:
+        return "—"
+    parts: list[str] = []
+    for i, c in enumerate(occ, start=1):
+        lab = (c.label or "").strip() or "(no label)"
+        cu = (c.concept_uuid or "").strip()
+        parts.append(f"{i}:{lab}" + (f" ({cu[:8]}…)" if len(cu) >= 8 else (f" ({cu})" if cu else "")))
+    return "; ".join(parts)
+
+
+def _occupation_ranker_counts(
+    occ_uuids: list[str],
+    mapped: MappedEscoSkills | None,
+) -> tuple[int, int, int]:
+    """How many occupation-derived skills landed essential / optional / unranked."""
+    if not occ_uuids or mapped is None:
+        return 0, 0, len(occ_uuids)
+    oset = {u.strip().lower() for u in occ_uuids if u}
+    ess = {u.strip().lower() for u in mapped.essential_skills_uuids if u}
+    opt = {u.strip().lower() for u in mapped.optional_skills_uuids if u}
+    e = len(oset & ess)
+    o = len(oset & opt)
+    un = len(oset - ess - opt)
+    return e, o, un
 
 
 def _parse_args() -> argparse.Namespace:
@@ -80,14 +118,27 @@ def run() -> None:
     batch_size = max(1, min(batch_size, 10_000))
     pending: list[UpdateOne] = []
 
+    occ_map, csv_skill_labels, occ_skill_relation = occupation_skill_taxonomy_for_settings(settings)
+    occ_bridge, occ_all_ids = load_occupations_lookup(
+        str(settings.occupations_csv_path.resolve())
+    )
+    skills_uuid_tabiya_map = load_skills_uuid_tabiya_map(
+        str(settings.skills_csv_path.resolve())
+    )
+
     logger.info(
         "Batch start: limit=%s dry_run=%s target=%s bulk_batch_size=%s job_attributes_schema=%s "
-        "classified_linked_entity_types=%s",
+        "occupation_to_skill_relations=%s occupation_taxonomy_relations_keys=%s occupations_csv=%s "
+        "skills_csv=%s classified_linked_entity_types=%s",
         args.limit,
         args.dry_run,
         settings.mongodb_target_collection,
         batch_size,
         settings.job_attributes_schema_path,
+        settings.occupation_to_skill_relations_path,
+        len(occ_map),
+        settings.occupations_csv_path,
+        settings.skills_csv_path,
         list(settings.classified_linked_entity_types),
     )
 
@@ -113,29 +164,68 @@ def run() -> None:
         skill_mapped: MappedEscoSkills | None = None
         skill_raw = ""
         ja: JobAttributesResult | None = None
+        occupation_relation_skill_uuids: list[str] = []
+        occupation_to_skills_nested: list[dict[str, Any]] = []
+        occ_stats = None
+        base_skills: list[EscoSkillCandidate] | None = None
 
         if not args.dry_run:
             _vertex_or_exit(settings)
-            if extract_esco_skill_candidates(doc):
+            base_skills = extract_esco_skill_candidates(doc)
+            # Occupation→skills merge is for ``occupation_to_skills`` + logs only, not LLM 1 prompt.
+            (
+                _,
+                _,
+                occupation_relation_skill_uuids,
+                occ_stats,
+                occupation_to_skills_nested,
+            ) = merge_esco_candidates_with_occupation_taxonomy(
+                doc,
+                base_skills,
+                occ_map,
+                csv_skill_labels,
+                occ_skill_relation,
+                skills_uuid_tabiya_map,
+                settings=settings,
+            )
+            if base_skills:
                 essential, optional, skill_mapped, skill_raw = run_skill_ranker_for_job(
-                    ctx, settings=settings
+                    ctx, settings=settings, esco_candidates=base_skills
                 )
                 ran_skill = True
             elif args.verbose:
-                logger.info(
-                    "Skill ranker skipped (no ESCO candidates on document): id=%s",
-                    ident,
-                )
+                logger.info("Skill ranker skipped (no classifier ESCO skills): id=%s", ident)
 
             ja = run_job_attributes_for_job(ctx, settings=settings)
             ran_ja = True
 
+        occ_labels = _classified_occupation_labels_for_log(doc, settings)
         logger.info(
-            "Processing job: %s (id=%s, esco_candidates=%s)",
+            "Processing job: %s (id=%s) classified_occupations: %s",
             title or "(no title)",
             ident,
-            skills_cell(doc) or "—",
+            occ_labels,
         )
+        if occ_stats is not None:
+            for line in occ_stats.format_log_lines():
+                logger.info("%s", line)
+        if ran_skill and skill_mapped is not None and occupation_relation_skill_uuids:
+            oe, oo, ou = _occupation_ranker_counts(occupation_relation_skill_uuids, skill_mapped)
+            logger.info(
+                "ranker: total_essential=%s total_optional=%s | among_occupation_relation_skills: "
+                "essential=%s optional=%s unranked=%s",
+                len(essential),
+                len(optional),
+                oe,
+                oo,
+                ou,
+            )
+        elif ran_skill and skill_mapped is not None:
+            logger.info(
+                "ranker: total_essential=%s total_optional=%s (no occupation relation skills on this job)",
+                len(essential),
+                len(optional),
+            )
 
         if args.verbose:
             parts: list[str] = []
@@ -158,6 +248,14 @@ def run() -> None:
                     skill_ranker=(essential, optional, skill_mapped, skill_raw)
                     if ran_skill and skill_mapped is not None
                     else None,
+                    occupation_to_skills=occupation_to_skills_nested
+                    if occupation_to_skills_nested
+                    else None,
+                    skills_uuid_tabiya_map=skills_uuid_tabiya_map,
+                    occupations_bridge=occ_bridge or None,
+                    occupations_all_ids=occ_all_ids or None,
+                    ranker_candidates=base_skills,
+                    classifier_skill_candidates=base_skills,
                 )
                 if op is not None:
                     upsert_ops += 1

@@ -18,7 +18,8 @@ from app.logging_config import sanitize_mongodb_uri
 from app.schemas import JobAttributesResult
 
 if TYPE_CHECKING:
-    from utils.classifier_linked_entities import MappedEscoSkills
+    from utils.classifier_linked_entities import EscoSkillCandidate, MappedEscoSkills
+    from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap
 
 logger = logging.getLogger(__name__)
 _mongo_client_connection_logged = False
@@ -107,6 +108,12 @@ def _llm_pipeline_set_document(
     settings: Settings,
     ja: JobAttributesResult | None,
     skill_ranker: tuple[list[str], list[str], "MappedEscoSkills", str] | None,
+    occupation_to_skills: list[dict[str, Any]] | None = None,
+    skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
+    occupations_bridge: dict[str, str] | None = None,
+    occupations_all_ids: frozenset[str] | None = None,
+    ranker_candidates: list["EscoSkillCandidate"] | None = None,
+    classifier_skill_candidates: list["EscoSkillCandidate"] | None = None,
 ) -> dict[str, Any] | None:
     """``$set`` body for target upsert (see ``app.ranked_job_schema``); ``None`` when nothing to write."""
     from app.ranked_job_schema import build_ranked_job_document
@@ -117,6 +124,12 @@ def _llm_pipeline_set_document(
         settings=settings,
         ja=ja,
         skill_ranker=skill_ranker,
+        occupation_to_skills=occupation_to_skills,
+        skills_uuid_tabiya_map=skills_uuid_tabiya_map,
+        occupations_bridge=occupations_bridge,
+        occupations_all_ids=occupations_all_ids,
+        ranker_candidates=ranker_candidates,
+        classifier_skill_candidates=classifier_skill_candidates,
     )
 
 
@@ -127,6 +140,12 @@ def llm_pipeline_upsert_update_one(
     settings: Settings | None = None,
     ja: JobAttributesResult | None = None,
     skill_ranker: tuple[list[str], list[str], "MappedEscoSkills", str] | None = None,
+    occupation_to_skills: list[dict[str, Any]] | None = None,
+    skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
+    occupations_bridge: dict[str, str] | None = None,
+    occupations_all_ids: frozenset[str] | None = None,
+    ranker_candidates: list["EscoSkillCandidate"] | None = None,
+    classifier_skill_candidates: list["EscoSkillCandidate"] | None = None,
 ) -> UpdateOne | None:
     """
     Build one ``UpdateOne`` for the target collection, or ``None`` if there is nothing to write.
@@ -140,6 +159,12 @@ def llm_pipeline_upsert_update_one(
         settings,
         ja,
         skill_ranker,
+        occupation_to_skills=occupation_to_skills,
+        skills_uuid_tabiya_map=skills_uuid_tabiya_map,
+        occupations_bridge=occupations_bridge,
+        occupations_all_ids=occupations_all_ids,
+        ranker_candidates=ranker_candidates,
+        classifier_skill_candidates=classifier_skill_candidates,
     )
     if payload is None:
         return None
@@ -147,7 +172,25 @@ def llm_pipeline_upsert_update_one(
     # Drop legacy nested raw-response blobs (schema v2+).
     return UpdateOne(
         flt,
-        {"$set": payload, "$unset": {"llm_job_attributes": "", "llm_skill_ranker": ""}},
+        {
+            "$set": payload,
+            "$unset": {
+                "llm_skill_ranker": "",
+                "classified_linked_by_type": "",
+                "occupation_skills": "",
+                "occupation_skills_uuids": "",
+                "classified_skills_uuids": "",
+                "classified_occupations_uuids": "",
+                "essential_skills": "",
+                "essential_skills_uuids": "",
+                "optional_skills": "",
+                "optional_skills_uuids": "",
+                "job_attributes": "",
+                "work_activity_ids": "",
+                "work_activity_names": "",
+                "title": "",
+            },
+        },
         upsert=True,
     )
 
@@ -182,6 +225,12 @@ def upsert_llm_pipeline_results(
     settings: Settings | None = None,
     ja: JobAttributesResult | None = None,
     skill_ranker: tuple[list[str], list[str], "MappedEscoSkills", str] | None = None,
+    occupation_to_skills: list[dict[str, Any]] | None = None,
+    skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
+    occupations_bridge: dict[str, str] | None = None,
+    occupations_all_ids: frozenset[str] | None = None,
+    ranker_candidates: list["EscoSkillCandidate"] | None = None,
+    classifier_skill_candidates: list["EscoSkillCandidate"] | None = None,
     client: MongoClient | None = None,
 ) -> None:
     """
@@ -197,6 +246,12 @@ def upsert_llm_pipeline_results(
         settings=settings,
         ja=ja,
         skill_ranker=skill_ranker,
+        occupation_to_skills=occupation_to_skills,
+        skills_uuid_tabiya_map=skills_uuid_tabiya_map,
+        occupations_bridge=occupations_bridge,
+        occupations_all_ids=occupations_all_ids,
+        ranker_candidates=ranker_candidates,
+        classifier_skill_candidates=classifier_skill_candidates,
     )
     if op is None:
         return

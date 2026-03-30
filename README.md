@@ -8,7 +8,7 @@ Batch pipeline over classified job documents in MongoDB: Vertex AI (Gemini) rera
 |------|---------|
 | `main.py` | CLI and orchestration |
 | `app/` | Config, MongoDB (read + target upsert), prompts, Vertex, schemas, logging |
-| `utils/` | `classifier_linked_entities.py`: ESCO linked-entity extraction, skill-ranker helpers |
+| `utils/` | `classifier_linked_entities.py`, `uuid_to_tabiya_id.py` (ESCO ↔ Tabiya from `skills.csv`), `occupation_to_skills_mapping.py` (relations CSV → `occupation_to_skills`) |
 | `resources/` | Prompt templates, job attribute schema JSON(s), ONET reference data |
 
 ## Prerequisites
@@ -42,5 +42,5 @@ Each run performs **both** LLM steps (skill ranker when ESCO candidates exist, t
 | `--dump-prompts DIR` | Write prompts for the first document only (debug) |
 | `--bulk-batch-size N` | Flush MongoDB writes every N upserts (overrides `BULK_WRITE_BATCH_SIZE`) |
 
-Target documents (see `app/ranked_job_schema.py`) include **`classified_linked_by_type`**: a map keyed by each configured `CLASSIFIED_LINKED_ENTITY_TYPES` value, with `items` and `uuids` per type. Legacy flat fields `classified_skills` / `classified_occupations` remain for convenience.
+Target documents (see `app/ranked_job_schema.py`) store **`classified_skills`** / **`classified_occupations`** (with Tabiya ids where mapped), **`occupation_to_skills`** as `{ meta, items }` (relations CSV + `skills.csv` ESCO mapping, per-occupation `skill_counts`), **`llm_classified_skills`** (essential / optional / discarded from the ranker), **`llm_job_attributes`**, **`work_activity`**, **`classifier_metadata`** (incl. title), and **`llm_reranker_meta`** (`schema_version`).
 

@@ -19,6 +19,45 @@ def _norm_label(s: str) -> str:
     return " ".join(s.strip().lower().split())
 
 
+def normalize_linked_entity_type(raw: str) -> str:
+    """
+    Align classifier ``entity_type`` with env / storage keys.
+
+    Classifier payloads may use ``skills`` / ``occupations``; we store ``skill`` / ``occupation``.
+    """
+    t = raw.strip().lower()
+    if t == "skills":
+        return "skill"
+    if t == "occupations":
+        return "occupation"
+    return t
+
+
+def linked_entity_preferred_taxonomy_id(le: dict[str, Any]) -> str | None:
+    """
+    Classifier-supplied id for a linked ESCO hit (uuid, Tabiya hex id, or uri-like string).
+
+    Used to resolve rows in ``occupations.csv`` together with ``uri`` / ``originUUID``.
+    """
+    for key in (
+        "linked_entity_preferred_taxonomy_id",
+        "preferred_taxonomy_id",
+        "taxonomy_preferred_id",
+        "taxonomyId",
+        "taxonomy_id",
+        "concept_id",
+        "conceptId",
+        "esco_uuid",
+        "escoUuid",
+        "concept_uuid",
+        "conceptUuid",
+    ):
+        v = le.get(key)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return None
+
+
 # ESCO HTTP URIs end with the concept UUID, e.g. .../skill/5247a6ce-6ed0-4fb3-b121-758921dcc44e
 _ESCO_URI_LAST_SEGMENT_UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -68,14 +107,6 @@ class MappedEscoSkills:
     unmatched_optional: list[str] = field(default_factory=list)
 
 
-def build_reranked_skills_uuids(mapped: MappedEscoSkills) -> dict[str, list[str]]:
-    """``essential_skills_uuids`` and ``optional_skills_uuids`` (non-empty ESCO UUIDs only)."""
-    return {
-        "essential_skills_uuids": [x for x in mapped.essential_skills_uuids if x],
-        "optional_skills_uuids": [x for x in mapped.optional_skills_uuids if x],
-    }
-
-
 def extract_linked_entity_candidates(
     classified_doc: dict[str, Any],
     settings: Settings | None = None,
@@ -95,7 +126,7 @@ def extract_linked_entity_candidates(
         et_raw = ent.get("entity_type")
         if not isinstance(et_raw, str) or not et_raw.strip():
             continue
-        et = et_raw.strip().lower()
+        et = normalize_linked_entity_type(et_raw)
         if et not in wanted:
             continue
         for le in ent.get("linked_entities") or []:

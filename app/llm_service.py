@@ -33,6 +33,7 @@ from app.schemas import (
     parse_job_attributes_response,
 )
 from utils.classifier_linked_entities import (
+    EscoSkillCandidate,
     MappedEscoSkills,
     extract_esco_skill_candidates,
     full_details_from_context,
@@ -231,14 +232,22 @@ def run_skill_ranker_for_job(
     ctx: JobDescriptionContext,
     *,
     settings: Settings | None = None,
+    esco_candidates: list[EscoSkillCandidate] | None = None,
 ) -> tuple[list[str], list[str], MappedEscoSkills, str]:
     """
-    Skill ranker: ESCO candidates from ``ctx.classified``, JD text, LLM call, JSON parse, label→URI/UUID map.
+    Skill ranker: ESCO candidates, JD text, LLM call, JSON parse, label→URI/UUID map.
+
+    Pass ``esco_candidates`` to override the menu (default ``extract_esco_skill_candidates(ctx.classified)``).
+    Occupation taxonomy skills are **not** included here; they are merged only for storage / relations.
 
     Returns essential labels, optional labels, ``MappedEscoSkills``, and raw model text.
     """
     classified_doc = ctx.classified
-    candidates = extract_esco_skill_candidates(classified_doc)
+    candidates = (
+        esco_candidates
+        if esco_candidates is not None
+        else extract_esco_skill_candidates(classified_doc)
+    )
     full_details = full_details_from_context(ctx)
     s = settings or get_settings()
     prompt = build_skill_ranker_prompt(full_details, skills_to_prompt_dicts(candidates), settings=s)
