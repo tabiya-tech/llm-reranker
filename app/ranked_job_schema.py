@@ -2,22 +2,23 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
 from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
-from app.schemas import JobAttributesResult, load_onet_work_activities
+from app.schemas import JobAttributesResult, OccupationSkillsRelevanceResult, load_onet_work_activities
 from utils.classifier_linked_entities import (
     EscoSkillCandidate,
     LinkedEntityCandidate,
     MappedEscoSkills,
     group_linked_entities_by_type,
 )
-from utils.occupation_to_skills_mapping import tabiya_occupation_id_for_candidate
+from utils.occupation_to_skills_mapping import occupation_block_skill_counts, tabiya_occupation_id_for_candidate
 from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap, cell_to_esco_uuid
 
-PIPELINE_SCHEMA_VERSION = "27"
+PIPELINE_SCHEMA_VERSION = "32"
 
 
 def _classified_skill_rows(
@@ -200,56 +201,107 @@ def classifier_metadata_from_context(ctx: JobDescriptionContext) -> dict[str, An
     }
 
 
+def occupation_skills_relevance_menu_size(items: list[dict[str, Any]]) -> int:
+    """How many taxonomy skills (essential + optional) LLM call 3 must judge."""
+    n = 0
+    for block in items:
+        tid = block.get("tabiya_occupation_id")
+        if tid is None or str(tid).strip() == "":
+            continue
+        for sk in block.get("skills") or []:
+            if not isinstance(sk, dict):
+                continue
+            rt = (sk.get("relation_type") or "").strip().lower()
+            if rt not in ("essential", "optional"):
+                continue
+            sid = str(sk.get("skill_id") or "").strip()
+            if sid:
+                n += 1
+    return n
+
+
+def apply_occupation_skills_listing_relevance(
+    items: list[dict[str, Any]],
+    result: OccupationSkillsRelevanceResult,
+) -> list[dict[str, Any]]:
+    """
+    Copy ``items``, set ``llm_is_relevant`` on each skill.
+
+    Each block's ``skill_counts`` keeps taxonomy totals (``total``, ``essential``, ``optional``,
+    ``unspecified``) and adds ``relevant_total``: count of skills with ``llm_is_relevant`` not false.
+    """
+    decision_map: dict[tuple[str, str], bool] = {}
+    for d in result.decisions:
+        decision_map[(d.tabiya_occupation_id.strip().lower(), d.skill_id.strip().lower())] = d.is_relevant
+
+    out = deepcopy(items)
+    for block in out:
+        tid = str(block.get("tabiya_occupation_id") or "").strip().lower()
+        skills = block.get("skills")
+        if not isinstance(skills, list):
+            continue
+        for sk in skills:
+            if not isinstance(sk, dict):
+                continue
+            sid = str(sk.get("skill_id") or "").strip().lower()
+            rt = (sk.get("relation_type") or "").strip().lower()
+            if rt in ("essential", "optional") and tid and sid:
+                sk["llm_is_relevant"] = decision_map.get((tid, sid), True)
+            else:
+                sk["llm_is_relevant"] = True
+        rel_only = [
+            x for x in skills if isinstance(x, dict) and x.get("llm_is_relevant") is not False
+        ]
+        tax = occupation_block_skill_counts(skills)
+        block["skill_counts"] = {
+            **tax,
+            "relevant_total": len(rel_only),
+        }
+    return out
+
+
 def occupation_to_skills_with_meta(items: list[dict[str, Any]]) -> dict[str, Any]:
     """
-    Stored ``occupation_to_skills`` shape: rollup ``meta`` plus ``items`` (full per-occupation blocks).
+    Stored ``occupation_to_skills``: ``meta`` + ``items`` only.
 
-    ``meta.skill_counts`` sums ``items[*].skill_counts`` after taxonomy / ESCO mapping.
-    ``meta.by_occupation`` lists the same counts per classified occupation (compact index).
+    ``meta.skill_counts`` rolls up ``total``, ``essential``, ``optional``, ``unspecified``, and
+    ``relevant_total`` (sum of per-item ``relevant_total`` when present, else 0).
     """
-    keys = ("total", "essential", "optional", "unspecified")
-    empty = {k: 0 for k in keys}
+    keys_tax = ("total", "essential", "optional", "unspecified")
+    empty = {k: 0 for k in keys_tax}
+    empty_with_rel = {**empty, "relevant_total": 0}
     if not items:
         return {
             "meta": {
                 "occupation_count": 0,
-                "skill_counts": dict(empty),
-                "by_occupation": [],
+                "skill_counts": dict(empty_with_rel),
             },
             "items": [],
         }
-    agg = dict(empty)
-    by_occ: list[dict[str, Any]] = []
+    agg: dict[str, int] = {k: 0 for k in keys_tax}
+    agg_rel = 0
     for block in items:
         sc = block.get("skill_counts")
         if not isinstance(sc, dict):
             sc = {}
-        row = {k: int(sc.get(k) or 0) for k in keys}
-        for k in keys:
-            agg[k] += row[k]
-        by_occ.append(
-            {
-                "tabiya_occupation_id": block.get("tabiya_occupation_id"),
-                "occupation_label": block.get("occupation_label"),
-                "occupation_esco_uuid": block.get("occupation_esco_uuid"),
-                "skill_counts": row,
-            }
-        )
+        for k in keys_tax:
+            agg[k] += int(sc.get(k) or 0)
+        agg_rel += int(sc.get("relevant_total") or 0)
+    meta_out = {
+        "occupation_count": len(items),
+        "skill_counts": {**agg, "relevant_total": agg_rel},
+    }
     return {
-        "meta": {
-            "occupation_count": len(items),
-            "skill_counts": agg,
-            "by_occupation": by_occ,
-        },
+        "meta": meta_out,
         "items": items,
     }
 
 
 def build_llm_reranker_meta(settings: Settings) -> dict[str, Any]:
     return {
-        "skill_ranker_model": settings.vertex_model,
-        "job_attributes_model": settings.vertex_model,
-        "gcp_location": settings.gcp_location,
+        "skill_ranker_model": settings.gemini_model,
+        "occupation_skills_relevance_model": settings.gemini_model,
+        "job_attributes_model": settings.gemini_model,
         "schema_version": PIPELINE_SCHEMA_VERSION,
         "classified_linked_entity_types": list(settings.classified_linked_entity_types),
     }
@@ -274,7 +326,8 @@ def build_ranked_job_document(
 
     Key order: ``job_id``, ``job_fingerprint``, activity flags, classifier taxonomies, occupation skills,
     work activities, LLM skill ranking, LLM job attributes, classifier metadata (incl. title), reranker meta.
-    ``occupation_to_skills`` is ``{ meta, items }`` (rollup + full occupation blocks).
+    ``occupation_to_skills`` is ``{ meta, items }``; ``meta.skill_counts`` includes taxonomy totals and
+    ``relevant_total`` (sum of listing-relevant skills) after LLM call 3.
 
     Omits Mongo ``_id`` (server-owned). Parallel ``*_uuids`` arrays and top-level ``title`` are not written;
     use ``classified_*`` / ``llm_classified_skills`` and ``classifier_metadata.title``.
@@ -322,7 +375,19 @@ def build_ranked_job_document(
         "occupation_to_skills": occ_to_skills_payload,
         "work_activity": work_activity,
         "llm_classified_skills": llm_skills,
-        "llm_job_attributes": dict(ja.attributes),
+        "llm_job_attributes": {
+            "summary": ja.summary,
+            "estimates": [
+                {
+                    "attribute_name": e.attribute_name,
+                    "selected_level_id": e.selected_level_id,
+                    "confidence": e.confidence,
+                    "reasoning": e.reasoning,
+                }
+                for e in ja.attribute_estimates
+            ],
+            "attributes": dict(ja.attributes),
+        },
         "classifier_metadata": classifier_metadata_from_context(ctx),
         "llm_reranker_meta": build_llm_reranker_meta(settings),
     }

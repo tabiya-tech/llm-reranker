@@ -199,12 +199,6 @@ def job_identifier(ctx: JobDescriptionContext, doc: dict[str, Any]) -> str:
     return str(doc.get("_id", ""))
 
 
-def skills_cell(doc: dict[str, Any]) -> str:
-    """Semicolon-separated ESCO candidate labels for display/logging."""
-    candidates = extract_esco_skill_candidates(doc)
-    return "; ".join(c.label for c in candidates)
-
-
 def skills_to_prompt_dicts(
     candidates: list[EscoSkillCandidate],
     *,

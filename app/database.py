@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Iterator
 
 import certifi
 from bson import ObjectId
@@ -218,47 +218,7 @@ def bulk_write_llm_upserts(
     )
 
 
-def upsert_llm_pipeline_results(
-    classified_doc: dict[str, Any],
-    ctx: JobDescriptionContext,
-    *,
-    settings: Settings | None = None,
-    ja: JobAttributesResult | None = None,
-    skill_ranker: tuple[list[str], list[str], "MappedEscoSkills", str] | None = None,
-    occupation_to_skills: list[dict[str, Any]] | None = None,
-    skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
-    occupations_bridge: dict[str, str] | None = None,
-    occupations_all_ids: frozenset[str] | None = None,
-    ranker_candidates: list["EscoSkillCandidate"] | None = None,
-    classifier_skill_candidates: list["EscoSkillCandidate"] | None = None,
-    client: MongoClient | None = None,
-) -> None:
-    """
-    Upsert one document in the target collection with LLM outputs.
-
-    Filter key: ``job_id`` or ``job_fingerprint`` (from settings), else ``source_classified_id`` = ``_id``
-    of the source document.
-    """
-    settings = settings or get_settings()
-    op = llm_pipeline_upsert_update_one(
-        classified_doc,
-        ctx,
-        settings=settings,
-        ja=ja,
-        skill_ranker=skill_ranker,
-        occupation_to_skills=occupation_to_skills,
-        skills_uuid_tabiya_map=skills_uuid_tabiya_map,
-        occupations_bridge=occupations_bridge,
-        occupations_all_ids=occupations_all_ids,
-        ranker_candidates=ranker_candidates,
-        classifier_skill_candidates=classifier_skill_candidates,
-    )
-    if op is None:
-        return
-    bulk_write_llm_upserts([op], settings=settings, client=client)
-
-
-def fetch_classified_jobs(
+def iter_classified_jobs(
     limit: int = 100,
     skip: int = 0,
     *,
@@ -266,12 +226,18 @@ def fetch_classified_jobs(
     sort_direction: int = -1,
     settings: Settings | None = None,
     client: MongoClient | None = None,
-) -> list[dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
+    """
+    Stream documents from the configured source collection, newest first by default.
 
+    ``limit`` <= 0 means no limit (entire collection). Results are streamed one document at a time.
+    """
     settings = settings or get_settings()
     coll = classified_jobs_collection(settings=settings, db=get_database(client, settings=settings))
-    cursor = coll.find({}).sort(sort_field, sort_direction).skip(skip).limit(limit)
-    return list(cursor)
+    cur = coll.find({}).sort(sort_field, sort_direction).skip(skip)
+    if limit > 0:
+        cur = cur.limit(limit)
+    yield from cur
 
 
 def _metadata(doc: dict[str, Any]) -> dict[str, Any]:

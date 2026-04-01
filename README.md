@@ -1,21 +1,28 @@
-# LLM re-ranker
+# LLM Re-ranker
 
-Batch pipeline over classified job documents in MongoDB: Vertex AI (Gemini) reranks ESCO skills (essential vs optional) and infers job attributes plus ONET work activities.
+Batch pipeline that reads classified job documents from MongoDB, runs Google Gemini to enrich and rank skills and attributes, and upserts structured results into a target collection.
 
-## Layout
+## What it does
+
+1. **Skill ranker** : Classifier ESCO skills are ranked as essential, optional, or discarded for the listing.
+2. **Occupation–skills relevance** : Taxonomy skills linked to occupations are scored for relevance to this specific job ad (`llm_is_relevant` and rollups in stored data).
+3. **Job attributes** : Structured attribute estimates and ONET work activities from your job-attribute schema.
+
+
+## Repository layout
 
 | Path | Purpose |
 |------|---------|
-| `main.py` | CLI and orchestration |
-| `app/` | Config, MongoDB (read + target upsert), prompts, Vertex, schemas, logging |
-| `utils/` | `classifier_linked_entities.py`, `uuid_to_tabiya_id.py` (ESCO ↔ Tabiya from `skills.csv`), `occupation_to_skills_mapping.py` (relations CSV → `occupation_to_skills`) |
-| `resources/` | Prompt templates, job attribute schema JSON(s), ONET reference data |
+| `main.py` | CLI entrypoint and orchestration |
+| `app/` | Settings, MongoDB access, prompts, Gemini client, schemas, logging |
+| `utils/` | Classifier entities, ESCO ↔ Tabiya mapping, occupation–skill relations from CSV |
+| `resources/` | Prompt text, job-attribute JSON schema, ONET reference data |
 
 ## Prerequisites
 
 - Python 3.11+
 - MongoDB
-- GCP: Vertex AI API enabled, billing, credentials with Vertex access
+- A [Gemini API key](https://aistudio.google.com/apikey) (`GEMINI_API_KEY`)
 
 ## Setup
 
@@ -25,22 +32,19 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Configure `.env`: `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_SOURCE_COLLECTION`, `MONGODB_TARGET_COLLECTION`, optional `BULK_WRITE_BATCH_SIZE` (default `100`), optional `JOB_ATTRIBUTES_SCHEMA`, optional `CLASSIFIED_LINKED_ENTITY_TYPES` (default `skill,occupation`; linked taxonomy is always ESCO), Vertex (`GCP_PROJECT_ID`, `GCP_LOCATION`, `VERTEX_MODEL`, credentials). Set `LOG_LEVEL` as needed.
+Edit `.env` with at least: `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_SOURCE_COLLECTION`, `MONGODB_TARGET_COLLECTION`, and `GEMINI_API_KEY`. Set `GEMINI_MODEL` (for example `gemini-3-pro-preview` or `gemini-2.5-flash`). Optional variables cover bulk write batch size, CSV paths, job-attribute schema file, classifier entity types, occupation CSV columns for LLM2 context, and `LOG_LEVEL`.
 
 ## Usage
 
 ```bash
-python main.py 
+python main.py
 ```
-
-Each run performs **both** LLM steps (skill ranker when ESCO candidates exist, then job attributes) and upserts to the target collection unless you use **`--dry-run`**.
 
 | Flag | Effect |
 |------|--------|
-| `--dry-run` | No Vertex calls; no DB writes |
-| `--verbose` | Extra per-job counts on stderr |
-| `--dump-prompts DIR` | Write prompts for the first document only (debug) |
-| `--bulk-batch-size N` | Flush MongoDB writes every N upserts (overrides `BULK_WRITE_BATCH_SIZE`) |
+| `--limit N` | Process at most `N` source documents. Default: `0` (entire collection, streamed newest `_id` first). |
+| `--verbose` | Extra per-job detail |
+| `--log-llm1-prompt` / `--log-llm2-prompt` / `--log-llm3-prompt` | Log assembled prompts for that step (useful for debugging) |
+| `--bulk-batch-size N` | Flush MongoDB bulk writes every `N` upserts |
 
-Target documents (see `app/ranked_job_schema.py`) store **`classified_skills`** / **`classified_occupations`** (with Tabiya ids where mapped), **`occupation_to_skills`** as `{ meta, items }` (relations CSV + `skills.csv` ESCO mapping, per-occupation `skill_counts`), **`llm_classified_skills`** (essential / optional / discarded from the ranker), **`llm_job_attributes`**, **`work_activity`**, **`classifier_metadata`** (incl. title), and **`llm_reranker_meta`** (`schema_version`).
-
+Ranked documents are built in `app/ranked_job_schema.py` (see `PIPELINE_SCHEMA_VERSION` in metadata). They include classifier skills and occupations, `occupation_to_skills` as `{ meta, items }` with per-occupation skill counts and listing relevance rollups, LLM-ranked skills, job attributes, work activities, and classifier metadata.

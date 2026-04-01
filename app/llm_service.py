@@ -1,38 +1,42 @@
-"""Vertex AI (Gemini) calls — JSON responses for skill ranking and job attributes."""
+"""Gemini calls — JSON responses for skill ranking, job attributes, and occupation-skills relevance.
+
+Prefers the Google GenAI SDK (``GEMINI_API_KEY``) when an API key is configured;
+falls back to Vertex AI SDK (service account) otherwise.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-from pathlib import Path
+from dataclasses import asdict, replace
 from typing import Any
 
-import vertexai
-from google.api_core import exceptions as google_api_exceptions
-from vertexai.generative_models import GenerativeModel, GenerationConfig
+from google import genai
+from google.genai import types as genai_types
 
-from app.config import (
-    Settings,
-    get_settings,
-    repo_root,
-    vertex_project_unset_message,
-)
+from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
 from app.prompts import (
+    JobAttributesLlm2Extras,
+    OccupationPromptEnrichment,
     build_job_attributes_jd_text,
     build_job_attributes_metadata_block,
     build_job_attributes_prompt,
+    build_occupation_skills_relevance_prompt,
+    llm2_opening_line_from_context,
+    resolve_llm2_single_county_user_fields,
     build_skill_ranker_prompt,
     format_skill_ranker_skills_text,
 )
 from app.schemas import (
     JobAttributesResult,
     JobAttributesSchema,
+    OccupationSkillsRelevanceResult,
     OnetWorkActivity,
     load_job_attributes_schema,
     load_onet_work_activities,
     parse_job_attributes_response,
+    parse_occupation_skills_relevance_response,
 )
 from utils.classifier_linked_entities import (
     EscoSkillCandidate,
@@ -46,149 +50,132 @@ from utils.classifier_linked_entities import (
 
 logger = logging.getLogger(__name__)
 
-
-def apply_vertex_credentials(settings: Settings) -> None:
-    """Point ADC at the resolved service-account JSON when configured."""
-    if settings.google_application_credentials_resolved:
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = (
-            settings.google_application_credentials_resolved
-        )
+_genai_client: genai.Client | None = None
 
 
-def _vertex_credentials_missing_message(settings: Settings) -> str:
-    raw = (os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or "").strip() or (
-        os.environ.get("VERTEX_SERVICE_ACCOUNT_JSON") or ""
-    ).strip()
-    hint = ""
-    if settings.google_application_credentials_resolved:
-        hint = f"\nResolved: {settings.google_application_credentials_resolved!r}"
-    elif raw:
-        tried = (repo_root() / raw) if not Path(raw).is_absolute() else Path(raw)
-        hint = f"\nEnv has {raw!r} but file not found (tried {tried!r})."
-    else:
-        hint = "\nSet VERTEX_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS in .env, or run gcloud auth application-default login."
-    return (
-        "No Google credentials for Vertex. Set VERTEX_SERVICE_ACCOUNT_JSON or "
-        "GOOGLE_APPLICATION_CREDENTIALS in .env (repo-relative paths OK), or: "
-        "gcloud auth application-default login."
-        f"{hint}"
-    )
-
-
-def _resolve_gac_path(gac: str) -> Path | None:
-    """Accept absolute paths, cwd-relative, or paths relative to repo root."""
-    p = Path(gac.strip())
-    try:
-        if p.is_file():
-            return p.resolve()
-        if not p.is_absolute():
-            under_root = (repo_root() / p).resolve()
-            if under_root.is_file():
-                return under_root
-    except OSError:
-        return None
-    return None
-
-
-def _ensure_google_credentials_or_raise(settings: Settings) -> None:
-    """Fail fast with a clear message instead of DefaultCredentialsError deep in Vertex."""
-    apply_vertex_credentials(settings)
-    gac = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if gac and gac.strip():
-        resolved = _resolve_gac_path(gac)
-        if resolved is not None:
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(resolved)
-            return
+def _get_genai_client(settings: Settings) -> genai.Client:
+    """Return a process-scoped GenAI client (created once, reused across calls)."""
+    global _genai_client
+    if _genai_client is not None:
+        return _genai_client
+    api_key = settings.gemini_api_key
+    if not api_key:
         raise RuntimeError(
-            f"GOOGLE_APPLICATION_CREDENTIALS is set but file not found: {gac!r}\n"
-            + _vertex_credentials_missing_message(settings)
+            "No Gemini API key found. Set GEMINI_API_KEY (or API_KEY) in .env.\n"
+            "Create one at https://aistudio.google.com/apikey for your GCP project."
         )
-    try:
-        import google.auth
-
-        google.auth.default()
-    except Exception as e:
-        raise RuntimeError(_vertex_credentials_missing_message(settings)) from e
+    _genai_client = genai.Client(api_key=api_key)
+    return _genai_client
 
 
-def _call_vertex_json_model(prompt: str, *, settings: Settings) -> str:
-    """Single Gemini call with JSON MIME type."""
-    project = settings.gcp_project_id.strip()
-    if not project:
-        raise ValueError(vertex_project_unset_message())
-    _ensure_google_credentials_or_raise(settings)
-    vertexai.init(project=project, location=settings.gcp_location)
-    model = GenerativeModel(settings.vertex_model)
-    gen = GenerationConfig(
+def _call_gemini_json(prompt: str, *, settings: Settings) -> str:
+    """Single Gemini call via GenAI SDK with JSON MIME response type."""
+    client = _get_genai_client(settings)
+    config = genai_types.GenerateContentConfig(
         temperature=0.2,
         response_mime_type="application/json",
     )
     try:
-        response = model.generate_content(prompt, generation_config=gen)
-    except google_api_exceptions.NotFound as e:
-        raise RuntimeError(
-            f"Vertex model {settings.vertex_model!r} not found in "
-            f"{settings.gcp_location!r} (or your project has no access). "
-            "Set VERTEX_MODEL in .env to a model id from Vertex AI Model Garden for "
-            "that region (e.g. gemini-2.0-flash-001 in us-central1). "
-            "See: https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions"
-        ) from e
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents=prompt,
+            config=config,
+        )
+    except Exception as e:
+        ename = type(e).__name__
+        msg = str(e)
+        if "404" in msg or "not found" in msg.lower():
+            raise RuntimeError(
+                f"Model {settings.gemini_model!r} not found (or project has no access). "
+                f"Check the model id at https://ai.google.dev/gemini-api/docs/models — "
+                f"preview models use a -preview suffix (e.g. gemini-3-pro-preview)."
+            ) from e
+        raise RuntimeError(f"Gemini API error ({ename}): {msg}") from e
     text = _response_text(response)
     if not text.strip():
-        raise RuntimeError("Empty response from Vertex Gemini")
+        raise RuntimeError("Empty response from Gemini")
     return text
 
 
 def call_skill_ranker_model(prompt: str, *, settings: Settings | None = None) -> str:
-    """Send the skill-ranker prompt to Gemini on Vertex; expect JSON in the response body."""
+    """LLM call 1 — skill ranker; expect JSON."""
     s = settings or get_settings()
-    logger.debug(
-        "LLM call 1 (skill ranker): invoking model=%s project=%s",
-        s.vertex_model,
-        s.gcp_project_id or "(unset)",
-    )
-    out = _call_vertex_json_model(prompt, settings=s)
+    logger.debug("LLM call 1 (skill ranker): invoking model=%s", s.gemini_model)
+    out = _call_gemini_json(prompt, settings=s)
     logger.debug("LLM call 1 (skill ranker): completed")
     return out
 
 
 def call_job_attributes_model(prompt: str, *, settings: Settings | None = None) -> str:
-    """Send the job-attributes (LLM call 2) prompt; expect JSON with ``attributes`` and ``work_activities``."""
+    """LLM call 2 — job attributes; expect JSON with ``attributes`` and ``work_activities``."""
     s = settings or get_settings()
-    logger.info(
-        "LLM call 2 (job attributes): invoking model=%s project=%s",
-        s.vertex_model,
-        s.gcp_project_id or "(unset)",
-    )
-    out = _call_vertex_json_model(prompt, settings=s)
-    logger.info("LLM call 2 (job attributes): completed")
+    logger.debug("LLM call 2 (job attributes): invoking model=%s", s.gemini_model)
+    out = _call_gemini_json(prompt, settings=s)
+    logger.debug("LLM call 2 (job attributes): completed")
     return out
+
+
+def call_occupation_skills_relevance_model(prompt: str, *, settings: Settings | None = None) -> str:
+    """LLM call 3 — occupation-skills listing relevance; expect valid JSON."""
+    s = settings or get_settings()
+    logger.debug("LLM call 3 (occupation skills relevance): invoking model=%s", s.gemini_model)
+    out = _call_gemini_json(prompt, settings=s)
+    logger.debug("LLM call 3 (occupation skills relevance): completed")
+    return out
+
+
+def run_occupation_skills_relevance_for_job(
+    ctx: JobDescriptionContext,
+    occupation_to_skills_items: list[dict[str, Any]],
+    *,
+    settings: Settings | None = None,
+    log_llm3_prompt: bool = False,
+    log_llm3_job_label: str = "",
+) -> OccupationSkillsRelevanceResult:
+    """LLM call 3: judge essential/optional occupation-linked skills against the listing."""
+    from app.ranked_job_schema import occupation_skills_relevance_menu_size
+
+    s = settings or get_settings()
+    n_menu = occupation_skills_relevance_menu_size(occupation_to_skills_items)
+    prompt = build_occupation_skills_relevance_prompt(ctx, occupation_to_skills_items, settings=s)
+    if log_llm3_prompt:
+        sep = "-" * 80
+        label = (log_llm3_job_label or "").strip() or "(job)"
+        logger.info("%s", sep)
+        logger.info(
+            "LLM3 occupation skills relevance | job=%s | menu_skills=%s",
+            label,
+            n_menu,
+        )
+        logger.info("LLM3 assembled prompt (%s chars):\n%s", len(prompt), prompt)
+        logger.info("%s", sep)
+    raw = call_occupation_skills_relevance_model(prompt, settings=s)
+    return parse_occupation_skills_relevance_response(raw)
 
 
 def build_job_attributes_prompt_for_job(
     ctx: JobDescriptionContext,
     *,
+    occupation: OccupationPromptEnrichment,
+    extras: JobAttributesLlm2Extras | None = None,
     schema: JobAttributesSchema | None = None,
     onet: tuple[OnetWorkActivity, ...] | None = None,
     settings: Settings | None = None,
 ) -> str:
-    """
-    Inject JD text, parsed metadata, and schema / ONET constraints into the second LLM prompt.
-    """
+    """LLM2: single-county occupation user block + ONET/JSON appendix; system from ``resources/prompts.py``."""
     s = settings or get_settings()
     schema = schema or load_job_attributes_schema(settings=s)
     onet = onet or load_onet_work_activities(settings=s)
     jd = build_job_attributes_jd_text(ctx)
     meta = build_job_attributes_metadata_block(ctx)
-    title = (ctx.title or "").strip() or "Unknown role"
-    county = (ctx.county or "").strip() or "Unknown"
     return build_job_attributes_prompt(
-        occupation_title=title,
-        county=county,
-        job_description_text=jd,
-        metadata_block=meta,
+        opening_line=llm2_opening_line_from_context(ctx),
+        occupation=occupation,
         schema=schema,
         onet_work_activities=onet,
+        extras=extras,
+        job_listing_body=jd,
+        job_listing_metadata=meta,
         settings=s,
     )
 
@@ -196,24 +183,74 @@ def build_job_attributes_prompt_for_job(
 def run_job_attributes_for_job(
     ctx: JobDescriptionContext,
     *,
+    occupation: OccupationPromptEnrichment,
     settings: Settings | None = None,
     schema: JobAttributesSchema | None = None,
     onet: tuple[OnetWorkActivity, ...] | None = None,
+    extras: JobAttributesLlm2Extras | None = None,
+    log_llm2_prompt: bool = False,
+    log_llm2_job_label: str = "",
 ) -> JobAttributesResult:
-    """
-    LLM call 2: unified attributes + ONET work-activity ids; parse JSON into validated dicts.
-    """
+    """LLM call 2: structured attribute estimates + summary + ONET work-activity ids."""
     s = settings or get_settings()
-    prompt = build_job_attributes_prompt_for_job(ctx, schema=schema, onet=onet, settings=s)
-    raw = call_job_attributes_model(prompt, settings=s)
     schema_resolved = schema or load_job_attributes_schema(settings=s)
     onet_resolved = onet or load_onet_work_activities(settings=s)
-    attrs, wa_ids = parse_job_attributes_response(raw, schema_resolved, onet_resolved)
-    return JobAttributesResult(
-        attributes=attrs,
-        work_activity_ids=wa_ids,
-        raw_response=raw,
+    county = (ctx.county or "").strip()
+    city = (ctx.city or "").strip()
+    prompt = build_job_attributes_prompt_for_job(
+        ctx,
+        occupation=occupation,
+        extras=extras,
+        schema=schema_resolved,
+        onet=onet_resolved,
+        settings=s,
     )
+
+    if log_llm2_prompt:
+        sep = "-" * 80
+        label = (log_llm2_job_label or "").strip() or "(job)"
+        resolved = resolve_llm2_single_county_user_fields(occupation, extras)
+        logger.info("%s", sep)
+        logger.info(
+            "LLM2 job attributes | job=%s | system=resources/prompts.py | user=client single-county | "
+            "onet_rows=%s | schema_attrs=%s | county=%r | city=%r",
+            label,
+            len(onet_resolved),
+            len(schema_resolved.attributes),
+            county or None,
+            city or None,
+        )
+        logger.info(
+            "LLM2 `occupation` enrichment (JSON):\n%s",
+            json.dumps(asdict(occupation), ensure_ascii=False, indent=2),
+        )
+        if extras is not None:
+            logger.info(
+                "LLM2 `extras` (JSON):\n%s",
+                json.dumps(asdict(extras), ensure_ascii=False, indent=2),
+            )
+        logger.info(
+            "LLM2 resolved single-county user fields (JSON):\n%s",
+            json.dumps(
+                {
+                    "preferred_label": occupation.occupation_label,
+                    "county": county,
+                    **{k: v for k, v in resolved.items() if v},
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        jd = build_job_attributes_jd_text(ctx)
+        meta = build_job_attributes_metadata_block(ctx)
+        logger.info("LLM2 `job_listing_body` (%s chars):\n%s", len(jd), jd)
+        logger.info("LLM2 `job_listing_metadata` (%s chars):\n%s", len(meta), meta)
+        logger.info("LLM2 assembled prompt (%s chars):\n%s", len(prompt), prompt)
+        logger.info("%s", sep)
+
+    raw = call_job_attributes_model(prompt, settings=s)
+    parsed = parse_job_attributes_response(raw, schema_resolved, onet_resolved)
+    return replace(parsed, raw_response=raw)
 
 
 def _response_text(response: Any) -> str:
@@ -240,13 +277,7 @@ def run_skill_ranker_for_job(
     description_by_esco: dict[str, str] | None = None,
 ) -> tuple[list[str], list[str], MappedEscoSkills, str]:
     """
-    Skill ranker: ESCO candidates, JD text, LLM call, JSON parse, label→URI/UUID map.
-
-    Pass ``esco_candidates`` to override the menu (default ``extract_esco_skill_candidates(ctx.classified)``).
-    Occupation taxonomy skills are **not** included here; they are merged only for storage / relations.
-
-    Set ``log_llm1_prompt`` to log ``full_details``, ``skills_to_prompt_dicts``, ``skills_text``, and the
-    full assembled user message (template from ``resources/Skills_reranker_prompts.md``).
+    Skill ranker: ESCO candidates, JD text, LLM call, JSON parse, label->URI/UUID map.
 
     Returns essential labels, optional labels, ``MappedEscoSkills``, and raw model text.
     """

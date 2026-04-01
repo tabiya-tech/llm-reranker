@@ -4,7 +4,7 @@ Load prompt text from ``Settings.resources_dir`` (default: repo ``resources/``).
 Relative paths:
 
 - ``Skills_reranker_prompts.md``
-- ``prompts.py`` (``JOB_ATTRIBUTES_SYSTEM_PROMPT`` for LLM call 2)
+- ``prompts.py`` (``JOB_ATTRIBUTES_SYSTEM_PROMPT`` for LLM call 2, ``OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT`` for LLM call 3)
 """
 
 from __future__ import annotations
@@ -70,6 +70,19 @@ Confidence levels:
 - medium: Reasonable inference based on similar occupations
 - low: Limited data, estimate based on general patterns"""
 
+_FALLBACK_OCCUPATION_SKILLS_RELEVANCE_SYSTEM = """You are an expert recruiter. Your task is to judge whether each occupation-linked taxonomy skill is relevant to a specific job advertisement.
+
+The skills you see are already tagged as essential or optional **for the occupation** (from a standard taxonomy). They may still be irrelevant **for this particular job posting** (wrong seniority, different industry focus, not mentioned, or clearly not required).
+
+For every skill in the list the user provides:
+- Set is_relevant to true if the skill plausibly applies to the role described in the job ad.
+- Set is_relevant to false if the skill is not a reasonable requirement or context for this posting.
+
+Rules:
+- Use only the skills listed; do not invent skill_ids.
+- Copy skill_id and tabiya_occupation_id exactly as given (strings).
+- Output nothing but the JSON object specified in the user message: a decisions array only, no summary or reasons."""
+
 
 def _skills_md_path(settings: Settings) -> Path:
     return settings.resources_dir / _SKILLS_REL
@@ -121,4 +134,21 @@ def load_job_attributes_system_prompt(settings: Settings | None = None) -> str:
     )
     if not m:
         return _FALLBACK_JOB_ATTRIBUTES_SYSTEM
+    return m.group(1).strip()
+
+
+def load_occupation_skills_relevance_system_prompt(settings: Settings | None = None) -> str:
+    """Load ``OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT`` from ``resources/prompts.py``."""
+    s = settings or get_settings()
+    path = _pref_prompts_path(s)
+    if not path.is_file():
+        return _FALLBACK_OCCUPATION_SKILLS_RELEVANCE_SYSTEM
+    text = path.read_text(encoding="utf-8")
+    m = re.search(
+        r"OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT\s*=\s*\"\"\"(.*?)\"\"\"",
+        text,
+        re.DOTALL,
+    )
+    if not m:
+        return _FALLBACK_OCCUPATION_SKILLS_RELEVANCE_SYSTEM
     return m.group(1).strip()

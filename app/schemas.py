@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -44,11 +45,40 @@ class OnetWorkActivity:
 
 
 @dataclass(frozen=True)
-class JobAttributesResult:
-    """Parsed output of LLM call 2 (unified attributes + task classification)."""
+class AttributeEstimate:
+    """One attribute row from LLM2 JSON (name, level, confidence, reasoning)."""
 
+    attribute_name: str
+    selected_level_id: str
+    confidence: str
+    reasoning: str
+
+
+@dataclass(frozen=True)
+class JobAttributesResult:
+    """Parsed output of LLM call 2: structured estimates + summary + ONET work activities."""
+
+    attribute_estimates: tuple[AttributeEstimate, ...]
+    summary: str
     attributes: dict[str, str]
     work_activity_ids: tuple[str, ...]
+    raw_response: str
+
+
+@dataclass(frozen=True)
+class OccupationSkillsRelevanceDecision:
+    """One row from LLM call 3 JSON (occupation taxonomy skill vs this job ad)."""
+
+    skill_id: str
+    tabiya_occupation_id: str
+    is_relevant: bool
+
+
+@dataclass(frozen=True)
+class OccupationSkillsRelevanceResult:
+    """Parsed LLM call 3 output: flags only, no summary or reasons."""
+
+    decisions: tuple[OccupationSkillsRelevanceDecision, ...]
     raw_response: str
 
 
@@ -65,6 +95,12 @@ def onet_work_activities_path(settings: Settings | None = None) -> Path:
 
 def load_job_attributes_schema(path: Path | None = None, *, settings: Settings | None = None) -> JobAttributesSchema:
     p = path or job_attributes_schema_path(settings)
+    return _load_job_attributes_schema_cached(str(p.resolve()))
+
+
+@lru_cache(maxsize=4)
+def _load_job_attributes_schema_cached(resolved_path: str) -> JobAttributesSchema:
+    p = Path(resolved_path)
     if not p.is_file():
         raise FileNotFoundError(f"Job attributes schema not found: {p}")
     data = json.loads(p.read_text(encoding="utf-8"))
@@ -100,6 +136,12 @@ def load_job_attributes_schema(path: Path | None = None, *, settings: Settings |
 
 def load_onet_work_activities(path: Path | None = None, *, settings: Settings | None = None) -> tuple[OnetWorkActivity, ...]:
     p = path or onet_work_activities_path(settings)
+    return _load_onet_work_activities_cached(str(p.resolve()))
+
+
+@lru_cache(maxsize=4)
+def _load_onet_work_activities_cached(resolved_path: str) -> tuple[OnetWorkActivity, ...]:
+    p = Path(resolved_path)
     if not p.is_file():
         raise FileNotFoundError(f"ONET work activities JSON not found: {p}")
     raw = json.loads(p.read_text(encoding="utf-8"))
@@ -130,15 +172,67 @@ def allowed_level_ids_by_attribute(schema: JobAttributesSchema) -> dict[str, fro
     return {a.name: frozenset(lev.id for lev in a.levels) for a in schema.attributes}
 
 
+def _normalize_confidence(raw: object) -> str:
+    s = str(raw or "").strip().lower()
+    if s in ("high", "medium", "low"):
+        return s
+    return "medium"
+
+
+def _json_bool(v: object) -> bool:
+    if isinstance(v, bool):
+        return v
+    s = str(v or "").strip().lower()
+    if s in ("true", "1", "yes"):
+        return True
+    if s in ("false", "0", "no"):
+        return False
+    return True
+
+
+def parse_occupation_skills_relevance_response(raw_text: str) -> OccupationSkillsRelevanceResult:
+    """
+    Parse LLM call 3 JSON: ``{ "decisions": [ { "skill_id", "tabiya_occupation_id", "is_relevant" } ] }``.
+
+    Extra fields on objects are ignored. Duplicate (tabiya_occupation_id, skill_id) keys: last wins.
+    """
+    cleaned = strip_json_fence(raw_text)
+    data = json.loads(cleaned)
+    if not isinstance(data, dict):
+        raise ValueError("Occupation skills relevance JSON must be an object")
+    raw_list = data.get("decisions")
+    if not isinstance(raw_list, list):
+        raise ValueError("Occupation skills relevance JSON must contain a decisions array")
+    merged: dict[tuple[str, str], OccupationSkillsRelevanceDecision] = {}
+    for item in raw_list:
+        if not isinstance(item, dict):
+            continue
+        sid = str(item.get("skill_id") or "").strip()
+        tid = str(item.get("tabiya_occupation_id") or "").strip()
+        if not sid or not tid:
+            continue
+        merged[(tid.lower(), sid.lower())] = OccupationSkillsRelevanceDecision(
+            skill_id=sid,
+            tabiya_occupation_id=tid,
+            is_relevant=_json_bool(item.get("is_relevant")),
+        )
+    decisions = tuple(merged.values())
+    return OccupationSkillsRelevanceResult(decisions=decisions, raw_response=cleaned)
+
+
 def parse_job_attributes_response(
     raw_text: str,
     schema: JobAttributesSchema,
     onet: tuple[OnetWorkActivity, ...],
-) -> tuple[dict[str, str], tuple[str, ...]]:
+) -> JobAttributesResult:
     """
-    Parse and validate LLM JSON: ``attributes`` (name -> level id) and ``work_activities`` (WA_Element_ID list).
+    Parse and validate LLM JSON.
 
-    Drops invalid attribute keys, unknown level ids, and unknown work-activity ids.
+    Expects ``attributes`` as a **list** of objects with ``attribute_name``, ``selected_level_id``,
+    ``confidence``, ``reasoning``. Also accepts a legacy **object** map
+    ``name -> level_id`` and synthesizes estimates with medium confidence.
+
+    ``summary`` is optional text; ``work_activities`` is a list of allowed ONET ids.
     """
     cleaned = strip_json_fence(raw_text)
     data = json.loads(cleaned)
@@ -147,18 +241,47 @@ def parse_job_attributes_response(
 
     allowed_levels = allowed_level_ids_by_attribute(schema)
     attr_names = frozenset(allowed_levels.keys())
-    out_attrs: dict[str, str] = {}
+
+    by_name: dict[str, AttributeEstimate] = {}
 
     raw_attrs = data.get("attributes")
-    if isinstance(raw_attrs, dict):
+    if isinstance(raw_attrs, list):
+        for item in raw_attrs:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("attribute_name") or "").strip()
+            lid_raw = item.get("selected_level_id")
+            if name not in attr_names or not isinstance(lid_raw, str) or not lid_raw.strip():
+                continue
+            lid = lid_raw.strip()
+            if lid not in allowed_levels[name]:
+                continue
+            by_name[name] = AttributeEstimate(
+                attribute_name=name,
+                selected_level_id=lid,
+                confidence=_normalize_confidence(item.get("confidence")),
+                reasoning=str(item.get("reasoning") or "").strip(),
+            )
+    elif isinstance(raw_attrs, dict):
         for name, level_id in raw_attrs.items():
             if name not in attr_names:
                 continue
             if not isinstance(level_id, str) or not level_id.strip():
                 continue
             lid = level_id.strip()
-            if lid in allowed_levels[name]:
-                out_attrs[name] = lid
+            if lid not in allowed_levels[name]:
+                continue
+            by_name[name] = AttributeEstimate(
+                attribute_name=name,
+                selected_level_id=lid,
+                confidence="medium",
+                reasoning="",
+            )
+
+    estimates = tuple(by_name[a.name] for a in schema.attributes if a.name in by_name)
+    flat: dict[str, str] = {e.attribute_name: e.selected_level_id for e in estimates}
+    summary_raw = data.get("summary")
+    summary = str(summary_raw).strip() if summary_raw is not None else ""
 
     wa_allowed = frozenset(x.wa_element_id for x in onet)
     wa_out: list[str] = []
@@ -170,4 +293,10 @@ def parse_job_attributes_response(
                 if wid not in wa_out:
                     wa_out.append(wid)
 
-    return out_attrs, tuple(wa_out)
+    return JobAttributesResult(
+        attribute_estimates=tuple(estimates),
+        summary=summary,
+        attributes=flat,
+        work_activity_ids=tuple(wa_out),
+        raw_response=cleaned,
+    )

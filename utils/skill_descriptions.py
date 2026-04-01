@@ -5,6 +5,7 @@ Enable with ``SKILLS_CSV_INCLUDE_DESCRIPTIONS`` and ``SKILLS_CSV_DESCRIPTION_COL
 (see :class:`app.config.Settings`). Maps lowercase ESCO
 concept uuid → description text; same row may contribute multiple keys via ``ORIGINURI`` /
 ``UUIDHISTORY`` (aligned with :mod:`utils.uuid_to_tabiya_id`).
+Occupation analog: :mod:`utils.occupation_description`.
 """
 
 from __future__ import annotations

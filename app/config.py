@@ -241,6 +241,11 @@ class Settings:
 
     # ``occupations.csv``: classifier → Tabiya occupation ``ID`` (see ``OCCUPATIONS_CSV``).
     occupations_csv_path: Path
+    # LLM2: label column for occupation line (``OCCUPATIONS_CSV_LABEL_COLUMN``, default PREFERREDLABEL).
+    occupations_csv_label_column: str
+    # LLM2: include definition text from ``OCCUPATIONS_CSV_DESCRIPTION_COLUMN`` when True.
+    occupations_csv_include_descriptions: bool
+    occupations_csv_description_column: str
 
     # ``skills.csv``: Tabiya skill ``ID`` / ESCO uuid → ``PREFERREDLABEL`` (see ``SKILLS_CSV``).
     skills_csv_path: Path
@@ -272,7 +277,9 @@ class Settings:
     field_closing_date: str
     field_source_platform: str
 
-    # Vertex AI (Gemini); resolved SA path or None (then rely on existing GOOGLE_APPLICATION_CREDENTIALS / gcloud ADC)
+    # Gemini (GenAI API key or Vertex AI fallback)
+    gemini_api_key: str
+    gemini_model: str
     gcp_project_id: str
     gcp_location: str
     vertex_model: str
@@ -320,6 +327,11 @@ class Settings:
         )
         occ_csv_raw = os.environ.get("OCCUPATIONS_CSV")
         occupations_csv_path = _resolve_occupations_csv_path(root, resources, occ_csv_raw)
+        occ_label_col = (
+            os.environ.get("OCCUPATIONS_CSV_LABEL_COLUMN") or "PREFERREDLABEL"
+        ).strip()
+        occ_inc_desc = _bool_env("OCCUPATIONS_CSV_INCLUDE_DESCRIPTIONS", default=False)
+        occ_desc_col = (os.environ.get("OCCUPATIONS_CSV_DESCRIPTION_COLUMN") or "").strip()
         skills_csv_raw = os.environ.get("SKILLS_CSV")
         skills_csv_path = _resolve_skills_csv_path(root, resources, skills_csv_raw)
         skills_include_desc = _bool_env("SKILLS_CSV_INCLUDE_DESCRIPTIONS", default=False)
@@ -336,6 +348,9 @@ class Settings:
             job_attributes_schema_path=job_attributes_schema_path,
             occupation_to_skill_relations_path=occupation_to_skill_relations_path,
             occupations_csv_path=occupations_csv_path,
+            occupations_csv_label_column=occ_label_col or "PREFERREDLABEL",
+            occupations_csv_include_descriptions=occ_inc_desc,
+            occupations_csv_description_column=occ_desc_col,
             skills_csv_path=skills_csv_path,
             skills_csv_include_descriptions=skills_include_desc,
             skills_csv_description_column=skills_desc_col,
@@ -388,9 +403,19 @@ class Settings:
             field_source_platform=os.environ.get(
                 "CLASSIFIED_FIELD_SOURCE_PLATFORM", "source_platform"
             ),
+            gemini_api_key=(
+                os.environ.get("GEMINI_API_KEY")
+                or os.environ.get("API_KEY")
+                or ""
+            ).strip(),
+            gemini_model=(
+                os.environ.get("GEMINI_MODEL")
+                or os.environ.get("VERTEX_MODEL")
+                or "gemini-2.5-flash"
+            ).strip(),
             gcp_project_id=gcp_pid,
             gcp_location=os.environ.get("GCP_LOCATION", "us-central1"),
-            vertex_model=os.environ.get("VERTEX_MODEL", "gemini-2.0-flash-001"),
+            vertex_model=os.environ.get("VERTEX_MODEL", "gemini-2.5-flash"),
             google_application_credentials_resolved=creds_resolved,
             bulk_write_batch_size=_int_env("BULK_WRITE_BATCH_SIZE", 100),
             classified_linked_entity_types=_entity_types_tuple(

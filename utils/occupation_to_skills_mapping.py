@@ -7,7 +7,7 @@ Flow:
 2. Match each hit to ``occupations.csv`` via ``UUIDHISTORY`` / ``ORIGINURI`` / row ``ID``.
 3. Tabiya occupation ids → skill ids in ``occupation_to_skill_relations.csv``.
 4. Persist ``occupation_to_skills`` (``meta`` + ``items``) with ``RELATIONTYPE`` from the relations CSV.
-   The skill ranker uses **classifier ESCO skills only**; taxonomy expansion is not passed to LLM 1.
+   Classifier ESCO skills and occupation-taxonomy skills stay separate; LLM1 sees classifier candidates only.
 
 Tabiya ``SKILLID`` → ESCO via :mod:`utils.uuid_to_tabiya_id` (``skills.csv``).
 """
@@ -18,6 +18,7 @@ import csv
 import logging
 import re
 from collections.abc import Mapping
+from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -220,12 +221,24 @@ def load_occupations_lookup(path_str: str) -> tuple[dict[str, str], frozenset[st
     """
     From ``occupations.csv``: map lookup keys (ESCO uuid, Tabiya ``ID``, …) → row ``ID``.
 
+    Parsed once per resolved path per process (cached); treat returned ``bridge`` as read-only.
+
     Each row contributes:
     - ``ID`` → itself;
     - every UUID in ``UUIDHISTORY`` → ``ID``;
     - ESCO uuid from ``ORIGINURI`` → ``ID`` (when parseable).
     """
     path = Path(path_str)
+    try:
+        key = str(path.resolve())
+    except OSError:
+        key = str(path)
+    return _load_occupations_lookup_cached(key)
+
+
+@lru_cache(maxsize=8)
+def _load_occupations_lookup_cached(resolved_path: str) -> tuple[dict[str, str], frozenset[str]]:
+    path = Path(resolved_path)
     if not path.is_file():
         logger.warning("occupations.csv not found: %s", path)
         return {}, frozenset()
@@ -351,7 +364,8 @@ class OccupationTaxonomyStats:
     One row per ``classified_occupations`` entry: lookup → Tabiya id → |skills| in relations.
 
     ``sum_relation_skills_per_classifier_hit`` double-counts when two hits share the same Tabiya id.
-    ``merged_unique_skills_from_occupations`` is what we persist (deduped Tabiya ids, then unique SKILLIDs).
+    ``merged_unique_skills_from_occupations`` is the unique ESCO skill ids from occupation relations only
+    (deduped across Tabiya occupation ids); classifier skills are not included in this count.
     """
 
     classified_skill_count: int
@@ -364,7 +378,7 @@ class OccupationTaxonomyStats:
     def format_log_lines(self) -> list[str]:
         lines = [
             "classifier_skills=%s occupation_classifier_hits=%s deduped_tabiya_ids=%s "
-            "sum_skills_per_hit=%s merged_unique_occupation_skills=%s"
+            "sum_skills_per_hit=%s taxonomy_unique_occupation_skills=%s"
             % (
                 self.classified_skill_count,
                 self.occupation_classifier_hits,
@@ -500,6 +514,14 @@ def occupation_skill_taxonomy_for_settings(
 ) -> tuple[dict[str, frozenset[str]], dict[str, str], dict[str, dict[str, str]]]:
     s = settings or get_settings()
     return load_occupation_skill_relations(str(s.occupation_to_skill_relations_path.resolve()))
+
+
+def occupation_block_skill_counts(skills: list[dict[str, Any]]) -> dict[str, int]:
+    """
+    Count ``total`` / ``essential`` / ``optional`` / ``unspecified`` for a block's ``skills`` rows
+    (``relation_type`` from the relations CSV). Used after listing-relevance filtering.
+    """
+    return _skill_relation_counts_after_lookup(skills)
 
 
 def _skill_relation_counts_after_lookup(skills: list[dict[str, Any]]) -> dict[str, int]:
@@ -674,28 +696,26 @@ def build_occupation_taxonomy_skill_rows(
     return rows, skill_ids
 
 
-def merge_esco_candidates_with_occupation_taxonomy(
+def resolve_occupation_taxonomy_for_classified_job(
     classified_doc: dict[str, Any],
-    base_candidates: list[EscoSkillCandidate],
+    classifier_skill_candidates: list[EscoSkillCandidate],
     occupation_to_skills: Mapping[str, frozenset[str]],
     csv_skill_labels: Mapping[str, str] | None = None,
     occupation_skill_relation: Mapping[str, Mapping[str, str]] | None = None,
     skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
     *,
     settings: Settings | None = None,
-) -> tuple[
-    list[EscoSkillCandidate],
-    list[dict[str, Any]],
-    list[str],
-    OccupationTaxonomyStats,
-    list[dict[str, Any]],
-]:
+) -> tuple[list[str], OccupationTaxonomyStats, list[dict[str, Any]]]:
     """
-    Resolve classifier occupations via ``occupations.csv``, attach skills from relations CSV,
-    merge unique skills into ``base_candidates`` for the reranker.
+    Resolve classifier occupations via ``occupations.csv`` and skills from the relations CSV.
 
-    Returns ``OccupationTaxonomyStats`` for terminal logging, plus ``occupation_to_skills``-shaped
-    rows for Mongo (one entry per ``classified_occupations`` row, ``relation_type`` from CSV).
+    Returns occupation taxonomy **only** (no union with classifier skills):
+
+    - ``taxonomy_skill_ids``: unique ESCO uuids linked via occupation relations (for logging / analytics).
+    - ``OccupationTaxonomyStats`` for terminal logs.
+    - ``occupation_to_skills_nested``: Mongo shape (``relation_type`` from CSV per skill).
+
+    The skill ranker (LLM1) continues to use **classifier** candidates only; pass those separately.
     """
     labels = csv_skill_labels or {}
     occ_skill_rel = occupation_skill_relation or {}
@@ -706,11 +726,11 @@ def merge_esco_candidates_with_occupation_taxonomy(
         classified_doc, occ_path, settings=s, bridge=bridge, all_ids=all_ids
     )
 
-    taxonomy_rows, taxonomy_skill_ids = build_occupation_taxonomy_skill_rows(
+    _taxonomy_rows, taxonomy_skill_ids = build_occupation_taxonomy_skill_rows(
         tabiya_occ_ids,
         occupation_to_skills,
         labels,
-        base_candidates,
+        classifier_skill_candidates,
         skills_uuid_tabiya_map,
     )
 
@@ -720,7 +740,7 @@ def merge_esco_candidates_with_occupation_taxonomy(
         bridge,
         all_ids,
         occupation_to_skills,
-        classified_skill_count=len(base_candidates),
+        classified_skill_count=len(classifier_skill_candidates),
         deduped_tabiya_ids=tabiya_occ_ids,
         merged_unique_skill_count=len(taxonomy_skill_ids),
     )
@@ -743,7 +763,7 @@ def merge_esco_candidates_with_occupation_taxonomy(
         ]
         logger.debug(
             "Occupation→skills: tabiya_occupation_ids=%s per_id_unique_skill_counts=%s "
-            "merged_unique_total=%s (relations map keys=%s)",
+            "taxonomy_unique_total=%s (relations map keys=%s)",
             tabiya_occ_ids,
             per_id,
             len(taxonomy_skill_ids),
@@ -752,38 +772,11 @@ def merge_esco_candidates_with_occupation_taxonomy(
 
     if tabiya_occ_ids and occupation_to_skills and not taxonomy_skill_ids:
         logger.warning(
-            "occupations→skills produced no merged skills: relations present=%s; "
+            "occupations→skills resolved no taxonomy skills: relations present=%s; "
             "skills.csv tabiya→esco mappings=%s. Check OCCUPATIONID/SKILLID and that each Tabiya SKILLID "
             "has ORIGINURI or UUIDHISTORY in skills.csv.",
             tabiya_occ_ids[0] in occupation_to_skills if tabiya_occ_ids else False,
             len(skills_uuid_tabiya_map.primary_esco_by_tabiya) if skills_uuid_tabiya_map else 0,
         )
 
-    seen_skill: set[str] = set()
-    merged: list[EscoSkillCandidate] = []
-    for c in base_candidates:
-        u = (c.esco_uuid or "").strip().lower()
-        if u:
-            seen_skill.add(u)
-        merged.append(c)
-
-    base_by_uuid: dict[str, EscoSkillCandidate] = {}
-    for c in base_candidates:
-        u = (c.esco_uuid or "").strip().lower()
-        if u:
-            base_by_uuid[u] = c
-
-    for su in taxonomy_skill_ids:
-        if su in seen_skill:
-            continue
-        seen_skill.add(su)
-        merged.append(
-            EscoSkillCandidate(
-                label=_label_for_taxonomy_skill(su, labels, base_by_uuid, skills_uuid_tabiya_map),
-                uri=esco_skill_uri_for_uuid(su),
-                similarity_score=None,
-                esco_uuid=su,
-            )
-        )
-
-    return merged, taxonomy_rows, taxonomy_skill_ids, occ_stats, occupation_to_skills_nested
+    return taxonomy_skill_ids, occ_stats, occupation_to_skills_nested
