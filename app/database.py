@@ -218,6 +218,126 @@ def bulk_write_llm_upserts(
     )
 
 
+RANKING_LOGS_COLLECTION = "ranking-logs"
+
+
+def _ranking_logs_collection(
+    settings: Settings | None = None,
+    client: MongoClient | None = None,
+) -> Collection:
+    settings = settings or get_settings()
+    db = get_database(client, settings=settings)
+    return db[RANKING_LOGS_COLLECTION]
+
+
+def insert_ranking_run_log(
+    *,
+    settings: Settings | None = None,
+    limit: int,
+    model: str,
+    source_collection: str,
+    target_collection: str,
+) -> ObjectId:
+    """Insert a new run document with status ``running`` and return its ``_id``."""
+    doc = {
+        "started_at": datetime.utcnow(),
+        "completed_at": None,
+        "status": "running",
+        "success": None,
+        "error_message": None,
+        "config": {
+            "model": model,
+            "limit": limit,
+            "source_collection": source_collection,
+            "target_collection": target_collection,
+        },
+        "stats": {
+            "jobs_processed": 0,
+            "upserts_queued": 0,
+            "llm1_calls": 0,
+            "llm2_calls": 0,
+            "llm3_calls": 0,
+        },
+        "elapsed_s": None,
+        "updated_at": datetime.utcnow(),
+    }
+    coll = _ranking_logs_collection(settings=settings)
+    result = coll.insert_one(doc)
+    logger.info("ranking-logs | run started | _id=%s", result.inserted_id)
+    return result.inserted_id
+
+
+def update_ranking_run_progress(
+    run_id: ObjectId,
+    *,
+    jobs_processed: int,
+    upserts_queued: int,
+    llm1_calls: int,
+    llm2_calls: int,
+    llm3_calls: int,
+    settings: Settings | None = None,
+) -> None:
+    """Update stats and ``updated_at`` on the run document (called periodically)."""
+    coll = _ranking_logs_collection(settings=settings)
+    coll.update_one(
+        {"_id": run_id},
+        {
+            "$set": {
+                "stats.jobs_processed": jobs_processed,
+                "stats.upserts_queued": upserts_queued,
+                "stats.llm1_calls": llm1_calls,
+                "stats.llm2_calls": llm2_calls,
+                "stats.llm3_calls": llm3_calls,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+
+def complete_ranking_run_log(
+    run_id: ObjectId,
+    *,
+    success: bool,
+    jobs_processed: int,
+    upserts_queued: int,
+    llm1_calls: int,
+    llm2_calls: int,
+    llm3_calls: int,
+    elapsed_s: float,
+    error_message: str | None = None,
+    settings: Settings | None = None,
+) -> None:
+    """Mark the run as ``completed`` or ``failed`` with final stats."""
+    now = datetime.utcnow()
+    coll = _ranking_logs_collection(settings=settings)
+    coll.update_one(
+        {"_id": run_id},
+        {
+            "$set": {
+                "completed_at": now,
+                "status": "completed" if success else "failed",
+                "success": success,
+                "error_message": error_message,
+                "stats.jobs_processed": jobs_processed,
+                "stats.upserts_queued": upserts_queued,
+                "stats.llm1_calls": llm1_calls,
+                "stats.llm2_calls": llm2_calls,
+                "stats.llm3_calls": llm3_calls,
+                "elapsed_s": round(elapsed_s, 3),
+                "updated_at": now,
+            }
+        },
+    )
+    logger.info(
+        "ranking-logs | run %s | _id=%s | jobs=%s upserts=%s elapsed=%.3fs",
+        "completed" if success else "failed",
+        run_id,
+        jobs_processed,
+        upserts_queued,
+        elapsed_s,
+    )
+
+
 def iter_classified_jobs(
     limit: int = 100,
     skip: int = 0,

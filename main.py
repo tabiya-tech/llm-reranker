@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Batch: ClassifiedJobs → Vertex LLM 1, 3, 2 → upsert ranked job schema to ``MONGODB_TARGET_COLLECTION``."""
+"""Batch CLI: ClassifiedJobs → LLM 1, 3, 2 → upsert ranked job schema to target collection.
+
+For single-job HTTP processing, see ``api.py`` (FastAPI).
+"""
 
 from __future__ import annotations
 
@@ -9,14 +12,17 @@ import sys
 import time
 from typing import Any
 
-from app.config import get_settings
 from pymongo.operations import UpdateOne
 
+from app.config import get_settings
 from app.database import (
     bulk_write_llm_upserts,
     build_job_description_context,
+    complete_ranking_run_log,
+    insert_ranking_run_log,
     iter_classified_jobs,
     llm_pipeline_upsert_update_one,
+    update_ranking_run_progress,
 )
 from app.logging_config import (
     STEP_LLM1_SKILL_RANKER,
@@ -26,10 +32,16 @@ from app.logging_config import (
     STEP_OCCUPATION_TAXONOMY,
     configure_logging,
 )
+from app.pipeline import load_taxonomy_context
 from app.llm_service import (
     run_job_attributes_for_job,
     run_occupation_skills_relevance_for_job,
     run_skill_ranker_for_job,
+)
+from app.prompts import build_occupation_prompt_enrichment
+from app.ranked_job_schema import (
+    apply_occupation_skills_listing_relevance,
+    occupation_skills_relevance_menu_size,
 )
 from app.schemas import JobAttributesResult
 from utils.classifier_linked_entities import (
@@ -39,19 +51,7 @@ from utils.classifier_linked_entities import (
     group_linked_entities_by_type,
     job_identifier,
 )
-from app.prompts import build_occupation_prompt_enrichment
-from app.ranked_job_schema import (
-    apply_occupation_skills_listing_relevance,
-    occupation_skills_relevance_menu_size,
-)
-from utils.occupation_description import load_occupation_labels_and_descriptions_by_esco
-from utils.occupation_to_skills_mapping import (
-    load_occupations_lookup,
-    occupation_skill_taxonomy_for_settings,
-    resolve_occupation_taxonomy_for_classified_job,
-)
-from utils.skill_descriptions import load_skill_description_by_esco
-from utils.uuid_to_tabiya_id import load_skills_uuid_tabiya_map
+from utils.occupation_to_skills_mapping import resolve_occupation_taxonomy_for_classified_job
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,6 @@ def _elapsed_s(start: float) -> float:
 
 
 def _classified_occupation_labels_for_log(classified_doc: dict[str, Any], settings) -> str:
-    """Short list of classifier occupation labels for logs (no skill candidates)."""
     by_t = group_linked_entities_by_type(classified_doc, settings)
     occ = by_t.get("occupation", [])
     if not occ:
@@ -78,7 +77,6 @@ def _occupation_ranker_counts(
     occ_uuids: list[str],
     mapped: MappedEscoSkills | None,
 ) -> tuple[int, int, int]:
-    """How many occupation-derived skills landed essential / optional / unranked."""
     if not occ_uuids or mapped is None:
         return 0, 0, len(occ_uuids)
     oset = {u.strip().lower() for u in occ_uuids if u}
@@ -92,7 +90,7 @@ def _occupation_ranker_counts(
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="ClassifiedJobs batch: Mongo → Vertex LLM 1, 3, 2 → upsert target collection"
+        description="ClassifiedJobs batch: Mongo → LLM 1, 3, 2 → upsert target collection"
     )
     p.add_argument(
         "--limit",
@@ -110,14 +108,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--log-llm1-prompt",
         action="store_true",
-        help="Per job: log LLM1 (skill ranker) full_details, potential_skills, skills_text, assembled "
-        "prompt (from resources/Skills_reranker_prompts.md); skip other per-job INFO logs",
+        help="Per job: log LLM1 (skill ranker) full prompt; skip other per-job INFO logs",
     )
     p.add_argument(
         "--log-llm2-prompt",
         action="store_true",
-        help="Per job: log LLM2 occupation context, JD/metadata slices, full assembled job-attributes "
-        "prompt (resources/prompts.py + ONET/schema appendix); skip other per-job INFO logs",
+        help="Per job: log LLM2 job-attributes full prompt; skip other per-job INFO logs",
     )
     p.add_argument(
         "--log-llm3-prompt",
@@ -155,27 +151,7 @@ def run() -> None:
     pending: list[UpdateOne] = []
 
     t_startup = time.perf_counter()
-    occ_map, csv_skill_labels, occ_skill_relation = occupation_skill_taxonomy_for_settings(settings)
-    occ_bridge, occ_all_ids = load_occupations_lookup(
-        str(settings.occupations_csv_path.resolve())
-    )
-    skills_uuid_tabiya_map = load_skills_uuid_tabiya_map(
-        str(settings.skills_csv_path.resolve())
-    )
-    skill_desc_by_esco: dict[str, str] = {}
-    if settings.skills_csv_include_descriptions and (
-        settings.skills_csv_description_column or ""
-    ).strip():
-        skill_desc_by_esco = load_skill_description_by_esco(
-            str(settings.skills_csv_path.resolve()),
-            settings.skills_csv_description_column.strip(),
-        )
-    occ_label_by_esco, occ_desc_by_esco = load_occupation_labels_and_descriptions_by_esco(
-        str(settings.occupations_csv_path.resolve()),
-        label_column=settings.occupations_csv_label_column,
-        include_descriptions=settings.occupations_csv_include_descriptions,
-        description_column=(settings.occupations_csv_description_column or "").strip() or None,
-    )
+    taxonomy = load_taxonomy_context(settings)
     startup_s = _elapsed_s(t_startup)
 
     limit_log = "all" if args.limit <= 0 else str(args.limit)
@@ -186,7 +162,7 @@ def run() -> None:
         settings.mongodb_target_collection,
         batch_size,
         startup_s,
-        len(occ_map),
+        len(taxonomy.occ_map),
         settings.gemini_model,
     )
     logger.debug(
@@ -200,12 +176,30 @@ def run() -> None:
     )
 
     _gemini_or_exit(settings)
-    logger.info("Gemini | model=%s | api_key=...%s", settings.gemini_model, settings.gemini_api_key[-4:] if settings.gemini_api_key else "?")
+    logger.info(
+        "Gemini | model=%s | api_key=...%s",
+        settings.gemini_model,
+        settings.gemini_api_key[-4:] if settings.gemini_api_key else "?",
+    )
+
+    run_id = insert_ranking_run_log(
+        settings=settings,
+        limit=args.limit,
+        model=settings.gemini_model,
+        source_collection=settings.mongodb_source_collection,
+        target_collection=settings.mongodb_target_collection,
+    )
 
     t_batch = time.perf_counter()
     n = 0
     upsert_ops = 0
-    for doc in iter_classified_jobs(limit=args.limit):
+    llm1_calls = 0
+    llm2_calls = 0
+    llm3_calls = 0
+    _run_error: str | None = None
+
+    try:
+      for doc in iter_classified_jobs(limit=args.limit):
         n += 1
         t_job = time.perf_counter()
         ctx = build_job_description_context(doc)
@@ -237,21 +231,17 @@ def run() -> None:
 
         if log_prompt_debug:
             logger.info(
-                "---- Job %s | id=%s | title=%s | (prompt-debug: per-step INFO timing suppressed)",
-                job_label,
-                ident,
-                title_short,
+                "---- Job %s | id=%s | title=%s | (prompt-debug mode)",
+                job_label, ident, title_short,
             )
         else:
             occ_preview = _classified_occupation_labels_for_log(doc, settings)
             logger.info(
                 "---- Job %s | id=%s | title=%s | classifier_occupations=%s",
-                job_label,
-                ident,
-                title_short,
-                occ_preview,
+                job_label, ident, title_short, occ_preview,
             )
 
+        # -- Taxonomy --
         t0 = time.perf_counter()
         base_skills = extract_esco_skill_candidates(doc)
         (
@@ -259,12 +249,9 @@ def run() -> None:
             occ_stats,
             occupation_to_skills_nested,
         ) = resolve_occupation_taxonomy_for_classified_job(
-            doc,
-            base_skills,
-            occ_map,
-            csv_skill_labels,
-            occ_skill_relation,
-            skills_uuid_tabiya_map,
+            doc, base_skills,
+            taxonomy.occ_map, taxonomy.csv_skill_labels, taxonomy.occ_skill_relation,
+            taxonomy.skills_uuid_tabiya_map,
             settings=settings,
         )
         n_blocks = len(occupation_to_skills_nested)
@@ -273,11 +260,8 @@ def run() -> None:
             logger.info(
                 "  step | %s | %.3fs | classifier_skill_candidates=%s occupation_blocks=%s "
                 "llm3_menu_skills=%s",
-                STEP_OCCUPATION_TAXONOMY,
-                _elapsed_s(t0),
-                len(base_skills),
-                n_blocks,
-                n_llm3_menu,
+                STEP_OCCUPATION_TAXONOMY, _elapsed_s(t0),
+                len(base_skills), n_blocks, n_llm3_menu,
             )
         if occ_stats is not None:
             lines = occ_stats.format_log_lines()
@@ -286,34 +270,31 @@ def run() -> None:
                 for line in lines[1:]:
                     logger.debug("%s", line)
 
+        # -- LLM 3: occupation-skills relevance --
         llm3_s = 0.0
         if occupation_to_skills_nested and n_llm3_menu > 0:
             if not log_prompt_debug:
                 logger.info(
-                    "  step | %s | starting | menu_skills=%s — large menus can take several minutes",
-                    STEP_LLM3_OCC_SKILLS,
-                    n_llm3_menu,
+                    "  step | %s | starting | menu_skills=%s",
+                    STEP_LLM3_OCC_SKILLS, n_llm3_menu,
                 )
             t0 = time.perf_counter()
             rel_result = run_occupation_skills_relevance_for_job(
-                ctx,
-                occupation_to_skills_nested,
+                ctx, occupation_to_skills_nested,
                 settings=settings,
                 log_llm3_prompt=args.log_llm3_prompt,
                 log_llm3_job_label=ident,
             )
             occupation_to_skills_nested = apply_occupation_skills_listing_relevance(
-                occupation_to_skills_nested,
-                rel_result,
+                occupation_to_skills_nested, rel_result,
             )
             llm3_s = _elapsed_s(t0)
+            llm3_calls += 1
             ran_llm3_occ = True
             if not log_prompt_debug:
                 logger.info(
                     "  step | %s | %.3fs | decisions=%s",
-                    STEP_LLM3_OCC_SKILLS,
-                    llm3_s,
-                    len(rel_result.decisions),
+                    STEP_LLM3_OCC_SKILLS, llm3_s, len(rel_result.decisions),
                 )
         elif not log_prompt_debug:
             logger.info(
@@ -321,27 +302,23 @@ def run() -> None:
                 STEP_LLM3_OCC_SKILLS,
             )
 
+        # -- LLM 1: skill ranker --
         llm1_s = 0.0
         if base_skills:
             t0 = time.perf_counter()
             essential, optional, skill_mapped, skill_raw = run_skill_ranker_for_job(
-                ctx,
-                settings=settings,
-                esco_candidates=base_skills,
-                log_llm1_prompt=args.log_llm1_prompt,
-                log_llm1_job_label=ident,
-                description_by_esco=skill_desc_by_esco if skill_desc_by_esco else None,
+                ctx, settings=settings, esco_candidates=base_skills,
+                log_llm1_prompt=args.log_llm1_prompt, log_llm1_job_label=ident,
+                description_by_esco=taxonomy.skill_desc_by_esco or None,
             )
             llm1_s = _elapsed_s(t0)
+            llm1_calls += 1
             ran_skill = True
             if not log_prompt_debug:
                 logger.info(
                     "  step | %s | %.3fs | menu=%s essential=%s optional=%s",
-                    STEP_LLM1_SKILL_RANKER,
-                    llm1_s,
-                    len(base_skills),
-                    len(essential),
-                    len(optional),
+                    STEP_LLM1_SKILL_RANKER, llm1_s,
+                    len(base_skills), len(essential), len(optional),
                 )
         elif not log_prompt_debug:
             logger.info(
@@ -353,66 +330,54 @@ def run() -> None:
             if occupation_relation_skill_uuids:
                 oe, oo, ou = _occupation_ranker_counts(occupation_relation_skill_uuids, skill_mapped)
                 logger.debug(
-                    "  ranker vs occupation-relation UUIDs | occ_essential=%s occ_optional=%s "
-                    "occ_unranked=%s",
-                    oe,
-                    oo,
-                    ou,
+                    "  ranker vs occupation-relation UUIDs | occ_essential=%s occ_optional=%s occ_unranked=%s",
+                    oe, oo, ou,
                 )
             else:
                 logger.debug(
                     "  ranker | total_essential=%s total_optional=%s (no occupation-relation UUIDs)",
-                    len(essential),
-                    len(optional),
+                    len(essential), len(optional),
                 )
 
+        # -- LLM 2: job attributes --
         t0 = time.perf_counter()
         occ_enrich = build_occupation_prompt_enrichment(
-            doc,
-            settings,
+            doc, settings,
             fallback_listing_title=(ctx.title or "").strip() or "Unknown role",
-            occupations_bridge=occ_bridge,
-            occupations_all_ids=occ_all_ids,
-            label_by_esco=occ_label_by_esco,
-            description_by_esco=occ_desc_by_esco,
+            occupations_bridge=taxonomy.occ_bridge,
+            occupations_all_ids=taxonomy.occ_all_ids,
+            label_by_esco=taxonomy.occ_label_by_esco,
+            description_by_esco=taxonomy.occ_desc_by_esco,
         )
         ja = run_job_attributes_for_job(
-            ctx,
-            settings=settings,
-            occupation=occ_enrich,
-            log_llm2_prompt=args.log_llm2_prompt,
-            log_llm2_job_label=ident,
+            ctx, settings=settings, occupation=occ_enrich,
+            log_llm2_prompt=args.log_llm2_prompt, log_llm2_job_label=ident,
         )
         llm2_s = _elapsed_s(t0)
+        llm2_calls += 1
         ran_ja = True
         if not log_prompt_debug:
             logger.info(
                 "  step | %s | %.3fs | attribute_estimates=%s work_activity_ids=%s",
-                STEP_LLM2_JOB_ATTRIBUTES,
-                llm2_s,
-                len(ja.attribute_estimates),
-                len(ja.work_activity_ids),
+                STEP_LLM2_JOB_ATTRIBUTES, llm2_s,
+                len(ja.attribute_estimates), len(ja.work_activity_ids),
             )
 
+        # -- MongoDB upsert --
         mongo_s = 0.0
         upsert_queued = False
         if ran_skill or ran_ja:
             t0 = time.perf_counter()
             try:
                 op = llm_pipeline_upsert_update_one(
-                    doc,
-                    ctx,
-                    settings=settings,
+                    doc, ctx, settings=settings,
                     ja=ja if ran_ja and ja is not None else None,
                     skill_ranker=(essential, optional, skill_mapped, skill_raw)
-                    if ran_skill and skill_mapped is not None
-                    else None,
-                    occupation_to_skills=occupation_to_skills_nested
-                    if occupation_to_skills_nested
-                    else None,
-                    skills_uuid_tabiya_map=skills_uuid_tabiya_map,
-                    occupations_bridge=occ_bridge or None,
-                    occupations_all_ids=occ_all_ids or None,
+                    if ran_skill and skill_mapped is not None else None,
+                    occupation_to_skills=occupation_to_skills_nested or None,
+                    skills_uuid_tabiya_map=taxonomy.skills_uuid_tabiya_map,
+                    occupations_bridge=taxonomy.occ_bridge or None,
+                    occupations_all_ids=taxonomy.occ_all_ids or None,
                     ranker_candidates=base_skills,
                     classifier_skill_candidates=base_skills,
                 )
@@ -430,22 +395,17 @@ def run() -> None:
             if not log_prompt_debug:
                 logger.info(
                     "  step | %s | %.3fs | queued=%s",
-                    STEP_MONGO_UPSERT,
-                    mongo_s,
-                    "yes" if upsert_queued else "no",
+                    STEP_MONGO_UPSERT, mongo_s, "yes" if upsert_queued else "no",
                 )
 
+        # -- Job summary --
         if not log_prompt_debug:
             logger.info(
                 "  job complete | total_s=%.3fs | llm1=%.3fs llm2=%.3fs llm3=%.3fs mongo=%.3fs",
-                _elapsed_s(t_job),
-                llm1_s,
-                llm2_s,
-                llm3_s,
-                mongo_s,
+                _elapsed_s(t_job), llm1_s, llm2_s, llm3_s, mongo_s,
             )
         else:
-            logger.info("  job complete | total_s=%.3fs (see LLM logs above for prompts)", _elapsed_s(t_job))
+            logger.info("  job complete | total_s=%.3fs (see LLM logs above)", _elapsed_s(t_job))
 
         if args.verbose and not log_prompt_debug:
             parts: list[str] = []
@@ -455,29 +415,48 @@ def run() -> None:
                 parts.append("LLM3: occ-skill relevance")
             if ran_ja and ja is not None:
                 parts.append(
-                    f"LLM2: attrs={len(ja.attribute_estimates)} "
-                    f"w_acts={len(ja.work_activity_ids)}"
+                    f"LLM2: attrs={len(ja.attribute_estimates)} w_acts={len(ja.work_activity_ids)}"
                 )
             if parts:
                 print("  " + " | ".join(parts), file=sys.stderr)
 
-    if pending:
+        if n % 10 == 0:
+            update_ranking_run_progress(
+                run_id,
+                jobs_processed=n, upserts_queued=upsert_ops,
+                llm1_calls=llm1_calls, llm2_calls=llm2_calls, llm3_calls=llm3_calls,
+                settings=settings,
+            )
+
+      if pending:
         bulk_write_llm_upserts(pending, settings=settings)
 
-    if n > 0 and upsert_ops == 0:
+      if n > 0 and upsert_ops == 0:
         logger.warning(
             "No MongoDB upserts ran for %s document(s). Check 'Upsert skipped' messages above "
             "(each document needs job id, fingerprint, or source _id for the target upsert).",
             n,
         )
-
-    batch_s = _elapsed_s(t_batch)
-    logger.info(
-        "Batch complete | documents=%s upserts_queued=%s elapsed_s=%.3f",
-        n,
-        upsert_ops,
-        batch_s,
-    )
+    except Exception as exc:
+        _run_error = f"{type(exc).__name__}: {exc}"
+        logger.exception("Batch failed: %s", _run_error)
+    finally:
+        batch_s = _elapsed_s(t_batch)
+        logger.info(
+            "Batch %s | documents=%s upserts_queued=%s elapsed_s=%.3f",
+            "complete" if _run_error is None else "FAILED",
+            n, upsert_ops, batch_s,
+        )
+        complete_ranking_run_log(
+            run_id,
+            success=_run_error is None,
+            jobs_processed=n, upserts_queued=upsert_ops,
+            llm1_calls=llm1_calls, llm2_calls=llm2_calls, llm3_calls=llm3_calls,
+            elapsed_s=batch_s, error_message=_run_error,
+            settings=settings,
+        )
+        if _run_error is not None:
+            raise SystemExit(1)
 
 
 def main() -> None:
