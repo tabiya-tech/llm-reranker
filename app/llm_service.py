@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import random
+import time
 from dataclasses import asdict, replace
 from typing import Any
 
+import httpx
 from google import genai
 from google.genai import types as genai_types
 
@@ -68,33 +72,104 @@ def _get_genai_client(settings: Settings) -> genai.Client:
     return _genai_client
 
 
+def _reset_genai_client() -> None:
+    """Drop cached client so the next call opens a fresh HTTP pool (after connection drops)."""
+    global _genai_client
+    _genai_client = None
+
+
+def _transient_gemini_network_error(exc: BaseException) -> bool:
+    """True for errors where retrying the same request may succeed (load balancers, idle TCP, Wi‑Fi)."""
+    if isinstance(
+        exc,
+        (
+            httpx.ReadError,
+            httpx.ConnectError,
+            httpx.RemoteProtocolError,
+            httpx.TimeoutException,
+            ConnectionResetError,
+            BrokenPipeError,
+            TimeoutError,
+        ),
+    ):
+        return True
+    msg = str(exc).lower()
+    for needle in (
+        "connection reset",
+        "connection aborted",
+        "broken pipe",
+        "econnreset",
+        "readerror",
+        "temporarily unavailable",
+    ):
+        if needle in msg:
+            return True
+    errno = getattr(exc, "errno", None)
+    if errno == 54:  # macOS ECONNRESET / "connection reset by peer" on some runs
+        return True
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None and cause is not exc:
+        return _transient_gemini_network_error(cause)
+    return False
+
+
+def _gemini_transient_max_attempts() -> int:
+    raw = (os.environ.get("GEMINI_TRANSIENT_MAX_ATTEMPTS") or "5").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 5
+    return max(1, min(n, 12))
+
+
 def _call_gemini_json(prompt: str, *, settings: Settings) -> str:
-    """Single Gemini call via GenAI SDK with JSON MIME response type."""
-    client = _get_genai_client(settings)
+    """Gemini call via GenAI SDK with JSON MIME; retries transient network failures across batches."""
     config = genai_types.GenerateContentConfig(
         temperature=0.2,
         response_mime_type="application/json",
     )
-    try:
-        response = client.models.generate_content(
-            model=settings.gemini_model,
-            contents=prompt,
-            config=config,
-        )
-    except Exception as e:
-        ename = type(e).__name__
-        msg = str(e)
-        if "404" in msg or "not found" in msg.lower():
-            raise RuntimeError(
-                f"Model {settings.gemini_model!r} not found (or project has no access). "
-                f"Check the model id at https://ai.google.dev/gemini-api/docs/models — "
-                f"preview models use a -preview suffix (e.g. gemini-3-pro-preview)."
-            ) from e
-        raise RuntimeError(f"Gemini API error ({ename}): {msg}") from e
-    text = _response_text(response)
-    if not text.strip():
-        raise RuntimeError("Empty response from Gemini")
-    return text
+    max_attempts = _gemini_transient_max_attempts()
+    last_exc: BaseException | None = None
+
+    for attempt in range(max_attempts):
+        client = _get_genai_client(settings)
+        try:
+            response = client.models.generate_content(
+                model=settings.gemini_model,
+                contents=prompt,
+                config=config,
+            )
+        except Exception as e:
+            last_exc = e
+            msg = str(e)
+            if "404" in msg or "not found" in msg.lower():
+                raise RuntimeError(
+                    f"Model {settings.gemini_model!r} not found (or project has no access). "
+                    f"Check the model id at https://ai.google.dev/gemini-api/docs/models — "
+                    f"preview models use a -preview suffix (e.g. gemini-3-pro-preview)."
+                ) from e
+            if attempt + 1 < max_attempts and _transient_gemini_network_error(e):
+                delay = min(60.0, (2**attempt) + random.uniform(0.0, 1.5))
+                logger.warning(
+                    "Gemini transient network error (attempt %s/%s): %s — retry in %.1fs; "
+                    "recreating API client",
+                    attempt + 1,
+                    max_attempts,
+                    e,
+                    delay,
+                )
+                time.sleep(delay)
+                _reset_genai_client()
+                continue
+            ename = type(e).__name__
+            raise RuntimeError(f"Gemini API error ({ename}): {msg}") from e
+
+        text = _response_text(response)
+        if not text.strip():
+            raise RuntimeError("Empty response from Gemini")
+        return text
+
+    raise RuntimeError(f"Gemini API error: exhausted retries ({last_exc})") from last_exc
 
 
 def call_skill_ranker_model(prompt: str, *, settings: Settings | None = None) -> str:

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.config import Settings, get_settings
+from app.config import Settings, get_settings, reranker_enable_llm3_from_env
 from app.database import build_job_description_context
 from app.job_context import JobDescriptionContext
 from app.llm_service import (
@@ -18,7 +19,9 @@ from app.llm_service import (
 from app.prompts import build_occupation_prompt_enrichment
 from app.ranked_job_schema import (
     apply_occupation_skills_listing_relevance,
+    build_llm3_occupation_menu,
     build_ranked_job_document,
+    filter_occupation_skills_nested_by_signal_include,
     occupation_skills_relevance_menu_size,
 )
 from app.schemas import JobAttributesResult
@@ -39,6 +42,7 @@ class TaxonomyContext:
     occ_map: dict[str, frozenset[str]]
     csv_skill_labels: dict[str, str] | None
     occ_skill_relation: dict[str, dict[str, str]] | None
+    occ_skill_signalling: dict[str, dict[str, dict[str, str]]] | None
     occ_bridge: dict[str, str]
     occ_all_ids: frozenset[str]
     skills_uuid_tabiya_map: Any
@@ -58,6 +62,119 @@ class JobResult:
     ran_llm3: bool = False
 
 
+def run_llm1_llm2_phase(
+    ctx: JobDescriptionContext,
+    classified_doc: dict[str, Any],
+    settings: Settings,
+    taxonomy: TaxonomyContext,
+    base_skills: list[EscoSkillCandidate],
+    *,
+    overlap_llm12: bool,
+    log_llm1_prompt: bool = False,
+    log_llm2_prompt: bool = False,
+    log_llm1_job_label: str = "",
+    log_llm2_job_label: str = "",
+) -> tuple[
+    list[str],
+    list[str],
+    MappedEscoSkills | None,
+    str,
+    JobAttributesResult,
+    float,
+    float,
+    bool,
+    bool,
+]:
+    """
+    Run skill ranker (LLM1) and job attributes (LLM2).
+
+    When ``overlap_llm12`` and there are classifier skills and no prompt-debug logging, the
+    two Gemini calls run concurrently (~max latency instead of sum). Beware combined with
+    ``RERANKER_PARALLEL_WORKERS`` — total in-flight requests can be workers×2.
+    """
+    essential: list[str] = []
+    optional: list[str] = []
+    skill_mapped: MappedEscoSkills | None = None
+    skill_raw = ""
+    llm1_s = 0.0
+    llm2_s = 0.0
+    ran_skill = False
+
+    def _llm1() -> tuple[float, list[str], list[str], MappedEscoSkills | None, str]:
+        t0 = time.perf_counter()
+        e, o, sm, sr = run_skill_ranker_for_job(
+            ctx,
+            settings=settings,
+            esco_candidates=base_skills,
+            description_by_esco=taxonomy.skill_desc_by_esco or None,
+            log_llm1_prompt=log_llm1_prompt,
+            log_llm1_job_label=log_llm1_job_label,
+        )
+        return time.perf_counter() - t0, e, o, sm, sr
+
+    def _llm2() -> tuple[float, JobAttributesResult]:
+        t0 = time.perf_counter()
+        occ_enrich = build_occupation_prompt_enrichment(
+            classified_doc,
+            settings,
+            fallback_listing_title=(ctx.title or "").strip() or "Unknown role",
+            occupations_bridge=taxonomy.occ_bridge,
+            occupations_all_ids=taxonomy.occ_all_ids,
+            label_by_esco=taxonomy.occ_label_by_esco,
+            description_by_esco=taxonomy.occ_desc_by_esco,
+        )
+        j = run_job_attributes_for_job(
+            ctx,
+            settings=settings,
+            occupation=occ_enrich,
+            log_llm2_prompt=log_llm2_prompt,
+            log_llm2_job_label=log_llm2_job_label,
+        )
+        return time.perf_counter() - t0, j
+
+    use_overlap = (
+        overlap_llm12
+        and bool(base_skills)
+        and not log_llm1_prompt
+        and not log_llm2_prompt
+    )
+
+    if use_overlap:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(_llm1)
+            f2 = pool.submit(_llm2)
+            llm1_s, essential, optional, skill_mapped, skill_raw = f1.result()
+            llm2_s, ja = f2.result()
+        ran_skill = True
+        return (
+            essential,
+            optional,
+            skill_mapped,
+            skill_raw,
+            ja,
+            llm1_s,
+            llm2_s,
+            True,
+            True,
+        )
+
+    if base_skills:
+        llm1_s, essential, optional, skill_mapped, skill_raw = _llm1()
+        ran_skill = True
+    llm2_s, ja = _llm2()
+    return (
+        essential,
+        optional,
+        skill_mapped,
+        skill_raw,
+        ja,
+        llm1_s,
+        llm2_s,
+        ran_skill,
+        True,
+    )
+
+
 def load_taxonomy_context(settings: Settings | None = None) -> TaxonomyContext:
     """Load all CSV / lookup data once per process. Results are lru_cache'd internally."""
     from utils.occupation_description import load_occupation_labels_and_descriptions_by_esco
@@ -70,7 +187,9 @@ def load_taxonomy_context(settings: Settings | None = None) -> TaxonomyContext:
 
     settings = settings or get_settings()
 
-    occ_map, csv_skill_labels, occ_skill_relation = occupation_skill_taxonomy_for_settings(settings)
+    occ_map, csv_skill_labels, occ_skill_relation, occ_skill_signalling = (
+        occupation_skill_taxonomy_for_settings(settings)
+    )
     occ_bridge, occ_all_ids = load_occupations_lookup(
         str(settings.occupations_csv_path.resolve())
     )
@@ -95,6 +214,7 @@ def load_taxonomy_context(settings: Settings | None = None) -> TaxonomyContext:
         occ_map=occ_map,
         csv_skill_labels=csv_skill_labels,
         occ_skill_relation=occ_skill_relation,
+        occ_skill_signalling=occ_skill_signalling,
         occ_bridge=occ_bridge,
         occ_all_ids=occ_all_ids,
         skills_uuid_tabiya_map=skills_uuid_tabiya_map,
@@ -118,6 +238,7 @@ def process_single_job(
     settings = settings or get_settings()
     t_total = time.perf_counter()
     result = JobResult(ranked_document=None)
+    enable_llm3 = reranker_enable_llm3_from_env()
 
     ctx = build_job_description_context(classified_doc, settings=settings)
 
@@ -134,16 +255,28 @@ def process_single_job(
         taxonomy.csv_skill_labels,
         taxonomy.occ_skill_relation,
         taxonomy.skills_uuid_tabiya_map,
+        occupation_skill_signalling=taxonomy.occ_skill_signalling,
         settings=settings,
     )
     result.timings["taxonomy_s"] = time.perf_counter() - t0
 
+    occupation_to_skills_nested = filter_occupation_skills_nested_by_signal_include(
+        occupation_to_skills_nested,
+        include_tiers=settings.reranker_occupation_skills_signal_include,
+    )
+
+    llm3_prompt_nested: list[dict[str, Any]] = []
+    llm3_prompt_n = 0
     n_llm3_menu = occupation_skills_relevance_menu_size(occupation_to_skills_nested)
-    if occupation_to_skills_nested and n_llm3_menu > 0:
+    if enable_llm3 and n_llm3_menu > 0:
+        llm3_prompt_nested, _, llm3_prompt_n = build_llm3_occupation_menu(
+            occupation_to_skills_nested, base_skills, settings
+        )
+    if enable_llm3 and occupation_to_skills_nested and llm3_prompt_n > 0:
         t0 = time.perf_counter()
         rel_result = run_occupation_skills_relevance_for_job(
             ctx,
-            occupation_to_skills_nested,
+            llm3_prompt_nested,
             settings=settings,
         )
         occupation_to_skills_nested = apply_occupation_skills_listing_relevance(
@@ -153,38 +286,30 @@ def process_single_job(
         result.timings["llm3_s"] = time.perf_counter() - t0
         result.ran_llm3 = True
 
-    essential: list[str] = []
-    optional: list[str] = []
-    skill_mapped: MappedEscoSkills | None = None
-    skill_raw = ""
-    if base_skills:
-        t0 = time.perf_counter()
-        essential, optional, skill_mapped, skill_raw = run_skill_ranker_for_job(
-            ctx,
-            settings=settings,
-            esco_candidates=base_skills,
-            description_by_esco=taxonomy.skill_desc_by_esco or None,
-        )
-        result.timings["llm1_s"] = time.perf_counter() - t0
-        result.ran_llm1 = True
-
-    t0 = time.perf_counter()
-    occ_enrich = build_occupation_prompt_enrichment(
+    (
+        essential,
+        optional,
+        skill_mapped,
+        skill_raw,
+        ja,
+        llm1_s,
+        llm2_s,
+        ran_skill,
+        ran_ja,
+    ) = run_llm1_llm2_phase(
+        ctx,
         classified_doc,
         settings,
-        fallback_listing_title=(ctx.title or "").strip() or "Unknown role",
-        occupations_bridge=taxonomy.occ_bridge,
-        occupations_all_ids=taxonomy.occ_all_ids,
-        label_by_esco=taxonomy.occ_label_by_esco,
-        description_by_esco=taxonomy.occ_desc_by_esco,
+        taxonomy,
+        base_skills,
+        overlap_llm12=settings.reranker_overlap_llm1_llm2,
     )
-    ja: JobAttributesResult | None = run_job_attributes_for_job(
-        ctx,
-        settings=settings,
-        occupation=occ_enrich,
-    )
-    result.timings["llm2_s"] = time.perf_counter() - t0
-    result.ran_llm2 = True
+    if ran_skill:
+        result.timings["llm1_s"] = llm1_s
+        result.ran_llm1 = True
+    if ran_ja:
+        result.timings["llm2_s"] = llm2_s
+        result.ran_llm2 = True
 
     ranked = build_ranked_job_document(
         classified_doc,

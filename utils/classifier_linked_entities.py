@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Any
@@ -107,6 +108,40 @@ class MappedEscoSkills:
     unmatched_optional: list[str] = field(default_factory=list)
 
 
+def _pick_best_linked_entity_by_score(items: list[LinkedEntityCandidate]) -> LinkedEntityCandidate:
+    """Prefer highest ``similarity_score``; ``None`` loses to any float; ties → smallest ``uri``."""
+
+    def score_val(c: LinkedEntityCandidate) -> float:
+        s = c.similarity_score
+        return float("-inf") if s is None else float(s)
+
+    best = max(score_val(c) for c in items)
+    tied = [c for c in items if score_val(c) == best]
+    return min(tied, key=lambda c: c.uri)
+
+
+def _dedupe_linked_entities_by_label(
+    candidates: list[LinkedEntityCandidate],
+    dedupe_types: frozenset[str] | None,
+) -> list[LinkedEntityCandidate]:
+    if not dedupe_types:
+        return candidates
+    groups: dict[tuple[str, str], list[LinkedEntityCandidate]] = defaultdict(list)
+    for c in candidates:
+        if c.entity_type in dedupe_types:
+            groups[(c.entity_type, _norm_label(c.label))].append(c)
+    winners = {k: _pick_best_linked_entity_by_score(v) for k, v in groups.items()}
+    out: list[LinkedEntityCandidate] = []
+    for c in candidates:
+        if c.entity_type not in dedupe_types:
+            out.append(c)
+            continue
+        w = winners[(c.entity_type, _norm_label(c.label))]
+        if c.uri == w.uri:
+            out.append(c)
+    return out
+
+
 def extract_linked_entity_candidates(
     classified_doc: dict[str, Any],
     settings: Settings | None = None,
@@ -115,7 +150,11 @@ def extract_linked_entity_candidates(
     Collect linked taxonomy candidates for configured ``entity_type`` values (e.g. skill, occupation).
 
     Uses ``Settings.classified_linked_entity_types`` and linked_entities with taxonomy ``esco`` only.
-    Dedupes by (entity_type, uri), keeping best similarity_score.
+    Optional ``Settings.classified_linked_entity_min_similarity`` drops low ``similarity_score`` rows;
+    ``classified_linked_entity_min_similarity_strict`` controls whether missing scores are dropped too.
+    Optional ``Settings.classified_linked_entity_label_dedupe_types`` keeps one row per normalized
+    ``label`` (per type), preferring highest score.
+    Dedupes by (entity_type, uri), keeping best similarity_score; then applies label dedupe if configured.
     """
     s = settings or get_settings()
     wanted = frozenset(s.classified_linked_entity_types)
@@ -137,7 +176,16 @@ def extract_linked_entity_candidates(
             if not label or not uri:
                 continue
             raw_score = le.get("similarity_score")
-            score = float(raw_score) if raw_score is not None else None
+            try:
+                score = float(raw_score) if raw_score is not None else None
+            except (TypeError, ValueError):
+                score = None
+            min_sim = s.classified_linked_entity_min_similarity
+            if min_sim is not None:
+                if s.classified_linked_entity_min_similarity_strict and score is None:
+                    continue
+                if score is not None and score < min_sim:
+                    continue
             cu = _esco_concept_uuid_from_uri(uri)
             key = (et, uri)
             prev = by_key.get(key)
@@ -154,7 +202,10 @@ def extract_linked_entity_candidates(
                 prev.similarity_score is None or score > prev.similarity_score
             ):
                 by_key[key] = cand
-    return list(by_key.values())
+    merged = list(by_key.values())
+    return _dedupe_linked_entities_by_label(
+        merged, s.classified_linked_entity_label_dedupe_types
+    )
 
 
 def group_linked_entities_by_type(

@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
+from app.config import get_settings, log_ranker_run_configuration
 from app.logging_config import configure_logging
 from app.pipeline import JobResult, TaxonomyContext, load_taxonomy_context, process_single_job
 
@@ -86,6 +86,14 @@ async def rank_job(body: dict[str, Any]) -> RankResponse:
     if _taxonomy is None:
         raise HTTPException(status_code=503, detail="Service not ready — taxonomy not loaded.")
     settings = get_settings()
+    log_ranker_run_configuration(
+        logger,
+        settings,
+        bulk_write_batch_size=settings.bulk_write_batch_size,
+        cli_limit=0,
+        log_prompt_debug=False,
+        invocation="api",
+    )
     doc = _normalize_mongo_extended_json(body)
     try:
         result: JobResult = process_single_job(

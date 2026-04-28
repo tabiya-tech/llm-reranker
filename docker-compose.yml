@@ -1,0 +1,12 @@
+# Cloud Run Job style: one-shot batch, run and exit.
+# Run from this directory:
+#   docker compose run --rm reranker
+services:
+  reranker:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llm-reranker:latest
+    container_name: llm-reranker
+    env_file: .env

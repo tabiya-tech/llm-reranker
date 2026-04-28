@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import itertools
 import logging
+import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Iterator
 
@@ -167,6 +169,9 @@ def llm_pipeline_upsert_update_one(
         classifier_skill_candidates=classifier_skill_candidates,
     )
     if payload is None:
+        logger.warning(
+            "MongoDB upsert skipped: ranked job payload is empty (job attributes / LLM2 result missing)."
+        )
         return None
     flt = _upsert_filter_for_llm_results(classified_doc, ctx, settings)
     # Drop legacy nested raw-response blobs (schema v2+).
@@ -218,7 +223,7 @@ def bulk_write_llm_upserts(
     )
 
 
-RANKING_LOGS_COLLECTION = "ranking-logs"
+RANKING_LOGS_COLLECTION_DEFAULT = "reranker-logs"
 
 
 def _ranking_logs_collection(
@@ -227,7 +232,8 @@ def _ranking_logs_collection(
 ) -> Collection:
     settings = settings or get_settings()
     db = get_database(client, settings=settings)
-    return db[RANKING_LOGS_COLLECTION]
+    coll_name = (os.getenv("RERANKER_LOGS_COLLECTION") or RANKING_LOGS_COLLECTION_DEFAULT).strip()
+    return db[coll_name]
 
 
 def insert_ranking_run_log(
@@ -346,6 +352,7 @@ def iter_classified_jobs(
     sort_direction: int = -1,
     settings: Settings | None = None,
     client: MongoClient | None = None,
+    query: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """
     Stream documents from the configured source collection, newest first by default.
@@ -354,10 +361,45 @@ def iter_classified_jobs(
     """
     settings = settings or get_settings()
     coll = classified_jobs_collection(settings=settings, db=get_database(client, settings=settings))
-    cur = coll.find({}).sort(sort_field, sort_direction).skip(skip)
+    cur = coll.find(query or {}).sort(sort_field, sort_direction).skip(skip)
     if limit > 0:
         cur = cur.limit(limit)
     yield from cur
+
+
+def iter_classified_jobs_chunks(
+    chunk_size: int,
+    *,
+    limit: int = 0,
+    skip: int = 0,
+    sort_field: str = "_id",
+    sort_direction: int = -1,
+    query: dict[str, Any] | None = None,
+    settings: Settings | None = None,
+    client: MongoClient | None = None,
+) -> Iterator[list[dict[str, Any]]]:
+    """
+    Yield lists of documents from the source collection (same order as ``iter_classified_jobs``).
+
+    Use for parallel batch processing without loading unlimited collections into memory.
+    ``chunk_size`` is typically ``>= RERANKER_PARALLEL_WORKERS``.
+    """
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be >= 1")
+    it = iter_classified_jobs(
+        limit=limit,
+        skip=skip,
+        sort_field=sort_field,
+        sort_direction=sort_direction,
+        settings=settings,
+        client=client,
+        query=query,
+    )
+    while True:
+        chunk = list(itertools.islice(it, chunk_size))
+        if not chunk:
+            break
+        yield chunk
 
 
 def _metadata(doc: dict[str, Any]) -> dict[str, Any]:

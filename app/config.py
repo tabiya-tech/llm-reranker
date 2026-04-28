@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -20,6 +21,8 @@ def repo_root() -> Path:
 
 
 load_dotenv(_repo_root() / ".env", override=False)
+
+_logger = logging.getLogger(__name__)
 
 
 def _normalize_classifier_entity_type_token(raw: str) -> str:
@@ -72,12 +75,163 @@ def _int_env(name: str, default: int, *, min_v: int = 1, max_v: int = 10_000) ->
     return max(min_v, min(n, max_v))
 
 
+def _int_env_min0(name: str, default: int = 0, *, max_v: int = 50_000) -> int:
+    """Non-negative int; negative values fall back to ``default``. Used for optional caps (0 = off)."""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        n = int(str(raw).strip())
+    except ValueError:
+        return default
+    if n < 0:
+        return default
+    return min(n, max_v)
+
+
 def _bool_env(name: str, *, default: bool = False) -> bool:
     """Parse ``1`` / ``true`` / ``yes`` / ``on`` as True (case-insensitive); unset → ``default``."""
     raw = os.environ.get(name)
     if raw is None or not str(raw).strip():
         return default
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _llm3_menu_signal_filter_from_env() -> str:
+    """
+    ``RERANKER_LLM3_MENU_SIGNAL_FILTER``: ``off`` (default), ``high``, ``medium``, or ``low``.
+
+    When not ``off``, the LLM3 menu keeps only occupation–skill rows whose relations CSV
+    ``SIGNALLINGVALUELABEL`` is at least that tier; rows with an empty label are excluded.
+    """
+    raw = (os.environ.get("RERANKER_LLM3_MENU_SIGNAL_FILTER") or "off").strip().lower()
+    if raw in ("high", "medium", "low"):
+        return raw
+    return "off"
+
+
+def _occupation_skills_signal_include_from_env() -> frozenset[str] | None:
+    """
+    ``RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE``: comma-separated subset of
+    ``high``, ``medium``, ``low``, ``unlabelled``.
+
+    Unset / ``all`` / ``*`` → ``None`` (keep every taxonomy skill on stored documents).
+    Applied **after** taxonomy resolution and **independent of** ``RERANKER_ENABLE_LLM3``,
+    so filtering applies even when LLM3 is off.
+    """
+    raw = (os.environ.get("RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE") or "").strip().lower()
+    if not raw or raw in ("all", "*", "any"):
+        return None
+    allowed = frozenset({"high", "medium", "low", "unlabelled"})
+    parts = [x.strip() for x in raw.split(",") if x.strip()]
+    chosen = frozenset(p for p in parts if p in allowed)
+    unknown = [p for p in parts if p not in allowed]
+    if unknown:
+        _logger.warning(
+            "RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE: ignoring unknown tokens %s "
+            "(allowed: high, medium, low, unlabelled)",
+            unknown,
+        )
+    return chosen if chosen else None
+
+
+def _classified_linked_entity_min_similarity_from_env() -> float | None:
+    """
+    ``CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY`` (0.0–1.0): drop classifier ``linked_entities``
+    rows whose ``similarity_score`` is below this value.
+
+    Aliases: ``CLASSIFIER_LINKED_ENTITY_MIN_SIMILARITY``. Unset → no threshold (keep all scored/unscored
+    subject to URI dedupe). With ``CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY_STRICT=1``, rows with no
+    score are excluded when a minimum is set.
+    """
+    raw = (
+        os.environ.get("CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY")
+        or os.environ.get("CLASSIFIER_LINKED_ENTITY_MIN_SIMILARITY")
+        or ""
+    ).strip()
+    if not raw:
+        return None
+    try:
+        v = float(raw)
+    except ValueError:
+        _logger.warning(
+            "CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY: invalid %r, ignoring", raw
+        )
+        return None
+    if v < 0.0 or v > 1.0:
+        _logger.warning(
+            "CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY: %s not in [0,1], ignoring", v
+        )
+        return None
+    return v
+
+
+def _classified_linked_entity_label_dedupe_types_from_env() -> frozenset[str] | None:
+    """
+    ``CLASSIFIED_LINKED_ENTITY_LABEL_DEDUPE_TYPES``: comma-separated ``entity_type`` values for which
+    keep a single linked hit per **normalized label** (highest ``similarity_score``; ties → smallest ``uri``).
+
+    Tokens: ``skill``, ``occupation`` (plural forms normalized like ``CLASSIFIED_LINKED_ENTITY_TYPES``).
+    Unset / empty → no label dedupe (URI dedupe only). Unrelated to min-similarity filtering.
+    """
+    raw = (os.environ.get("CLASSIFIED_LINKED_ENTITY_LABEL_DEDUPE_TYPES") or "").strip()
+    if not raw:
+        return None
+    allowed = frozenset({"skill", "occupation"})
+    seen: set[str] = set()
+    chosen: list[str] = []
+    for part in raw.split(","):
+        p = part.strip()
+        if not p:
+            continue
+        n = _normalize_classifier_entity_type_token(p)
+        if n not in allowed:
+            _logger.warning(
+                "CLASSIFIED_LINKED_ENTITY_LABEL_DEDUPE_TYPES: unknown %r "
+                "(allowed: skill, occupation)",
+                p,
+            )
+            continue
+        if n not in seen:
+            seen.add(n)
+            chosen.append(n)
+    return frozenset(chosen) if chosen else None
+
+
+def _occupation_skill_relation_occupation_types_from_env() -> frozenset[str] | None:
+    """
+    ``OCCUPATION_SKILL_RELATION_OCCUPATION_TYPES``: comma-separated ``OCCUPATIONTYPE`` cell values
+    (case-insensitive), e.g. ``escooccupation`` or ``escooccupation,localoccupation``.
+
+    - Unset / empty → ``None`` (load all relation rows — backward compatible).
+    - ``*``, ``all``, or ``any`` → ``None`` (all types).
+    """
+    raw = (os.environ.get("OCCUPATION_SKILL_RELATION_OCCUPATION_TYPES") or "").strip()
+    if not raw:
+        return None
+    low = raw.lower()
+    if low in ("*", "all", "any"):
+        return None
+    parts = frozenset(x.strip().lower() for x in raw.split(",") if x.strip())
+    return parts or None
+
+
+def _occupation_relation_lookup_from_env() -> tuple[str, bool]:
+    """
+    ``OCCUPATION_RELATION_LOOKUP``: ``tabiya_bridge`` (default / alias ``local``) or
+    ``esco_uuid_bridge`` (alias ``esco``). Unknown values fall back to ``tabiya_bridge``.
+
+    ``OCCUPATION_RELATION_ESCO_FALLBACK`` (default ``1``): when ``esco_uuid_bridge`` finds no
+    bridge hit from ESCO keys alone, fall back to the full ``tabiya_bridge`` key scan.
+    """
+    raw = (os.environ.get("OCCUPATION_RELATION_LOOKUP") or "tabiya_bridge").strip().lower()
+    if raw in ("local", "tabiya", "tabiya_bridge"):
+        mode = "tabiya_bridge"
+    elif raw in ("esco", "esco_uuid", "esco_uuid_bridge", "esco_bridge"):
+        mode = "esco_uuid_bridge"
+    else:
+        mode = "tabiya_bridge"
+    return mode, _bool_env("OCCUPATION_RELATION_ESCO_FALLBACK", default=True)
 
 
 def _unique_key_order(*groups: tuple[str, ...]) -> tuple[str, ...]:
@@ -192,6 +346,49 @@ def _resolve_skills_csv_path(
     return under_root if under_root.is_file() else under_res
 
 
+def _resolve_skill_hierarchy_csv_path(
+    repo_root: Path,
+    resources_dir: Path,
+    raw: str | None,
+) -> Path:
+    """
+    Path to ``skill_hierarchy.csv`` used for skill -> skill-group derivation.
+
+    Resolution order:
+      1) explicit env path (absolute or relative)
+      2) ``resources/skill_hierarchy.csv``
+      3) sibling repo fallback:
+         ``../shp-matching-algorithm/backend/resources/skill_taxonomy/skill_hierarchy.csv``
+    """
+    default_name = "skill_hierarchy.csv"
+    if raw is not None and str(raw).strip():
+        s = str(raw).strip()
+        p = Path(s)
+        if p.is_absolute():
+            return p.resolve()
+        under_res = (resources_dir / p).resolve()
+        if under_res.is_file():
+            return under_res
+        under_root = (repo_root / p).resolve()
+        return under_root if under_root.is_file() else under_res
+
+    under_res = (resources_dir / default_name).resolve()
+    if under_res.is_file():
+        return under_res
+
+    sibling = (
+        repo_root.parent
+        / "shp-matching-algorithm"
+        / "backend"
+        / "resources"
+        / "skill_taxonomy"
+        / "skill_hierarchy.csv"
+    ).resolve()
+    if sibling.is_file():
+        return sibling
+    return under_res
+
+
 def _resources_dir(repo_root: Path) -> Path:
     """
     Versioned prompts and schema live under ``resources/`` at the repo root.
@@ -249,6 +446,8 @@ class Settings:
 
     # ``skills.csv``: Tabiya skill ``ID`` / ESCO uuid → ``PREFERREDLABEL`` (see ``SKILLS_CSV``).
     skills_csv_path: Path
+    # Hierarchy CSV for skill->skillgroup mapping (see ``SKILL_HIERARCHY_CSV``).
+    skill_hierarchy_csv_path: Path
 
     # If True, LLM1 skill menu includes descriptions from ``SKILLS_CSV_DESCRIPTION_COLUMN`` (see ``SKILLS_CSV_INCLUDE_DESCRIPTIONS``).
     skills_csv_include_descriptions: bool
@@ -288,8 +487,37 @@ class Settings:
     # Target collection: flush Mongo bulk_write after this many upserts (see ``BULK_WRITE_BATCH_SIZE``).
     bulk_write_batch_size: int
 
+    # LLM3 occupation-skills menu size / latency (``RERANKER_LLM3_MAX_MENU_SKILLS``,
+    # ``RERANKER_LLM3_CLASSIFIER_INTERSECT``, ``RERANKER_LLM3_MENU_SIGNAL_FILTER``).
+    # When capped, CSV signalling columns prioritize rows; signal filter keeps tiered labels only.
+    # Stored taxonomy (``RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE``): independent combos of
+    # high / medium / low / unlabelled; ESCO vs local relations use
+    # ``OCCUPATION_SKILL_RELATION_OCCUPATION_TYPES``.
+    reranker_llm3_max_menu_skills: int
+    reranker_llm3_classifier_intersect: bool
+    reranker_llm3_menu_signal_filter: str
+    reranker_occupation_skills_signal_include: frozenset[str] | None
+
+    # How classifier occupation entities map to ``occupation_to_skill_relations`` keys (Tabiya ids).
+    # ``tabiya_bridge``: first match from all bridge keys (preferred id, URI, UUID history, …).
+    # ``esco_uuid_bridge``: try ESCO uuid from URI / originUUID first, then optional full scan.
+    occupation_relation_lookup: str
+    occupation_relation_esco_fallback: bool
+
+    # ``occupation_to_skill_relations.csv`` rows: restrict by ``OCCUPATIONTYPE`` (``None`` = all rows).
+    occupation_skill_relation_occupation_types: frozenset[str] | None
+
+    # Batch CLI: process up to N jobs concurrently (``main.py --limit`` required; ``1`` = sequential).
+    reranker_parallel_workers: int
+    # Per-job overlap of LLM1 and LLM2 Gemini calls (~max latency not sum; watch rate limits with parallel workers).
+    reranker_overlap_llm1_llm2: bool
+
     # Classifier ``classification.entities[].linked_entities`` with taxonomy ``esco`` (fixed).
     classified_linked_entity_types: tuple[str, ...]
+    # Optional filter on ``linked_entities.similarity_score`` (applies to skills + occupations).
+    classified_linked_entity_min_similarity: float | None
+    classified_linked_entity_min_similarity_strict: bool
+    classified_linked_entity_label_dedupe_types: frozenset[str] | None
 
     @staticmethod
     def from_env() -> Settings:
@@ -334,8 +562,14 @@ class Settings:
         occ_desc_col = (os.environ.get("OCCUPATIONS_CSV_DESCRIPTION_COLUMN") or "").strip()
         skills_csv_raw = os.environ.get("SKILLS_CSV")
         skills_csv_path = _resolve_skills_csv_path(root, resources, skills_csv_raw)
+        skill_hierarchy_raw = os.environ.get("SKILL_HIERARCHY_CSV")
+        skill_hierarchy_csv_path = _resolve_skill_hierarchy_csv_path(
+            root, resources, skill_hierarchy_raw
+        )
         skills_include_desc = _bool_env("SKILLS_CSV_INCLUDE_DESCRIPTIONS", default=False)
         skills_desc_col = (os.environ.get("SKILLS_CSV_DESCRIPTION_COLUMN") or "").strip()
+        occ_rel_lookup, occ_rel_esco_fb = _occupation_relation_lookup_from_env()
+        occ_skill_relation_types = _occupation_skill_relation_occupation_types_from_env()
         return Settings(
             mongodb_uri=os.environ.get("MONGODB_URI", "mongodb://localhost:27017"),
             mongodb_database=os.environ.get("MONGODB_DATABASE", "ZambiaJobs"),
@@ -352,6 +586,7 @@ class Settings:
             occupations_csv_include_descriptions=occ_inc_desc,
             occupations_csv_description_column=occ_desc_col,
             skills_csv_path=skills_csv_path,
+            skill_hierarchy_csv_path=skill_hierarchy_csv_path,
             skills_csv_include_descriptions=skills_include_desc,
             skills_csv_description_column=skills_desc_col,
             mongo_field_job_id=os.environ.get("CLASSIFIED_MONGO_FIELD_JOB_ID", "job_id"),
@@ -418,9 +653,31 @@ class Settings:
             vertex_model=os.environ.get("VERTEX_MODEL", "gemini-2.5-flash"),
             google_application_credentials_resolved=creds_resolved,
             bulk_write_batch_size=_int_env("BULK_WRITE_BATCH_SIZE", 100),
+            reranker_llm3_max_menu_skills=_int_env_min0(
+                "RERANKER_LLM3_MAX_MENU_SKILLS", 0
+            ),
+            reranker_llm3_classifier_intersect=_bool_env(
+                "RERANKER_LLM3_CLASSIFIER_INTERSECT", default=False
+            ),
+            reranker_llm3_menu_signal_filter=_llm3_menu_signal_filter_from_env(),
+            reranker_occupation_skills_signal_include=_occupation_skills_signal_include_from_env(),
+            occupation_relation_lookup=occ_rel_lookup,
+            occupation_relation_esco_fallback=occ_rel_esco_fb,
+            occupation_skill_relation_occupation_types=occ_skill_relation_types,
+            reranker_parallel_workers=_int_env(
+                "RERANKER_PARALLEL_WORKERS", 1, min_v=1, max_v=32
+            ),
+            reranker_overlap_llm1_llm2=_bool_env(
+                "RERANKER_OVERLAP_LLM1_LLM2", default=False
+            ),
             classified_linked_entity_types=_entity_types_tuple(
                 os.environ.get("CLASSIFIED_LINKED_ENTITY_TYPES")
             ),
+            classified_linked_entity_min_similarity=_classified_linked_entity_min_similarity_from_env(),
+            classified_linked_entity_min_similarity_strict=_bool_env(
+                "CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY_STRICT", default=False
+            ),
+            classified_linked_entity_label_dedupe_types=_classified_linked_entity_label_dedupe_types_from_env(),
         )
 
 
@@ -460,5 +717,100 @@ def vertex_project_unset_message() -> str:
     )
 
 
+def reranker_enable_llm3_from_env() -> bool:
+    """``RERANKER_ENABLE_LLM3`` (default on): run LLM3 occupation–skills relevance when the menu is non-empty."""
+    return _bool_env("RERANKER_ENABLE_LLM3", default=True)
+
+
+def log_ranker_run_configuration(
+    log: logging.Logger,
+    settings: Settings,
+    *,
+    bulk_write_batch_size: int,
+    cli_limit: int,
+    log_prompt_debug: bool,
+    invocation: str = "batch",
+) -> None:
+    """
+    Log effective ranking-related env / settings (taxonomy filtering, LLM3 toggles, batch parallelism).
+    """
+    enable_llm3 = reranker_enable_llm3_from_env()
+    occ_types = (
+        "all"
+        if settings.occupation_skill_relation_occupation_types is None
+        else ",".join(sorted(settings.occupation_skill_relation_occupation_types))
+    )
+    sig_inc = (
+        "all"
+        if settings.reranker_occupation_skills_signal_include is None
+        else ",".join(sorted(settings.reranker_occupation_skills_signal_include))
+    )
+    workers = settings.reranker_parallel_workers
+    if invocation != "batch":
+        parallel_desc = "n/a"
+    elif workers > 1 and log_prompt_debug:
+        parallel_desc = f"no(prompt-debug, workers={workers})"
+    elif workers > 1:
+        parallel_desc = f"yes(workers={workers})"
+    else:
+        parallel_desc = f"no(workers={workers})"
+
+    wa_run = _bool_env("RERANKER_RUN_WA_ENRICHMENT", default=True)
+    wa_fail = _bool_env("RERANKER_FAIL_ON_WA_ENRICHMENT_ERROR", default=False)
+    sync_is_active = _bool_env("RERANKER_SYNC_IS_ACTIVE_FROM_CLOSING_DATE", default=True)
+    key_tail = settings.gemini_api_key[-4:] if settings.gemini_api_key else "?"
+    target_country = (os.environ.get("TARGET_COUNTRY") or "zambia").strip().lower()
+
+    log.info(
+        "Ranker run configuration | invocation=%s | TARGET_COUNTRY=%s | GEMINI_MODEL=%s | GEMINI_API_KEY=...%s | "
+        "MONGODB_SOURCE_COLLECTION=%s | MONGODB_TARGET_COLLECTION=%s | "
+        "RERANKER_ENABLE_LLM3=%s | RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE=%s | "
+        "RERANKER_LLM3_MAX_MENU_SKILLS=%s | RERANKER_LLM3_MENU_SIGNAL_FILTER=%s | "
+        "RERANKER_LLM3_CLASSIFIER_INTERSECT=%s | OCCUPATION_SKILL_RELATION_OCCUPATION_TYPES=%s | "
+        "OCCUPATION_RELATION_LOOKUP=%s | OCCUPATION_RELATION_ESCO_FALLBACK=%s | "
+        "CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY=%s | CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY_STRICT=%s | "
+        "CLASSIFIED_LINKED_ENTITY_LABEL_DEDUPE_TYPES=%s | "
+        "RERANKER_PARALLEL_WORKERS=%s | parallel_batch=%s | RERANKER_OVERLAP_LLM1_LLM2=%s | BULK_WRITE_BATCH_SIZE=%s | "
+        "RERANKER_RUN_WA_ENRICHMENT=%s | RERANKER_FAIL_ON_WA_ENRICHMENT_ERROR=%s | "
+        "RERANKER_SYNC_IS_ACTIVE_FROM_CLOSING_DATE=%s | "
+        "cli_limit=%s | log_prompt_debug=%s",
+        invocation,
+        target_country,
+        settings.gemini_model,
+        key_tail,
+        settings.mongodb_source_collection,
+        settings.mongodb_target_collection,
+        int(enable_llm3),
+        sig_inc,
+        settings.reranker_llm3_max_menu_skills,
+        settings.reranker_llm3_menu_signal_filter,
+        int(settings.reranker_llm3_classifier_intersect),
+        occ_types,
+        settings.occupation_relation_lookup,
+        int(settings.occupation_relation_esco_fallback),
+        (
+            "off"
+            if settings.classified_linked_entity_min_similarity is None
+            else str(settings.classified_linked_entity_min_similarity)
+        ),
+        int(settings.classified_linked_entity_min_similarity_strict),
+        (
+            "off"
+            if not settings.classified_linked_entity_label_dedupe_types
+            else ",".join(sorted(settings.classified_linked_entity_label_dedupe_types))
+        ),
+        workers,
+        parallel_desc,
+        int(settings.reranker_overlap_llm1_llm2),
+        bulk_write_batch_size,
+        int(wa_run),
+        int(wa_fail),
+        int(sync_is_active),
+        cli_limit if invocation == "batch" else 0,
+        int(log_prompt_debug),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings.from_env()

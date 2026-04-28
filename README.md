@@ -71,6 +71,12 @@ python main.py
 | `--log-llm3-prompt` | Log occupation–skills relevance prompt |
 | `--bulk-batch-size N` | Flush MongoDB writes every N upserts |
 
+## Origin UUIDs, work activities, and job status
+
+1. **`skill_groups_origin_uuids`** — After ranking, skill groups are derived from the skill hierarchy so each ranked job can carry the **origin UUIDs** of the relevant skill groups (see `.env` / `resources/` for the hierarchy CSV).
+2. **`onet_work_activities`** — Model output includes work-activity context; after a successful batch, optional enrichment can fill or adjust **ONET-style work activities** (importance/level) using the occupation taxonomy reference JSON, when enabled in `.env` (`RERANKER_RUN_WA_ENRICHMENT` and related variables in `.env.example`).
+3. **`is_active` and closing dates** — **`is_active`** can be synced from **`classifier_metadata.closing_date`** (open vs closed relative to today) after a successful batch when enabled in `.env`, or by running `python utils/update_is_active_from_closing_date.py` manually. No documents are deleted; only the flag is updated.
+
 ## Deployment
 
 | Mode | Entrypoint | GCP |

@@ -76,7 +76,9 @@ def build_occupation_prompt_enrichment(
     esco_l = esco_raw.lower() if esco_raw else None
     tid: str | None = None
     if occupations_bridge is not None and occupations_all_ids is not None:
-        tid = tabiya_occupation_id_for_candidate(c, occupations_bridge, occupations_all_ids)
+        tid = tabiya_occupation_id_for_candidate(
+            c, occupations_bridge, occupations_all_ids, settings=settings
+        )
 
     csv_label = label_by_esco.get(esco_l, "") if esco_l else ""
     if not csv_label.strip():
