@@ -20,7 +20,9 @@ def repo_root() -> Path:
     return _repo_root()
 
 
-load_dotenv(_repo_root() / ".env", override=False)
+# Repo `.env` should win over variables already exported in the shell (override=True),
+# so edits like MONGODB_TARGET_COLLECTION apply when you run main.py from this project.
+load_dotenv(_repo_root() / ".env", override=True)
 
 _logger = logging.getLogger(__name__)
 
@@ -214,6 +216,26 @@ def _occupation_skill_relation_occupation_types_from_env() -> frozenset[str] | N
         return None
     parts = frozenset(x.strip().lower() for x in raw.split(",") if x.strip())
     return parts or None
+
+
+def _target_country_slug_from_env() -> str:
+    """``TARGET_COUNTRY``: ``zambia`` | ``kenya`` (batch state key). Invalid → ``zambia``."""
+    t = (os.environ.get("TARGET_COUNTRY") or "zambia").strip().lower()
+    return t if t in ("zambia", "kenya") else "zambia"
+
+
+# Canonical country name for prompts — keyed by ``TARGET_COUNTRY`` slug.
+_COUNTRY_NAME_BY_SLUG: dict[str, str] = {
+    "zambia": "Zambia",
+    "kenya": "Kenya",
+}
+
+
+def _country_name_from_slug(slug: str) -> str:
+    """Human-readable country name derived from ``TARGET_COUNTRY`` only."""
+    if slug in _COUNTRY_NAME_BY_SLUG:
+        return _COUNTRY_NAME_BY_SLUG[slug]
+    return slug.replace("_", " ").title()
 
 
 def _occupation_relation_lookup_from_env() -> tuple[str, bool]:
@@ -420,7 +442,7 @@ def _gcp_project_from_default_credentials() -> str | None:
 
 @dataclass(frozen=True)
 class Settings:
-    """Runtime configuration: Mongo connection and ClassifiedJobs field / key names."""
+    """Runtime configuration: Mongo connection and classified job field / key names."""
 
     mongodb_uri: str
     mongodb_database: str
@@ -519,6 +541,10 @@ class Settings:
     classified_linked_entity_min_similarity_strict: bool
     classified_linked_entity_label_dedupe_types: frozenset[str] | None
 
+    # ``TARGET_COUNTRY`` slug and resolved country name for prompts / opening lines.
+    target_country: str
+    country_name: str
+
     @staticmethod
     def from_env() -> Settings:
         root = _repo_root()
@@ -540,9 +566,12 @@ class Settings:
         source_coll = (
             os.environ.get("MONGODB_SOURCE_COLLECTION")
             or os.environ.get("MONGODB_CLASSIFIED_COLLECTION")
-            or "ClassifiedJobs"
+            or "classified_jobs"
         ).strip()
-        target_coll = (os.environ.get("MONGODB_TARGET_COLLECTION") or source_coll).strip()
+        # Default target must not mirror source — writing ranked output back into classified_jobs is wrong.
+        target_coll = (
+            os.environ.get("MONGODB_TARGET_COLLECTION") or "ranked_jobs"
+        ).strip()
         ja_schema_raw = os.environ.get("JOB_ATTRIBUTES_SCHEMA") or os.environ.get(
             "JOB_ATTRIBUTES_SCHEMA_FILE"
         )
@@ -570,6 +599,8 @@ class Settings:
         skills_desc_col = (os.environ.get("SKILLS_CSV_DESCRIPTION_COLUMN") or "").strip()
         occ_rel_lookup, occ_rel_esco_fb = _occupation_relation_lookup_from_env()
         occ_skill_relation_types = _occupation_skill_relation_occupation_types_from_env()
+        tc = _target_country_slug_from_env()
+        c_name = _country_name_from_slug(tc)
         return Settings(
             mongodb_uri=os.environ.get("MONGODB_URI", "mongodb://localhost:27017"),
             mongodb_database=os.environ.get("MONGODB_DATABASE", "ZambiaJobs"),
@@ -678,6 +709,8 @@ class Settings:
                 "CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY_STRICT", default=False
             ),
             classified_linked_entity_label_dedupe_types=_classified_linked_entity_label_dedupe_types_from_env(),
+            target_country=tc,
+            country_name=c_name,
         )
 
 
@@ -759,7 +792,7 @@ def log_ranker_run_configuration(
     wa_fail = _bool_env("RERANKER_FAIL_ON_WA_ENRICHMENT_ERROR", default=False)
     sync_is_active = _bool_env("RERANKER_SYNC_IS_ACTIVE_FROM_CLOSING_DATE", default=True)
     key_tail = settings.gemini_api_key[-4:] if settings.gemini_api_key else "?"
-    target_country = (os.environ.get("TARGET_COUNTRY") or "zambia").strip().lower()
+    loc = f"{settings.target_country} ({settings.country_name})"
 
     log.info(
         "Ranker run configuration | invocation=%s | TARGET_COUNTRY=%s | GEMINI_MODEL=%s | GEMINI_API_KEY=...%s | "
@@ -775,7 +808,7 @@ def log_ranker_run_configuration(
         "RERANKER_SYNC_IS_ACTIVE_FROM_CLOSING_DATE=%s | "
         "cli_limit=%s | log_prompt_debug=%s",
         invocation,
-        target_country,
+        loc,
         settings.gemini_model,
         key_tail,
         settings.mongodb_source_collection,

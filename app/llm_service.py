@@ -244,7 +244,7 @@ def build_job_attributes_prompt_for_job(
     jd = build_job_attributes_jd_text(ctx)
     meta = build_job_attributes_metadata_block(ctx)
     return build_job_attributes_prompt(
-        opening_line=llm2_opening_line_from_context(ctx),
+        opening_line=llm2_opening_line_from_context(ctx, settings=s),
         occupation=occupation,
         schema=schema,
         onet_work_activities=onet,
@@ -362,8 +362,8 @@ def run_skill_ranker_for_job(
         if esco_candidates is not None
         else extract_esco_skill_candidates(classified_doc)
     )
-    full_details = full_details_from_context(ctx)
     s = settings or get_settings()
+    full_details = full_details_from_context(ctx)
     skill_dicts = skills_to_prompt_dicts(
         candidates, description_by_esco=description_by_esco
     )

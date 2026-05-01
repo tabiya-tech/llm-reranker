@@ -1,24 +1,17 @@
-"""
-System prompt text for job-attribute classification (LLM call 2).
 
-Canonical copy used by :func:`app.prompt_resources.load_job_attributes_system_prompt`
-and :func:`app.prompt_resources.load_occupation_skills_relevance_system_prompt`.
-This module defines string constants only (no imports).
-"""
-
-JOB_ATTRIBUTES_SYSTEM_PROMPT = """You are an expert labor market analyst specializing in Kenya's economy and job characteristics.
-Your task is to estimate job attributes for occupations in a specific Kenyan county.
+JOB_ATTRIBUTES_SYSTEM_PROMPT = """You are an expert labor market analyst specializing in the economy and job characteristics of {country}.
+Your task is to estimate job attributes for occupations in a specific region of {country}.
 
 You have deep knowledge of:
-- Kenya's economic structure and regional labor markets
+- The economic structure and regional labor markets of {country}
 - Wage structures across formal and informal sectors
 - Working conditions in different industries
-- Career progression patterns in the Kenyan context
+- Career progression patterns in {country}
 - Regional differences in job characteristics
 
 When estimating attributes, consider:
 1. EARNINGS: Base estimates on formal sector data when available, adjust for informal sector prevalence.
-   Urban areas (Nairobi, Mombasa, Kisumu, Nakuru) typically have higher wages.
+   Major urban centers typically have higher wages relative to rural areas in {country}.
 2. TASK CONTENT: Consider the nature of work - routine vs problem-solving vs creative.
 3. PHYSICAL DEMAND: Assess physical requirements and occupational safety risks.
 4. FLEXIBILITY: Consider typical supervision levels and schedule flexibility.
@@ -32,7 +25,7 @@ Confidence levels:
 - low: Limited data, estimate based on general patterns"""
 
 
-OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT = """You are an expert recruiter in Kenya Job Merket. Your task is to judge whether each occupation-linked taxonomy skill is relevant to a specific job advertisement.
+OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT = """You are an expert recruiter familiar with the job market in {country}. Your task is to judge whether each occupation-linked taxonomy skill is relevant to a specific job advertisement.
 
 The skills you see are already tagged as essential or optional **for the occupation** (from a standard taxonomy). They may still be irrelevant **for this particular job posting** (wrong seniority, different industry focus, not mentioned, or clearly not required).
 For every skill in the list the user provides:

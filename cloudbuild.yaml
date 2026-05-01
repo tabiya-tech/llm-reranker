@@ -1,0 +1,17 @@
+# From repo root:
+#   gcloud builds submit --config=llm-reranker/cloudbuild.yaml .
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - --platform=linux/amd64
+      - -t
+      - us-central1-docker.pkg.dev/horizon-dev-481316/job-pipeline/llm-reranker:latest
+      - llm-reranker
+
+images:
+  - 'us-central1-docker.pkg.dev/horizon-dev-481316/job-pipeline/llm-reranker:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

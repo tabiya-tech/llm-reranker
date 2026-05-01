@@ -9,7 +9,7 @@ from typing import Any
 @dataclass(frozen=True)
 class JobDescriptionContext:
     """
-    Fields needed for downstream steps, sourced from ClassifiedJobs.
+    Fields needed for downstream steps, sourced from classified job documents.
 
     Field names used to populate this object come from ``Settings`` (environment variables).
 

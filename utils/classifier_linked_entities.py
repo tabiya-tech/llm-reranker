@@ -287,7 +287,7 @@ def full_details_from_context(ctx: JobDescriptionContext) -> str:
     if ctx.city:
         parts.append(f"City: {ctx.city}")
     if ctx.county:
-        parts.append(f"County: {ctx.county}")
+        parts.append(f"Region: {ctx.county}")
     if ctx.salary:
         parts.append(f"Salary: {ctx.salary}")
     if ctx.raw_job_description:

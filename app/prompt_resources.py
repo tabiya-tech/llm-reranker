@@ -17,6 +17,19 @@ from app.config import Settings, get_settings
 _SKILLS_REL = Path("Skills_reranker_prompts.md")
 _PREF_PROMPTS_REL = Path("prompts.py")
 
+
+def country_prompt_format_kwargs(settings: Settings) -> dict[str, str]:
+    """``{country}`` for ``resources/prompts.py`` (from :attr:`Settings.country_name`)."""
+    return {"country": settings.country_name}
+
+
+def format_country_prompt_template(body: str, settings: Settings) -> str:
+    """Substitute ``{country}`` from ``settings``."""
+    if "{" not in body:
+        return body
+    return body.format(**country_prompt_format_kwargs(settings))
+
+
 # Verbatim fallback if files under ``resources/`` are absent.
 _FALLBACK_SKILLS_TEMPLATE = """You are an expert technical recruiter with deep knowledge of the job market. Your task is to analyze a job opportunity and categorize relevant skills from a provided list into specific buckets.
 
@@ -45,19 +58,19 @@ _FALLBACK_SKILLS_TEMPLATE = """You are an expert technical recruiter with deep k
   "optional_skills": ["...", "...", "..."]
 }}"""
 
-_FALLBACK_JOB_ATTRIBUTES_SYSTEM = """You are an expert labor market analyst specializing in Kenya's economy and job characteristics.
-Your task is to estimate job attributes for occupations in a specific Kenyan county.
+_FALLBACK_JOB_ATTRIBUTES_SYSTEM = """You are an expert labor market analyst specializing in the economy and job characteristics of {country}.
+Your task is to estimate job attributes for occupations in a specific region of {country}.
 
 You have deep knowledge of:
-- Kenya's economic structure and regional labor markets
+- The economic structure and regional labor markets of {country}
 - Wage structures across formal and informal sectors
 - Working conditions in different industries
-- Career progression patterns in the Kenyan context
+- Career progression patterns in {country}
 - Regional differences in job characteristics
 
 When estimating attributes, consider:
 1. EARNINGS: Base estimates on formal sector data when available, adjust for informal sector prevalence.
-   Urban areas (Nairobi, Mombasa, Kisumu, Nakuru) typically have higher wages.
+   Major urban centers typically have higher wages relative to rural areas in {country}.
 2. TASK CONTENT: Consider the nature of work - routine vs problem-solving vs creative.
 3. PHYSICAL DEMAND: Assess physical requirements and occupational safety risks.
 4. FLEXIBILITY: Consider typical supervision levels and schedule flexibility.
@@ -70,7 +83,7 @@ Confidence levels:
 - medium: Reasonable inference based on similar occupations
 - low: Limited data, estimate based on general patterns"""
 
-_FALLBACK_OCCUPATION_SKILLS_RELEVANCE_SYSTEM = """You are an expert recruiter. Your task is to judge whether each occupation-linked taxonomy skill is relevant to a specific job advertisement.
+_FALLBACK_OCCUPATION_SKILLS_RELEVANCE_SYSTEM = """You are an expert recruiter familiar with the job market in {country}. Your task is to judge whether each occupation-linked taxonomy skill is relevant to a specific job advertisement.
 
 The skills you see are already tagged as essential or optional **for the occupation** (from a standard taxonomy). They may still be irrelevant **for this particular job posting** (wrong seniority, different industry focus, not mentioned, or clearly not required).
 
@@ -79,6 +92,7 @@ For every skill in the list the user provides:
 - Set is_relevant to false if the skill is not a reasonable requirement or context for this posting.
 
 Rules:
+- Prioritize domain-specific, technical, or role-specific skills over general soft skills.
 - Use only the skills listed; do not invent skill_ids.
 - Copy skill_id and tabiya_occupation_id exactly as given (strings).
 - Output nothing but the JSON object specified in the user message: a decisions array only, no summary or reasons."""
@@ -121,11 +135,11 @@ def load_skills_ranker_prompt_template(settings: Settings | None = None) -> str:
 
 
 def load_job_attributes_system_prompt(settings: Settings | None = None) -> str:
-    """Load ``JOB_ATTRIBUTES_SYSTEM_PROMPT`` from ``resources/prompts.py``."""
+    """Load ``JOB_ATTRIBUTES_SYSTEM_PROMPT`` from ``resources/prompts.py`` and apply country placeholders."""
     s = settings or get_settings()
     path = _pref_prompts_path(s)
     if not path.is_file():
-        return _FALLBACK_JOB_ATTRIBUTES_SYSTEM
+        return format_country_prompt_template(_FALLBACK_JOB_ATTRIBUTES_SYSTEM, s)
     text = path.read_text(encoding="utf-8")
     m = re.search(
         r"JOB_ATTRIBUTES_SYSTEM_PROMPT\s*=\s*\"\"\"(.*?)\"\"\"",
@@ -133,16 +147,16 @@ def load_job_attributes_system_prompt(settings: Settings | None = None) -> str:
         re.DOTALL,
     )
     if not m:
-        return _FALLBACK_JOB_ATTRIBUTES_SYSTEM
-    return m.group(1).strip()
+        return format_country_prompt_template(_FALLBACK_JOB_ATTRIBUTES_SYSTEM, s)
+    return format_country_prompt_template(m.group(1).strip(), s)
 
 
 def load_occupation_skills_relevance_system_prompt(settings: Settings | None = None) -> str:
-    """Load ``OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT`` from ``resources/prompts.py``."""
+    """Load ``OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT`` from ``resources/prompts.py`` and apply country placeholders."""
     s = settings or get_settings()
     path = _pref_prompts_path(s)
     if not path.is_file():
-        return _FALLBACK_OCCUPATION_SKILLS_RELEVANCE_SYSTEM
+        return format_country_prompt_template(_FALLBACK_OCCUPATION_SKILLS_RELEVANCE_SYSTEM, s)
     text = path.read_text(encoding="utf-8")
     m = re.search(
         r"OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT\s*=\s*\"\"\"(.*?)\"\"\"",
@@ -150,5 +164,5 @@ def load_occupation_skills_relevance_system_prompt(settings: Settings | None = N
         re.DOTALL,
     )
     if not m:
-        return _FALLBACK_OCCUPATION_SKILLS_RELEVANCE_SYSTEM
-    return m.group(1).strip()
+        return format_country_prompt_template(_FALLBACK_OCCUPATION_SKILLS_RELEVANCE_SYSTEM, s)
+    return format_country_prompt_template(m.group(1).strip(), s)

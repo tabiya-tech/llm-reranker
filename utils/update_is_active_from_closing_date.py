@@ -1,25 +1,3 @@
-#!/usr/bin/env python3
-"""
-Set `is_active` from `classifier_metadata.closing_date` for the configured jobs collection.
-
-Rules:
-  - closing_date < today  -> is_active = False
-  - closing_date >= today -> is_active = True
-  - missing/unparseable closing_date -> policy-controlled (default: keep unchanged)
-
-Uses the same Mongo env as the batch (``.env``): ``MONGODB_URI``, ``MONGODB_DATABASE``,
-``MONGODB_TARGET_COLLECTION`` — with legacy fallbacks ``MONGO_URL`` / ``MONGO_DB_NAME`` /
-``MONGO_JOBS_COLLECTION`` if set.
-
-Usage:
-  cd llm-reranker
-  python utils/update_is_active_from_closing_date.py
-  python utils/update_is_active_from_closing_date.py --apply
-
-Batch CLI (``main.py``) runs :func:`sync_is_active_from_closing_date` on the target
-collection after a successful run when ``RERANKER_SYNC_IS_ACTIVE_FROM_CLOSING_DATE`` is
-enabled (default: on).
-"""
 
 from __future__ import annotations
 
@@ -171,7 +149,7 @@ def main() -> int:
     coll_name = (
         os.getenv("MONGODB_TARGET_COLLECTION")
         or os.getenv("MONGO_JOBS_COLLECTION")
-        or "RankedJobsEnriched"
+        or "ranked_jobs_enriched"
     ).strip()
     if not mongo_url or not db_name:
         raise SystemExit(

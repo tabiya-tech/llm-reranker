@@ -223,7 +223,7 @@ def bulk_write_llm_upserts(
     )
 
 
-RANKING_LOGS_COLLECTION_DEFAULT = "reranker-logs"
+RANKING_LOGS_COLLECTION_DEFAULT = "reranker_logs"
 
 
 def _ranking_logs_collection(
@@ -494,7 +494,7 @@ def build_job_description_context(
     settings: Settings | None = None,
 ) -> JobDescriptionContext:
     """
-    Extract listing fields from a ClassifiedJobs document.
+    Extract listing fields from a classified_jobs document.
 
     All Mongo field names are configured via ``Settings`` / environment variables.
     """
@@ -544,7 +544,7 @@ def get_job_context_by_job_id(
     client: MongoClient | None = None,
 ) -> JobDescriptionContext | None:
     """
-    Load ClassifiedJobs by the configured job id field (see ``CLASSIFIED_MONGO_FIELD_JOB_ID``).
+    Load classified_jobs by the configured job id field (see ``CLASSIFIED_MONGO_FIELD_JOB_ID``).
 
     Returns ``None`` if no classified document exists for that id.
     """
@@ -564,7 +564,7 @@ def get_job_context_by_fingerprint(
     client: MongoClient | None = None,
 ) -> JobDescriptionContext | None:
     """
-    Load ClassifiedJobs by the configured fingerprint field
+    Load classified_jobs by the configured fingerprint field
     (see ``CLASSIFIED_MONGO_FIELD_JOB_FINGERPRINT``).
 
     Returns ``None`` if no classified document exists for that fingerprint.

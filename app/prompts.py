@@ -16,22 +16,30 @@ from utils.occupation_to_skills_mapping import tabiya_occupation_id_for_candidat
 from utils.uuid_to_tabiya_id import cell_to_esco_uuid
 
 
-def llm2_opening_line_from_context(ctx: JobDescriptionContext) -> str:
+def llm2_opening_line_from_context(
+    ctx: JobDescriptionContext, *, settings: Settings | None = None
+) -> str:
     """
-    First line of the LLM2 user block: Kenyan county when present, else city (e.g. metadata.city).
+    First line of the LLM2 user block: region field (county/district/etc.) when present, else city.
 
-    Classifiers sometimes put the country in city when county is absent; if city is "Kenya",
-    avoid duplicating "Kenya" in the phrasing.
+    Uses :attr:`Settings.country_name` from ``TARGET_COUNTRY``. If ``city`` equals the country
+    name or slug, avoid duplicating the country in the phrasing.
     """
+    s = settings or get_settings()
+    country = s.country_name
+    slug = s.target_country
     co = (ctx.county or "").strip()
     ci = (ctx.city or "").strip()
+    cl = country.lower()
+    city_is_country = ci.lower() in (slug, cl, country)
+
     if co:
-        return f"Estimate job attributes for the following occupation in {co} County, Kenya:"
+        return f"Estimate job attributes for the following occupation in {co}, {country}:"
     if ci:
-        if ci.lower() == "kenya":
-            return "Estimate job attributes for the following occupation in Kenya:"
-        return f"Estimate job attributes for the following occupation in {ci}, Kenya:"
-    return "Estimate job attributes for the following occupation in Unknown County, Kenya:"
+        if city_is_country:
+            return f"Estimate job attributes for the following occupation in {country}:"
+        return f"Estimate job attributes for the following occupation in {ci}, {country}:"
+    return f"Estimate job attributes for the following occupation in {country} (region not specified):"
 
 
 @dataclass(frozen=True)
@@ -184,7 +192,7 @@ def build_single_county_job_attributes_user_prompt(
     job_listing_metadata: str | None = None,
 ) -> str:
     """
-    User message for LLM2: Kenyan locale framing, occupation-centric block, then attribute menu.
+    User message for LLM2: locale framing (from env), occupation-centric block, then attribute menu.
 
     ``included_tasks`` is **classification task text**, not ONET ``WA_Element_ID`` values (those appear in the appendix).
 
@@ -314,7 +322,7 @@ def build_job_attributes_metadata_block(ctx: JobDescriptionContext) -> str:
         ("Category", ctx.category),
         ("Salary", ctx.salary),
         ("Location / city", ctx.city),
-        ("County / region", ctx.county),
+        ("Region", ctx.county),
         ("Employment type", ctx.employment_type),
         ("Posted", ctx.posted_date),
         ("Closing", ctx.closing_date),

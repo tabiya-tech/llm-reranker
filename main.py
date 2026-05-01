@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch CLI: ClassifiedJobs → LLM 1, 3, 2 → upsert ranked job schema to target collection.
+"""Batch CLI: ``classified_jobs`` → LLM 1, 3, 2 → upsert ranked job schema (e.g. ``ranked_jobs``).
 
 For single-job HTTP processing, see ``api.py`` (FastAPI).
 """
@@ -14,7 +14,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from pymongo.operations import UpdateOne
@@ -44,7 +44,7 @@ def _elapsed_s(start: float) -> float:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="ClassifiedJobs batch: Mongo → LLM 1, 3, 2 → upsert target collection"
+        description="classified_jobs batch: Mongo → LLM 1, 3, 2 → upsert target collection"
     )
     p.add_argument(
         "--limit",
@@ -94,11 +94,6 @@ def _gemini_or_exit(settings) -> None:
         raise SystemExit(1)
 
 
-def _target_country() -> str:
-    t = (os.getenv("TARGET_COUNTRY") or "zambia").strip().lower()
-    return t if t in ("zambia", "kenya") else "zambia"
-
-
 def _env_bool(name: str, default: bool = True) -> bool:
     raw = (os.getenv(name) or "").strip().lower()
     if not raw:
@@ -107,7 +102,11 @@ def _env_bool(name: str, default: bool = True) -> bool:
 
 
 def _resolve_reranker_cutoff(*, country: str, db) -> str | None:
-    """Scraper-like cutoff resolution for reranker incremental runs."""
+    """Resolve YYYY-MM-DD lower bound for incremental classified_jobs fetch.
+
+    Order: per-country env (e.g. ``KENYA_RERANKER_CUTOFF_DATE``) or ``RERANKER_CUTOFF_DATE`` (used as-is);
+    else ``reranker_state.last_cutoff_date`` for this country (used as-is, no day overlap).
+    """
     env_specific = f"{country.upper()}_RERANKER_CUTOFF_DATE"
     env_override = (os.getenv(env_specific) or os.getenv("RERANKER_CUTOFF_DATE") or "").strip()
     if env_override:
@@ -118,14 +117,23 @@ def _resolve_reranker_cutoff(*, country: str, db) -> str | None:
     state_doc = db[state_coll_name].find_one({"country": country}) or {}
     last_cutoff = state_doc.get("last_cutoff_date")
     if last_cutoff:
-        overlap = (datetime.fromisoformat(last_cutoff) - timedelta(days=1)).strftime("%Y-%m-%d")
+        if isinstance(last_cutoff, datetime):
+            dt = (
+                last_cutoff
+                if last_cutoff.tzinfo
+                else last_cutoff.replace(tzinfo=timezone.utc)
+            )
+            cutoff_str = dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        else:
+            cutoff_str = datetime.fromisoformat(
+                str(last_cutoff).strip().replace("Z", "+00:00")
+            ).strftime("%Y-%m-%d")
         logger.info(
-            "[%s] Cutoff: incremental last=%s -> now=%s (-1 day overlap)",
+            "[%s] Cutoff: incremental from state last_cutoff_date=%s (exact)",
             country.upper(),
-            last_cutoff,
-            overlap,
+            cutoff_str,
         )
-        return overlap
+        return cutoff_str
 
     logger.info("[%s] Cutoff: no previous state (full scan)", country.upper())
     return None
@@ -195,7 +203,7 @@ def run() -> None:
         invocation="batch",
     )
 
-    country = _target_country()
+    country = settings.target_country
     db = get_database(settings=settings)
     cutoff_date = _resolve_reranker_cutoff(country=country, db=db)
     query: dict[str, Any] = {}
