@@ -210,13 +210,9 @@ def run() -> None:
     if cutoff_date:
         try:
             cutoff_dt = datetime.strptime(cutoff_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            query = {
-                "$or": [
-                    {"classified_at": {"$gte": cutoff_dt}},
-                    {"updated_at": {"$gte": cutoff_dt}},
-                    {"created_at": {"$gte": cutoff_dt}},
-                ]
-            }
+            # Anchor on immutable `classified_at` only (set once, on first classifier insert).
+            # Avoids matching docs whose `updated_at` gets bumped by re-classification.
+            query = {"classified_at": {"$gte": cutoff_dt}}
         except ValueError:
             logger.warning(
                 "[%s] Invalid cutoff_date=%s, falling back to full scan",

@@ -219,15 +219,17 @@ def _occupation_skill_relation_occupation_types_from_env() -> frozenset[str] | N
 
 
 def _target_country_slug_from_env() -> str:
-    """``TARGET_COUNTRY``: ``zambia`` | ``kenya`` (batch state key). Invalid → ``zambia``."""
+    """``TARGET_COUNTRY``: batch state key + reranker_log ``country`` field. Invalid → ``zambia``."""
+    allowed = frozenset({"zambia", "kenya", "south_africa"})
     t = (os.environ.get("TARGET_COUNTRY") or "zambia").strip().lower()
-    return t if t in ("zambia", "kenya") else "zambia"
+    return t if t in allowed else "zambia"
 
 
 # Canonical country name for prompts — keyed by ``TARGET_COUNTRY`` slug.
 _COUNTRY_NAME_BY_SLUG: dict[str, str] = {
     "zambia": "Zambia",
     "kenya": "Kenya",
+    "south_africa": "South Africa",
 }
 
 
