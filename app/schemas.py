@@ -60,7 +60,7 @@ class JobAttributesResult:
 
     attribute_estimates: tuple[AttributeEstimate, ...]
     summary: str
-    attributes: dict[str, str]
+    attributes: dict[str, str | bool]
     work_activity_ids: tuple[str, ...]
     raw_response: str
 
@@ -179,7 +179,7 @@ def _normalize_confidence(raw: object) -> str:
     return "medium"
 
 
-def _json_bool(v: object) -> bool:
+def _json_bool(v: object, default: bool = True) -> bool:
     if isinstance(v, bool):
         return v
     s = str(v or "").strip().lower()
@@ -187,7 +187,14 @@ def _json_bool(v: object) -> bool:
         return True
     if s in ("false", "0", "no"):
         return False
-    return True
+    return default
+
+
+def parse_requires_post_secondary(raw: object) -> bool:
+    """Kenya eligibility flag from LLM2 JSON; omitted or unparseable -> ``false``."""
+    if raw is None:
+        return False
+    return _json_bool(raw, default=False)
 
 
 def parse_occupation_skills_relevance_response(raw_text: str) -> OccupationSkillsRelevanceResult:
@@ -224,6 +231,8 @@ def parse_job_attributes_response(
     raw_text: str,
     schema: JobAttributesSchema,
     onet: tuple[OnetWorkActivity, ...],
+    *,
+    settings: Settings | None = None,
 ) -> JobAttributesResult:
     """
     Parse and validate LLM JSON.
@@ -233,6 +242,9 @@ def parse_job_attributes_response(
     ``name -> level_id`` and synthesizes estimates with medium confidence.
 
     ``summary`` is optional text; ``work_activities`` is a list of allowed ONET ids.
+
+    When present, ``requires_post_secondary`` (boolean) is stored on the flat ``attributes`` map
+    under that key for downstream matching eligibility (Kenya pipeline).
     """
     cleaned = strip_json_fence(raw_text)
     data = json.loads(cleaned)
@@ -279,7 +291,12 @@ def parse_job_attributes_response(
             )
 
     estimates = tuple(by_name[a.name] for a in schema.attributes if a.name in by_name)
-    flat: dict[str, str] = {e.attribute_name: e.selected_level_id for e in estimates}
+    flat: dict[str, str | bool] = {e.attribute_name: e.selected_level_id for e in estimates}
+    s = settings or get_settings()
+    if s.target_country == "kenya":
+        flat["requires_post_secondary"] = parse_requires_post_secondary(
+            data.get("requires_post_secondary")
+        )
     summary_raw = data.get("summary")
     summary = str(summary_raw).strip() if summary_raw is not None else ""
 
