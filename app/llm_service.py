@@ -324,7 +324,7 @@ def run_job_attributes_for_job(
         logger.info("%s", sep)
 
     raw = call_job_attributes_model(prompt, settings=s)
-    parsed = parse_job_attributes_response(raw, schema_resolved, onet_resolved)
+    parsed = parse_job_attributes_response(raw, schema_resolved, onet_resolved, settings=s)
     return replace(parsed, raw_response=raw)
 
 

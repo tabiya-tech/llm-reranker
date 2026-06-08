@@ -407,9 +407,46 @@ Do not include `summary`, `reason`, or any other top-level keys.
     return f"{system}\n\n---\n\n{user}"
 
 
-def _job_attributes_onet_and_json_appendix(onet_work_activities: Sequence[OnetWorkActivity]) -> str:
+def _kenya_requires_post_secondary_prompt_block() -> str:
+    """LLM2 JSON contract addendum: Kenya education eligibility (stored on ranked job documents)."""
+    return """
+- `requires_post_secondary` (boolean): whether this **specific job advertisement** requires
+  education **beyond Kenya secondary school** (KCSE / Form 4 / O-Level completion).
+
+  Set **`true`** when the listing explicitly requires any of:
+  - Certificate, diploma, higher diploma, or degree from a college, university, or TVET institution
+  - Named professional qualifications (e.g. CPA, ACCA, nursing registration, teaching certificate
+    from a post-secondary institution)
+  - "Graduate", "bachelor's", "master's", or equivalent post-secondary credentials
+
+  Set **`false`** when:
+  - Only KCSE, O-Level, Form 4, or "secondary education" is required or mentioned
+  - Only a KCSE grade is specified (e.g. "KCSE C+", "D plain and above") with no college/university qualification
+  - No education requirement is stated, or requirements are experience/skills only
+  - Requirements are unclear or ambiguous — prefer **`false`** rather than guessing
+
+  Do **not** treat generic phrases like "minimum qualification" or "relevant qualification" as post-secondary
+  unless the ad clearly points to certificate/diploma/degree-level study after secondary school."""
+
+
+def _job_attributes_onet_and_json_appendix(
+    onet_work_activities: Sequence[OnetWorkActivity],
+    *,
+    settings: Settings | None = None,
+) -> str:
     """Append ONET work-activity menu and required JSON response shape."""
+    s = settings or get_settings()
     task_menu = _format_onet_work_activity_menu(onet_work_activities)
+    kenya_postsec = (
+        _kenya_requires_post_secondary_prompt_block()
+        if s.target_country == "kenya"
+        else ""
+    )
+    kenya_json_field = (
+        ',\n  "requires_post_secondary": true'
+        if s.target_country == "kenya"
+        else ""
+    )
     return f"""
 
 ---
@@ -431,7 +468,7 @@ Respond with **only** a single JSON object (no markdown fences, no text before o
   - `confidence`: `high`, `medium`, or `low`,
   - `reasoning` (short string).
 - `summary`: brief synthesis of the overall attribute profile (string).
-- `work_activities`: array of `WA_Element_ID` strings from the ONET list above, no duplicates, ordered most central to the role first.
+- `work_activities`: array of `WA_Element_ID` strings from the ONET list above, no duplicates, ordered most central to the role first.{kenya_postsec}
 
 **JSON shape:**
 {{
@@ -444,7 +481,7 @@ Respond with **only** a single JSON object (no markdown fences, no text before o
     }}
   ],
   "summary": "...",
-  "work_activities": ["<WA_Element_ID>", "..."]
+  "work_activities": ["<WA_Element_ID>", "..."]{kenya_json_field}
 }}"""
 
 
@@ -475,5 +512,5 @@ def build_job_attributes_prompt(
         job_listing_metadata=job_listing_metadata,
         **fields,
     )
-    appendix = _job_attributes_onet_and_json_appendix(onet_work_activities)
+    appendix = _job_attributes_onet_and_json_appendix(onet_work_activities, settings=s)
     return f"{system}\n\n---\n\n{user}{appendix}"
