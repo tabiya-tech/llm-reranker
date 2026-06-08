@@ -537,6 +537,17 @@ class Settings:
     # Per-job overlap of LLM1 and LLM2 Gemini calls (~max latency not sum; watch rate limits with parallel workers).
     reranker_overlap_llm1_llm2: bool
 
+    # Gemini concat job embedding (match_v4 stage-1 space): ``llm_classified_skills`` labels → job_embedding.
+    reranker_enable_job_embedding: bool
+    reranker_fail_on_job_embedding_error: bool
+    reranker_job_embedding_model: str
+    reranker_job_embedding_dim: int
+    reranker_job_embedding_task_type: str
+    reranker_job_embedding_l2_normalize: bool
+    reranker_job_embedding_batch_size: int
+    reranker_job_embedding_sleep_s: float
+    reranker_job_embedding_source: str | None
+
     # Classifier ``classification.entities[].linked_entities`` with taxonomy ``esco`` (fixed).
     classified_linked_entity_types: tuple[str, ...]
     # Optional filter on ``linked_entities.similarity_score`` (applies to skills + occupations).
@@ -647,11 +658,11 @@ class Settings:
             ),
             keys_location=_comma_keys(
                 os.environ.get("CLASSIFIED_KEYS_LOCATION"),
-                "location,city,town",
+                "city,location,town",
             ),
             keys_county=_comma_keys(
                 os.environ.get("CLASSIFIED_KEYS_COUNTY"),
-                "county,district,region",
+                "province,county,district,region",
             ),
             keys_employment=_comma_keys(
                 os.environ.get("CLASSIFIED_KEYS_EMPLOYMENT"),
@@ -703,6 +714,34 @@ class Settings:
             ),
             reranker_overlap_llm1_llm2=_bool_env(
                 "RERANKER_OVERLAP_LLM1_LLM2", default=False
+            ),
+            reranker_enable_job_embedding=_bool_env(
+                "RERANKER_ENABLE_JOB_EMBEDDING", default=True
+            ),
+            reranker_fail_on_job_embedding_error=_bool_env(
+                "RERANKER_FAIL_ON_JOB_EMBEDDING_ERROR", default=False
+            ),
+            reranker_job_embedding_model=(
+                os.environ.get("RERANKER_JOB_EMBEDDING_MODEL") or "gemini-embedding-001"
+            ).strip(),
+            reranker_job_embedding_dim=_int_env(
+                "RERANKER_JOB_EMBEDDING_DIM", 3072, min_v=1
+            ),
+            reranker_job_embedding_task_type=(
+                os.environ.get("RERANKER_JOB_EMBEDDING_TASK_TYPE") or "SEMANTIC_SIMILARITY"
+            ).strip(),
+            reranker_job_embedding_l2_normalize=_bool_env(
+                "RERANKER_JOB_EMBEDDING_L2_NORMALIZE", default=True
+            ),
+            reranker_job_embedding_batch_size=_int_env(
+                "RERANKER_JOB_EMBEDDING_BATCH_SIZE", 100, min_v=1, max_v=100
+            ),
+            reranker_job_embedding_sleep_s=float(
+                (os.environ.get("RERANKER_JOB_EMBEDDING_SLEEP_S") or "0.12").strip()
+            ),
+            reranker_job_embedding_source=(
+                (os.environ.get("RERANKER_JOB_EMBEDDING_SOURCE") or "llm_classified_skills").strip()
+                or None
             ),
             classified_linked_entity_types=_entity_types_tuple(
                 os.environ.get("CLASSIFIED_LINKED_ENTITY_TYPES")

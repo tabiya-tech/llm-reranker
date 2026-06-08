@@ -134,7 +134,9 @@ def _llm_pipeline_set_document(
     """``$set`` body for target upsert (see ``app.ranked_job_schema``); ``None`` when nothing to write."""
     from app.ranked_job_schema import build_ranked_job_document
 
-    return build_ranked_job_document(
+    from utils.job_embedding import attach_job_embedding_to_payload
+
+    payload = build_ranked_job_document(
         classified_doc,
         ctx,
         settings=settings,
@@ -147,6 +149,9 @@ def _llm_pipeline_set_document(
         ranker_candidates=ranker_candidates,
         classifier_skill_candidates=classifier_skill_candidates,
     )
+    if payload is None:
+        return None
+    return attach_job_embedding_to_payload(payload, settings=settings)
 
 
 def llm_pipeline_upsert_update_one(
@@ -208,6 +213,8 @@ def llm_pipeline_upsert_update_one(
                 "work_activity_ids": "",
                 "work_activity_names": "",
                 "title": "",
+                "enrichment": "",
+                "embedding_meta": "",
             },
         },
         upsert=True,
