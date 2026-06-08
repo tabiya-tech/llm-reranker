@@ -81,10 +81,43 @@ python main.py
 
 | Mode | Entrypoint | GCP |
 |------|-----------|-----|
-| HTTP (single job) | `uvicorn api:app --host 0.0.0.0 --port 8000` | Cloud Run Service |
-| Batch (full collection) | `python main.py` | Cloud Run Job |
+| HTTP (single job) | `uvicorn api:app --host 0.0.0.0 --port 8000` | Cloud Run **Service** |
+| Batch (full collection) | `python main.py` | Cloud Run **Job** |
 
-Both share the same Docker image with different entrypoint commands.
+Both use the **same** image (`llm-reranker/Dockerfile`); only the process/command differs.
+
+### Cloud Run Service (HTTPS API)
+
+1. Build and push the image (from repo root):
+
+   ```bash
+   gcloud builds submit --config=llm-reranker/cloudbuild.yaml .
+   ```
+
+2. Deploy the service (edit script env or export variables as needed):
+
+   ```bash
+   chmod +x llm-reranker/deploy-cloud-run-service.sh
+   # Recommended: set secrets (example — use your Secret Manager names)
+   export GCP_PROJECT=horizon-dev-481316
+   export RERANKER_SERVICE_SECRETS="GEMINI_API_KEY=GEMINI_API_KEY:latest"
+   # Add Mongo and other keys as secrets or env vars your server needs at runtime.
+   ./llm-reranker/deploy-cloud-run-service.sh
+   ```
+
+   The script runs `python -m uvicorn api:app --host 0.0.0.0 --port 8080`, sets request timeout to 3600s, and deploys with **authenticated** invocation by default (`--no-allow-unauthenticated`). Grant **Cloud Run Invoker** to teammates or the service account that calls `/rank`.
+
+3. Call the API with an identity token (same pattern as `rerank_classified_json.py`):
+
+   ```bash
+   URL="$(gcloud run services describe llm-reranker-api --region=us-central1 --format='value(status.url)')"
+   curl -sS -X POST "${URL}/rank" \
+     -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+     -H "Content-Type: application/json" \
+     -d @classified.json
+   ```
+
+4. Optional: `gcloud run services update llm-reranker-api --region=...` to add `--update-env-vars`, `--update-secrets`, memory, or `--allow-unauthenticated` (not recommended if unauthenticated public access is a concern).
 
 ## Run logs
 

@@ -306,10 +306,24 @@ def strip_json_fence(text: str) -> str:
     return t.strip()
 
 
+def _repair_json_common_llm_errors(s: str) -> str:
+    """Strip trailing commas before ``}``/``]`` (frequent invalid JSON from models)."""
+    t = s.strip()
+    t = re.sub(r",(\s*[\]}])", r"\1", t)
+    return t
+
+
 def parse_skill_ranker_json(raw_text: str) -> tuple[list[str], list[str]]:
     """Parse ``essential_skills`` and ``optional_skills`` from model output (JSON object)."""
     cleaned = strip_json_fence(raw_text)
-    data = json.loads(cleaned)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        repaired = _repair_json_common_llm_errors(cleaned)
+        try:
+            data = json.loads(repaired)
+        except json.JSONDecodeError:
+            raise e
     if not isinstance(data, dict):
         raise ValueError("Skill ranker JSON must be an object")
     ess = data.get("essential_skills")

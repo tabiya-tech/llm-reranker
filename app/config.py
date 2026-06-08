@@ -220,7 +220,7 @@ def _occupation_skill_relation_occupation_types_from_env() -> frozenset[str] | N
 
 def _target_country_slug_from_env() -> str:
     """``TARGET_COUNTRY``: batch state key + reranker_log ``country`` field. Invalid → ``zambia``."""
-    allowed = frozenset({"zambia", "kenya", "south_africa"})
+    allowed = frozenset({"zambia", "kenya", "south_africa", "argentina"})
     t = (os.environ.get("TARGET_COUNTRY") or "zambia").strip().lower()
     return t if t in allowed else "zambia"
 
@@ -230,6 +230,7 @@ _COUNTRY_NAME_BY_SLUG: dict[str, str] = {
     "zambia": "Zambia",
     "kenya": "Kenya",
     "south_africa": "South Africa",
+    "argentina": "Argentina",
 }
 
 
