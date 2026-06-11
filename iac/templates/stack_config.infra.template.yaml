@@ -1,0 +1,42 @@
+# Stack config template for the Infra stack.
+# Store the actual values in GCP Secret Manager under "stack-config-infra".
+# scripts/prepare.py fetches this and writes iac/infra/Pulumi.{stack}.yaml.
+# The reranker image URIs are injected by CI at deploy time (not stored in Secret Manager).
+
+config:
+  # GCP project ID for this environment
+  tabiya-horizon-reranker-infra:project: <project-id>
+
+  # GCP region for all resources
+  tabiya-horizon-reranker-infra:region: <region>
+
+  # Secret Manager secret IDs
+  tabiya-horizon-reranker-infra:mongodbSecretId: <secret-id>
+  tabiya-horizon-reranker-infra:geminiSecretId: <secret-id>
+
+  # Cloud Run Job — env vars (strings)
+  tabiya-horizon-reranker-infra:enableLlm3: <0|1>
+  tabiya-horizon-reranker-infra:parallelWorkers: <int>
+  tabiya-horizon-reranker-infra:overlapLlm1Llm2: <0|1>
+  tabiya-horizon-reranker-infra:classifiedLinkedEntityLabelDedupeTypes: <comma-list>
+  tabiya-horizon-reranker-infra:enableJobEmbedding: <0|1>
+
+  # Cloud Run Job — resource limits
+  tabiya-horizon-reranker-infra:jobMemory: <memory-limit>
+  tabiya-horizon-reranker-infra:jobCpu: <cpu-limit>
+  tabiya-horizon-reranker-infra:jobTimeout: <timeout-with-suffix>
+  tabiya-horizon-reranker-infra:jobMaxRetries: <max-retries>
+
+  # Cloud Run Service — resource limits and scaling
+  tabiya-horizon-reranker-infra:serviceMemory: <memory-limit>
+  tabiya-horizon-reranker-infra:serviceCpu: <cpu-limit>
+  tabiya-horizon-reranker-infra:serviceTimeoutSeconds: <seconds>
+  tabiya-horizon-reranker-infra:serviceContainerConcurrency: <int>
+  tabiya-horizon-reranker-infra:serviceMaxScale: <int>
+  tabiya-horizon-reranker-infra:serviceContainerPort: <port>
+  tabiya-horizon-reranker-infra:serviceStartupProbePeriodSeconds: <seconds>
+  tabiya-horizon-reranker-infra:serviceStartupProbeTimeoutSeconds: <seconds>
+
+  # Docker image URIs — injected by CI; set as placeholder here
+  tabiya-horizon-reranker-infra:rerankerImage: <image-uri>
+  tabiya-horizon-reranker-infra:rerankerServiceImage: <image-uri>

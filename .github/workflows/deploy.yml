@@ -1,0 +1,75 @@
+name: Deploy
+
+run-name: Deploy ${{ inputs.stack }} @ ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: "Stack to deploy (dev / staging / prod)"
+        required: true
+        default: dev
+        type: choice
+        options: [dev, staging, prod]
+  workflow_call:
+    inputs:
+      stack:
+        required: true
+        type: string
+        description: "Stack to deploy"
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.stack }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stack }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Install Python dependencies
+        run: |
+          pip install \
+            -r iac/scripts/requirements.txt \
+            -r iac/enable-services/requirements.txt \
+            -r iac/infra/requirements.txt
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@v5
+
+      - name: Login to Pulumi
+        run: pulumi login
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+      - name: Prepare configs
+        run: |
+          REGISTRY="${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/job-pipeline"
+          python iac/scripts/prepare.py \
+            --stack "${{ inputs.stack }}" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --reranker-image "${REGISTRY}/llm-reranker:${{ github.sha }}" \
+            --reranker-service-image "${REGISTRY}/llm-reranker:service"
+
+      - name: Deploy infrastructure
+        run: |
+          for module in enable-services infra; do
+            python iac/scripts/up.py --stack "${{ inputs.stack }}" --module "$module"
+          done
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}

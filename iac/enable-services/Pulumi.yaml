@@ -1,0 +1,7 @@
+name: tabiya-horizon-reranker-enable-services
+runtime:
+  name: python
+  options:
+    toolchain: pip
+    virtualenv: venv
+description: Enable all required GCP APIs for the job-pipeline llm-reranker

@@ -1,0 +1,8 @@
+# Generated at deploy time by scripts/prepare.py — never committed
+enable-services/Pulumi.*.yaml
+infra/Pulumi.*.yaml
+
+# Python
+__pycache__/
+*.pyc
+venv/
