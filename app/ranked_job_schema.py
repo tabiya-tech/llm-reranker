@@ -18,6 +18,7 @@ from utils.classifier_linked_entities import (
 )
 from utils.occupation_to_skills_mapping import occupation_block_skill_counts, tabiya_occupation_id_for_candidate
 from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap, cell_to_esco_uuid
+from utils.scraper_enrichment_fields import copy_scraper_enrichment_fields
 from utils.skill_groups import derive_skill_groups_origin_uuids
 
 PIPELINE_SCHEMA_VERSION = "32"
@@ -186,9 +187,20 @@ def work_activity_names_for_ids(
     return [by_id.get(wid, "") for wid in ids]
 
 
+def _metadata_scalar_location(val: Any) -> str | None:
+    """Normalize city/province enrichment (may be ``str`` or ``list[str]`` on classified docs)."""
+    if val is None:
+        return None
+    if isinstance(val, list):
+        parts = [str(x).strip() for x in val if str(x).strip()]
+        return ", ".join(parts) if parts else None
+    s = str(val).strip()
+    return s or None
+
+
 def classifier_metadata_from_context(ctx: JobDescriptionContext) -> dict[str, Any]:
-    """Classifier-sourced listing fields and full job text blocks (``title`` lives here, not top-level)."""
-    return {
+    """Classifier-sourced listing fields, enrichment, and full job text (``title`` lives here, not top-level)."""
+    meta: dict[str, Any] = {
         "title": ctx.title,
         "employer": ctx.employer,
         "category": ctx.category,
@@ -197,12 +209,25 @@ def classifier_metadata_from_context(ctx: JobDescriptionContext) -> dict[str, An
         "closing_date": ctx.closing_date,
         "source_platform": ctx.source_platform,
         "city": ctx.city,
-        "county": ctx.county,
         "salary": ctx.salary,
         "employment_type": ctx.employment_type,
         "job_description": ctx.raw_job_description,
         "requirements": ctx.requirements_text,
     }
+    enrich = copy_scraper_enrichment_fields(ctx.classified)
+    if enrich.get("city") is not None:
+        meta["city"] = _metadata_scalar_location(enrich["city"]) or meta.get("city")
+    # ``province`` replaces the old ``county`` field (same semantic: region / admin area).
+    province_val = _metadata_scalar_location(enrich.get("province"))
+    if not province_val and ctx.county:
+        province_val = _metadata_scalar_location(ctx.county)
+    if province_val:
+        meta["province"] = province_val
+    for key, val in enrich.items():
+        if key in ("city", "province"):
+            continue
+        meta[key] = val
+    return meta
 
 
 def occupation_skills_relevance_menu_size(items: list[dict[str, Any]]) -> int:
@@ -508,7 +533,6 @@ def build_llm_reranker_meta(settings: Settings) -> dict[str, Any]:
         "skill_ranker_model": settings.gemini_model,
         "occupation_skills_relevance_model": settings.gemini_model,
         "job_attributes_model": settings.gemini_model,
-        "schema_version": PIPELINE_SCHEMA_VERSION,
         "classified_linked_entity_types": list(settings.classified_linked_entity_types),
     }
 

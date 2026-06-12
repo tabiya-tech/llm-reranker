@@ -1,3 +1,7 @@
+# Pushes the same image as:
+#   :latest  → batch Job / general
+#   :service → Cloud Run Service (HTTP API); same digest, alias for clarity
+#
 # From repo root:
 #   gcloud builds submit --config=llm-reranker/cloudbuild.yaml .
 
@@ -8,10 +12,13 @@ steps:
       - --platform=linux/amd64
       - -t
       - us-central1-docker.pkg.dev/horizon-dev-481316/job-pipeline/llm-reranker:latest
+      - -t
+      - us-central1-docker.pkg.dev/horizon-dev-481316/job-pipeline/llm-reranker:service
       - llm-reranker
 
 images:
   - 'us-central1-docker.pkg.dev/horizon-dev-481316/job-pipeline/llm-reranker:latest'
+  - 'us-central1-docker.pkg.dev/horizon-dev-481316/job-pipeline/llm-reranker:service'
 
 options:
   logging: CLOUD_LOGGING_ONLY

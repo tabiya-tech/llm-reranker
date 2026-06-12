@@ -7,11 +7,9 @@
 #   docker run --rm --env-file .env llm-reranker:latest
 #   docker run --rm --env-file .env llm-reranker:latest main.py --limit 100
 #
-# Run HTTP API:
-#   docker run --rm -p 8000:8000 --env-file .env llm-reranker:latest \
-#     -m uvicorn api:app --host 0.0.0.0 --port 8000
-#
-# Cloud Run sets $PORT; use --port ${PORT:-8080} in the service command.
+# Run HTTP API on Cloud Run (service listens on $PORT, usually 8080):
+#   docker run --rm -p 8080:8080 -e PORT=8080 --env-file .env llm-reranker:latest \
+#     -m uvicorn api:app --host 0.0.0.0 --port 8080
 
 FROM python:3.11-slim
 

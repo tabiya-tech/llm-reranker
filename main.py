@@ -24,6 +24,7 @@ from app.config import get_settings, log_ranker_run_configuration, reranker_enab
 from app.database import (
     bulk_write_llm_upserts,
     complete_ranking_run_log,
+    distinct_ranked_job_ids,
     get_database,
     insert_ranking_run_log,
     iter_classified_jobs,
@@ -80,6 +81,14 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         metavar="N",
         help="Flush MongoDB bulk writes every N upserts (overrides BULK_WRITE_BATCH_SIZE; default from env or 100)",
+    )
+    p.add_argument(
+        "--skip-already-ranked",
+        action="store_true",
+        help=(
+            "Only process classified_jobs whose job_id is not yet in MONGODB_TARGET_COLLECTION "
+            "(same as RERANKER_SKIP_ALREADY_RANKED=1)."
+        ),
     )
     return p.parse_args()
 
@@ -220,6 +229,21 @@ def run() -> None:
                 cutoff_date,
             )
 
+    skip_ranked = args.skip_already_ranked or _env_bool("RERANKER_SKIP_ALREADY_RANKED", False)
+    if skip_ranked:
+        ranked_ids = distinct_ranked_job_ids(db=db, settings=settings)
+        jid = settings.mongo_field_job_id
+        if ranked_ids:
+            nin_clause = {jid: {"$nin": ranked_ids}}
+            query = {**nin_clause} if not query else {"$and": [dict(query), nin_clause]}
+        logger.info(
+            "Resume | skip_already_ranked | excluding %s %s already in %s.%s",
+            len(ranked_ids),
+            jid,
+            settings.mongodb_database,
+            settings.mongodb_target_collection,
+        )
+
     run_id = insert_ranking_run_log(
         settings=settings,
         limit=args.limit,
@@ -234,6 +258,7 @@ def run() -> None:
     llm1_calls = 0
     llm2_calls = 0
     llm3_calls = 0
+    job_errors = 0
     _run_error: str | None = None
     enrichment_enabled = _env_bool("RERANKER_RUN_WA_ENRICHMENT", True)
     enrichment_fail_hard = _env_bool("RERANKER_FAIL_ON_WA_ENRICHMENT_ERROR", False)
@@ -321,17 +346,29 @@ def run() -> None:
                         executor.submit(_run_one, d, _next_job_label()) for d in chunk
                     ]
                     for fut in as_completed(futures):
-                        r = fut.result()
-                        with counter_lock:
-                            _apply_rank_result(r)
+                        try:
+                            r = fut.result()
+                            with counter_lock:
+                                _apply_rank_result(r)
+                        except Exception as exc:
+                            with counter_lock:
+                                job_errors += 1
+                            logger.exception(
+                                "Parallel worker job failed (continuing): %s",
+                                exc,
+                            )
         else:
             for doc in iter_classified_jobs(limit=args.limit, query=query, settings=settings):
                 if args.limit > 0:
                     job_label = f"{n + 1}/{args.limit}"
                 else:
                     job_label = f"#{n + 1}"
-                r = _run_one(doc, job_label)
-                _apply_rank_result(r)
+                try:
+                    r = _run_one(doc, job_label)
+                    _apply_rank_result(r)
+                except Exception as exc:
+                    job_errors += 1
+                    logger.exception("Sequential job failed (continuing): %s", exc)
 
         if pending:
             bulk_write_llm_upserts(pending, settings=settings)
@@ -366,10 +403,15 @@ def run() -> None:
             pending.clear()
         batch_s = _elapsed_s(t_batch)
         logger.info(
-            "Batch %s | documents=%s upserts_queued=%s elapsed_s=%.3f",
+            "Batch %s | documents=%s upserts_queued=%s job_errors=%s elapsed_s=%.3f",
             "complete" if _run_error is None else "FAILED",
-            n, upsert_ops, batch_s,
+            n, upsert_ops, job_errors, batch_s,
         )
+        if job_errors:
+            logger.warning(
+                "%s job(s) failed (see stack traces above); Mongo writes from successful jobs are kept.",
+                job_errors,
+            )
         complete_ranking_run_log(
             run_id,
             success=_run_error is None,

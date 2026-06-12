@@ -87,6 +87,20 @@ def target_jobs_collection(
     return database[settings.mongodb_target_collection]
 
 
+def distinct_ranked_job_ids(
+    *,
+    db: Database | None = None,
+    settings: Settings | None = None,
+) -> list[Any]:
+    """Return ``job_id`` values already stored on the rerank target (for resume without redoing Gemini)."""
+    settings = settings or get_settings()
+    database = db if db is not None else get_database(settings=settings)
+    coll = target_jobs_collection(db=database, settings=settings)
+    field = settings.mongo_field_job_id
+    ids = coll.distinct(field, {field: {"$exists": True, "$ne": None}})
+    return [x for x in ids if x is not None]
+
+
 def _upsert_filter_for_llm_results(
     classified_doc: dict[str, Any],
     ctx: JobDescriptionContext,
@@ -120,7 +134,9 @@ def _llm_pipeline_set_document(
     """``$set`` body for target upsert (see ``app.ranked_job_schema``); ``None`` when nothing to write."""
     from app.ranked_job_schema import build_ranked_job_document
 
-    return build_ranked_job_document(
+    from utils.job_embedding import attach_job_embedding_to_payload
+
+    payload = build_ranked_job_document(
         classified_doc,
         ctx,
         settings=settings,
@@ -133,6 +149,9 @@ def _llm_pipeline_set_document(
         ranker_candidates=ranker_candidates,
         classifier_skill_candidates=classifier_skill_candidates,
     )
+    if payload is None:
+        return None
+    return attach_job_embedding_to_payload(payload, settings=settings)
 
 
 def llm_pipeline_upsert_update_one(
@@ -194,6 +213,8 @@ def llm_pipeline_upsert_update_one(
                 "work_activity_ids": "",
                 "work_activity_names": "",
                 "title": "",
+                "enrichment": "",
+                "embedding_meta": "",
             },
         },
         upsert=True,
@@ -361,7 +382,8 @@ def iter_classified_jobs(
     """
     settings = settings or get_settings()
     coll = classified_jobs_collection(settings=settings, db=get_database(client, settings=settings))
-    cur = coll.find(query or {}).sort(sort_field, sort_direction).skip(skip)
+    # Long parallel batches can exceed MongoDB's default ~10m idle cursor timeout between chunk reads.
+    cur = coll.find(query or {}, no_cursor_timeout=True).sort(sort_field, sort_direction).skip(skip)
     if limit > 0:
         cur = cur.limit(limit)
     yield from cur
@@ -488,6 +510,52 @@ def _parse_object_id(value: str | ObjectId) -> ObjectId:
         raise ValueError(f"Invalid ObjectId value: {value!r}") from e
 
 
+def _reranker_prefer_translation() -> bool:
+    """Use ``translation`` on classified_jobs for LLM listing text (English MT path)."""
+    return os.getenv("RERANKER_PREFER_TRANSLATION", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+
+
+def _overlay_translation_listing_fields(
+    classified_doc: dict[str, Any],
+    *,
+    title: str | None,
+    raw_jd: str | None,
+    req_text: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Prefer ``translation.text_en`` / ``fields_en`` when present (e.g. Argentina)."""
+    if not _reranker_prefer_translation():
+        return title, raw_jd, req_text
+    tr = classified_doc.get("translation")
+    if not isinstance(tr, dict) or not tr:
+        return title, raw_jd, req_text
+    fe = tr.get("fields_en") if isinstance(tr.get("fields_en"), dict) else {}
+    text_en = (tr.get("text_en") or "").strip()
+    if text_en:
+        return (
+            ((fe.get("title") or "").strip() or title),
+            text_en,
+            None,
+        )
+    if not fe:
+        return title, raw_jd, req_text
+    t_en = (fe.get("title") or "").strip()
+    d_en = (fe.get("description") or "").strip()
+    req_parts: list[str] = []
+    for k in ("exclusive_requirement", "desirable_requirement"):
+        v = (fe.get(k) or "").strip()
+        if v:
+            req_parts.append(v)
+    requirements_en = " ".join(req_parts).strip()
+    out_title = t_en or title
+    out_desc = d_en or raw_jd
+    out_req = requirements_en or req_text
+    return out_title, out_desc, out_req
+
+
 def build_job_description_context(
     classified_doc: dict[str, Any],
     *,
@@ -516,6 +584,10 @@ def build_job_description_context(
     city = _multi_key_top_or_metadata(classified_doc, *settings.keys_location)
     county = _multi_key_top_or_metadata(classified_doc, *settings.keys_county)
     employment = _multi_key_top_or_metadata(classified_doc, *settings.keys_employment)
+
+    title, raw_jd, req_text = _overlay_translation_listing_fields(
+        classified_doc, title=title, raw_jd=raw_jd, req_text=req_text
+    )
 
     return JobDescriptionContext(
         job_id=job_id,

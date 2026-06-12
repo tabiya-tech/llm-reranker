@@ -17,7 +17,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -311,12 +310,6 @@ def run() -> int:
 
             payload = {
                 "onet_work_activities": wa_items,
-                "enrichment": {
-                    "at": datetime.now(timezone.utc),
-                    "version": 2,
-                    "source_script": "utils/work_activities_enrichment.py",
-                    "source_reference_collection": "taxonomy_combined_occupation_database_with_wa",
-                },
             }
             ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": payload}, upsert=False))
             queued += 1
