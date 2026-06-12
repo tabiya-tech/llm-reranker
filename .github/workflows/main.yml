@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+# One deploy at a time; never cancel a deploy that is already running.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && 'deploying' || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  reranker-ci:
+    name: Reranker CI
+    uses: ./.github/workflows/reranker-ci.yml
+    secrets: inherit
+    with:
+      upload-artifacts: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+      stack: dev
+
+  deploy:
+    name: Deploy dev
+    needs: [reranker-ci]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
+    with:
+      stack: dev

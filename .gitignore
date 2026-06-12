@@ -67,8 +67,7 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
-# Local-only (not committed): scripts, tests, run outputs
+# Local-only (not committed): scripts, run outputs
 scripts/
-tests/
 exports/
 

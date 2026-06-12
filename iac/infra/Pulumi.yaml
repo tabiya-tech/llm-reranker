@@ -1,0 +1,7 @@
+name: tabiya-horizon-reranker-infra
+runtime:
+  name: python
+  options:
+    toolchain: pip
+    virtualenv: venv
+description: Cloud Run Job and Service for the Horizon LLM Reranker
