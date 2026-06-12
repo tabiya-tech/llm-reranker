@@ -67,7 +67,10 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
-# Local-only (not committed): scripts, run outputs
-scripts/
-exports/
+# Local-only (not committed): top-level scripts, run outputs.
+# Anchored with a leading slash so `iac/scripts/` (and other nested scripts/
+# directories) are NOT ignored. Without the anchor, gitignore matches
+# `scripts/` at any depth and silently drops `iac/scripts/` from commits.
+/scripts/
+/exports/
 
