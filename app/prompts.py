@@ -39,7 +39,9 @@ def llm2_opening_line_from_context(
         if city_is_country:
             return f"Estimate job attributes for the following occupation in {country}:"
         return f"Estimate job attributes for the following occupation in {ci}, {country}:"
-    return f"Estimate job attributes for the following occupation in {country} (region not specified):"
+    return (
+        f"Estimate job attributes for the following occupation in {country} (region not specified):"
+    )
 
 
 @dataclass(frozen=True)
@@ -223,24 +225,30 @@ def build_single_county_job_attributes_user_prompt(
     if context_str:
         parts.append(context_str)
     if job_listing_body is not None:
-        parts.extend([
-            "",
-            "**Job listing — description and requirements (use together with the occupation above):**",
-            job_listing_body,
-        ])
+        parts.extend(
+            [
+                "",
+                "**Job listing — description and requirements (use together with the occupation above):**",
+                job_listing_body,
+            ]
+        )
     if job_listing_metadata is not None:
-        parts.extend([
+        parts.extend(
+            [
+                "",
+                "**Additional listing metadata (may be incomplete):**",
+                job_listing_metadata,
+            ]
+        )
+    parts.extend(
+        [
             "",
-            "**Additional listing metadata (may be incomplete):**",
-            job_listing_metadata,
-        ])
-    parts.extend([
-        "",
-        "## Attributes to Estimate",
-        attr_desc,
-        "",
-        "For each attribute, select the most appropriate level_id and provide brief reasoning.",
-    ])
+            "## Attributes to Estimate",
+            attr_desc,
+            "",
+            "For each attribute, select the most appropriate level_id and provide brief reasoning.",
+        ]
+    )
     return "\n".join(parts)
 
 
@@ -297,8 +305,7 @@ def _format_onet_work_activity_menu(onet: Sequence[OnetWorkActivity]) -> str:
     for i, t in enumerate(onet, 1):
         sw = f" | Swahili: {t.wa_element_name_swahili}" if t.wa_element_name_swahili else ""
         lines.append(
-            f"{i}. `{t.wa_element_id}` — {t.wa_element_name_simplified} "
-            f"({t.wa_element_name}){sw}"
+            f"{i}. `{t.wa_element_id}` — {t.wa_element_name_simplified} ({t.wa_element_name}){sw}"
         )
     return "\n".join(lines)
 
@@ -365,9 +372,7 @@ def build_occupation_skills_relevance_prompt(
             if not sid or not tid:
                 continue
             lab = (sk.get("label") or "").strip() or sid
-            menu_lines.append(
-                f"- skill_id: `{sid}` | label: {lab} | taxonomy_role: {rt}"
-            )
+            menu_lines.append(f"- skill_id: `{sid}` | label: {lab} | taxonomy_role: {rt}")
         menu_lines.append("")
 
     menu = "\n".join(menu_lines).strip() or "(no essential or optional occupation skills to judge)"
@@ -438,15 +443,9 @@ def _job_attributes_onet_and_json_appendix(
     s = settings or get_settings()
     task_menu = _format_onet_work_activity_menu(onet_work_activities)
     kenya_postsec = (
-        _kenya_requires_post_secondary_prompt_block()
-        if s.target_country == "kenya"
-        else ""
+        _kenya_requires_post_secondary_prompt_block() if s.target_country == "kenya" else ""
     )
-    kenya_json_field = (
-        ',\n  "requires_post_secondary": true'
-        if s.target_country == "kenya"
-        else ""
-    )
+    kenya_json_field = ',\n  "requires_post_secondary": true' if s.target_country == "kenya" else ""
     return f"""
 
 ---

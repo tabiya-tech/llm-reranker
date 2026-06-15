@@ -36,6 +36,7 @@ def _normalize_mongo_extended_json(obj: Any) -> Any:
         return [_normalize_mongo_extended_json(item) for item in obj]
     return obj
 
+
 _taxonomy: TaxonomyContext | None = None
 
 

@@ -47,4 +47,3 @@ def derive_skill_groups_origin_uuids(
             continue
         groups.update(m.get(s, frozenset()))
     return sorted(groups)
-

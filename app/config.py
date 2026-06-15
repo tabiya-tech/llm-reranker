@@ -99,6 +99,18 @@ def _bool_env(name: str, *, default: bool = False) -> bool:
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _float_env(name: str, default: float, *, min_v: float = 0.0, max_v: float = 3600.0) -> float:
+    """Parse a float from the environment with bounds; invalid values fall back to ``default``."""
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        v = float(str(raw).strip())
+    except ValueError:
+        return default
+    return max(min_v, min(v, max_v))
+
+
 def _llm3_menu_signal_filter_from_env() -> str:
     """
     ``RERANKER_LLM3_MENU_SIGNAL_FILTER``: ``off`` (default), ``high``, ``medium``, or ``low``.
@@ -156,14 +168,10 @@ def _classified_linked_entity_min_similarity_from_env() -> float | None:
     try:
         v = float(raw)
     except ValueError:
-        _logger.warning(
-            "CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY: invalid %r, ignoring", raw
-        )
+        _logger.warning("CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY: invalid %r, ignoring", raw)
         return None
     if v < 0.0 or v > 1.0:
-        _logger.warning(
-            "CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY: %s not in [0,1], ignoring", v
-        )
+        _logger.warning("CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY: %s not in [0,1], ignoring", v)
         return None
     return v
 
@@ -424,7 +432,7 @@ def _resources_dir(repo_root: Path) -> Path:
     raw = os.environ.get("RESOURCES_DIR") or os.environ.get("LLM_RERANKER_RESOURCES_DIR")
     if raw and str(raw).strip():
         p = Path(str(raw).strip())
-        return (p.resolve() if p.is_absolute() else (repo_root / p).resolve())
+        return p.resolve() if p.is_absolute() else (repo_root / p).resolve()
     return (repo_root / "resources").resolve()
 
 
@@ -569,9 +577,7 @@ class Settings:
             or os.environ.get("VERTEX_SERVICE_ACCOUNT_JSON"),
         )
         gcp_pid = (
-            os.environ.get("GCP_PROJECT_ID")
-            or os.environ.get("GOOGLE_CLOUD_PROJECT")
-            or ""
+            os.environ.get("GCP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT") or ""
         ).strip()
         if not gcp_pid and creds_resolved:
             gcp_pid = _read_gcp_project_id_from_service_account(Path(creds_resolved)) or ""
@@ -583,9 +589,7 @@ class Settings:
             or "classified_jobs"
         ).strip()
         # Default target must not mirror source — writing ranked output back into classified_jobs is wrong.
-        target_coll = (
-            os.environ.get("MONGODB_TARGET_COLLECTION") or "ranked_jobs"
-        ).strip()
+        target_coll = (os.environ.get("MONGODB_TARGET_COLLECTION") or "ranked_jobs").strip()
         ja_schema_raw = os.environ.get("JOB_ATTRIBUTES_SCHEMA") or os.environ.get(
             "JOB_ATTRIBUTES_SCHEMA_FILE"
         )
@@ -598,9 +602,7 @@ class Settings:
         )
         occ_csv_raw = os.environ.get("OCCUPATIONS_CSV")
         occupations_csv_path = _resolve_occupations_csv_path(root, resources, occ_csv_raw)
-        occ_label_col = (
-            os.environ.get("OCCUPATIONS_CSV_LABEL_COLUMN") or "PREFERREDLABEL"
-        ).strip()
+        occ_label_col = (os.environ.get("OCCUPATIONS_CSV_LABEL_COLUMN") or "PREFERREDLABEL").strip()
         occ_inc_desc = _bool_env("OCCUPATIONS_CSV_INCLUDE_DESCRIPTIONS", default=False)
         occ_desc_col = (os.environ.get("OCCUPATIONS_CSV_DESCRIPTION_COLUMN") or "").strip()
         skills_csv_raw = os.environ.get("SKILLS_CSV")
@@ -684,9 +686,7 @@ class Settings:
                 "CLASSIFIED_FIELD_SOURCE_PLATFORM", "source_platform"
             ),
             gemini_api_key=(
-                os.environ.get("GEMINI_API_KEY")
-                or os.environ.get("API_KEY")
-                or ""
+                os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY") or ""
             ).strip(),
             gemini_model=(
                 os.environ.get("GEMINI_MODEL")
@@ -698,9 +698,7 @@ class Settings:
             vertex_model=os.environ.get("VERTEX_MODEL", "gemini-2.5-flash"),
             google_application_credentials_resolved=creds_resolved,
             bulk_write_batch_size=_int_env("BULK_WRITE_BATCH_SIZE", 100),
-            reranker_llm3_max_menu_skills=_int_env_min0(
-                "RERANKER_LLM3_MAX_MENU_SKILLS", 0
-            ),
+            reranker_llm3_max_menu_skills=_int_env_min0("RERANKER_LLM3_MAX_MENU_SKILLS", 0),
             reranker_llm3_classifier_intersect=_bool_env(
                 "RERANKER_LLM3_CLASSIFIER_INTERSECT", default=False
             ),
@@ -709,12 +707,8 @@ class Settings:
             occupation_relation_lookup=occ_rel_lookup,
             occupation_relation_esco_fallback=occ_rel_esco_fb,
             occupation_skill_relation_occupation_types=occ_skill_relation_types,
-            reranker_parallel_workers=_int_env(
-                "RERANKER_PARALLEL_WORKERS", 1, min_v=1, max_v=32
-            ),
-            reranker_overlap_llm1_llm2=_bool_env(
-                "RERANKER_OVERLAP_LLM1_LLM2", default=False
-            ),
+            reranker_parallel_workers=_int_env("RERANKER_PARALLEL_WORKERS", 1, min_v=1, max_v=32),
+            reranker_overlap_llm1_llm2=_bool_env("RERANKER_OVERLAP_LLM1_LLM2", default=False),
             reranker_enable_job_embedding=_bool_env(
                 "RERANKER_ENABLE_JOB_EMBEDDING", default=True
             ),
@@ -724,9 +718,7 @@ class Settings:
             reranker_job_embedding_model=(
                 os.environ.get("RERANKER_JOB_EMBEDDING_MODEL") or "gemini-embedding-001"
             ).strip(),
-            reranker_job_embedding_dim=_int_env(
-                "RERANKER_JOB_EMBEDDING_DIM", 3072, min_v=1
-            ),
+            reranker_job_embedding_dim=_int_env("RERANKER_JOB_EMBEDDING_DIM", 3072),
             reranker_job_embedding_task_type=(
                 os.environ.get("RERANKER_JOB_EMBEDDING_TASK_TYPE") or "SEMANTIC_SIMILARITY"
             ).strip(),
@@ -734,10 +726,10 @@ class Settings:
                 "RERANKER_JOB_EMBEDDING_L2_NORMALIZE", default=True
             ),
             reranker_job_embedding_batch_size=_int_env(
-                "RERANKER_JOB_EMBEDDING_BATCH_SIZE", 100, min_v=1, max_v=100
+                "RERANKER_JOB_EMBEDDING_BATCH_SIZE", 100
             ),
-            reranker_job_embedding_sleep_s=float(
-                (os.environ.get("RERANKER_JOB_EMBEDDING_SLEEP_S") or "0.12").strip()
+            reranker_job_embedding_sleep_s=_float_env(
+                "RERANKER_JOB_EMBEDDING_SLEEP_S", 0.12
             ),
             reranker_job_embedding_source=(
                 (os.environ.get("RERANKER_JOB_EMBEDDING_SOURCE") or "llm_classified_skills").strip()

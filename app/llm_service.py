@@ -364,9 +364,7 @@ def run_skill_ranker_for_job(
     )
     s = settings or get_settings()
     full_details = full_details_from_context(ctx)
-    skill_dicts = skills_to_prompt_dicts(
-        candidates, description_by_esco=description_by_esco
-    )
+    skill_dicts = skills_to_prompt_dicts(candidates, description_by_esco=description_by_esco)
     skills_text = format_skill_ranker_skills_text(skill_dicts)
     prompt = build_skill_ranker_prompt(full_details, skill_dicts, settings=s)
 
@@ -379,7 +377,9 @@ def run_skill_ranker_for_job(
             label,
             len(skill_dicts),
         )
-        logger.info("LLM1 parameter `full_details` (%s chars):\n%s", len(full_details), full_details)
+        logger.info(
+            "LLM1 parameter `full_details` (%s chars):\n%s", len(full_details), full_details
+        )
         logger.info(
             "LLM1 parameter `potential_skills` (JSON, %s rows):\n%s",
             len(skill_dicts),

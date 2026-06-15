@@ -72,9 +72,7 @@ service_timeout_seconds = int(config.get("serviceTimeoutSeconds") or "3600")
 service_container_concurrency = int(config.get("serviceContainerConcurrency") or "4")
 service_max_scale = int(config.get("serviceMaxScale") or "10")
 service_container_port = int(config.get("serviceContainerPort") or "8080")
-service_startup_probe_period_seconds = int(
-    config.get("serviceStartupProbePeriodSeconds") or "240"
-)
+service_startup_probe_period_seconds = int(config.get("serviceStartupProbePeriodSeconds") or "240")
 service_startup_probe_timeout_seconds = int(
     config.get("serviceStartupProbeTimeoutSeconds") or "240"
 )

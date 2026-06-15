@@ -133,10 +133,7 @@ def run_llm1_llm2_phase(
         return time.perf_counter() - t0, j
 
     use_overlap = (
-        overlap_llm12
-        and bool(base_skills)
-        and not log_llm1_prompt
-        and not log_llm2_prompt
+        overlap_llm12 and bool(base_skills) and not log_llm1_prompt and not log_llm2_prompt
     )
 
     if use_overlap:
@@ -190,16 +187,13 @@ def load_taxonomy_context(settings: Settings | None = None) -> TaxonomyContext:
     occ_map, csv_skill_labels, occ_skill_relation, occ_skill_signalling = (
         occupation_skill_taxonomy_for_settings(settings)
     )
-    occ_bridge, occ_all_ids = load_occupations_lookup(
-        str(settings.occupations_csv_path.resolve())
-    )
-    skills_uuid_tabiya_map = load_skills_uuid_tabiya_map(
-        str(settings.skills_csv_path.resolve())
-    )
+    occ_bridge, occ_all_ids = load_occupations_lookup(str(settings.occupations_csv_path.resolve()))
+    skills_uuid_tabiya_map = load_skills_uuid_tabiya_map(str(settings.skills_csv_path.resolve()))
     skill_desc_by_esco: dict[str, str] = {}
-    if settings.skills_csv_include_descriptions and (
-        settings.skills_csv_description_column or ""
-    ).strip():
+    if (
+        settings.skills_csv_include_descriptions
+        and (settings.skills_csv_description_column or "").strip()
+    ):
         skill_desc_by_esco = load_skill_description_by_esco(
             str(settings.skills_csv_path.resolve()),
             settings.skills_csv_description_column.strip(),
