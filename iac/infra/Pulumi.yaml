@@ -1,4 +1,5 @@
 name: tabiya-horizon-reranker-infra
+organization: tabiya-tech
 runtime:
   name: python
   options:
