@@ -53,7 +53,7 @@ def _fetch_secret(project: str, secret_id: str) -> str:
         return response.payload.data.decode("utf-8")
     except NotFound:
         print(f"error: secret '{secret_id}' not found in project '{project}'.", file=sys.stderr)
-        print(f"       Create it with:", file=sys.stderr)
+        print("       Create it with:", file=sys.stderr)
         print(f"         gcloud secrets create {secret_id} --project {project}", file=sys.stderr)
         print(f"         gcloud secrets versions add {secret_id} --project {project} --data-file=-", file=sys.stderr)
         sys.exit(1)

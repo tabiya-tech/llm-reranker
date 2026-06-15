@@ -179,12 +179,12 @@ def cmd_interactive(project: str, stack: str):
         else:
             print(f"  skipped '{secret_id}'")
 
-    print(f"\nDone. Run prepare.py to generate local Pulumi config files:\n")
-    print(f"  python iac/scripts/prepare.py \\")
+    print("\nDone. Run prepare.py to generate local Pulumi config files:\n")
+    print("  python iac/scripts/prepare.py \\")
     print(f"    --stack {stack} \\")
     print(f"    --project {project} \\")
-    print(f"    --reranker-image <uri> \\")
-    print(f"    --reranker-service-image <uri>\n")
+    print("    --reranker-image <uri> \\")
+    print("    --reranker-service-image <uri>\n")
 
 
 def _main():

@@ -12,7 +12,6 @@ from utils.concat_embedding_text import ranked_job_concat_embedding_text
 from utils.gemini_embeddings import (
     EMBEDDING_DIM,
     MODEL_NAME,
-    TASK_TYPE,
     embed_text_list,
     l2_normalize_rows,
 )
