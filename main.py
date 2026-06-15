@@ -399,7 +399,10 @@ def run() -> None:
         logger.info(
             "Batch %s | documents=%s upserts_queued=%s job_errors=%s elapsed_s=%.3f",
             "complete" if _run_error is None else "FAILED",
-            n, upsert_ops, job_errors, batch_s,
+            n,
+            upsert_ops,
+            job_errors,
+            batch_s,
         )
         if job_errors:
             logger.warning(

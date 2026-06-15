@@ -46,7 +46,7 @@ def _embed_chunk(
             last_err = e
             if attempt == MAX_RETRIES - 1:
                 break
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
     raise RuntimeError(f"Gemini embed_content failed after {MAX_RETRIES} attempts: {last_err}")
 
 

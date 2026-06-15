@@ -709,9 +709,7 @@ class Settings:
             occupation_skill_relation_occupation_types=occ_skill_relation_types,
             reranker_parallel_workers=_int_env("RERANKER_PARALLEL_WORKERS", 1, min_v=1, max_v=32),
             reranker_overlap_llm1_llm2=_bool_env("RERANKER_OVERLAP_LLM1_LLM2", default=False),
-            reranker_enable_job_embedding=_bool_env(
-                "RERANKER_ENABLE_JOB_EMBEDDING", default=True
-            ),
+            reranker_enable_job_embedding=_bool_env("RERANKER_ENABLE_JOB_EMBEDDING", default=True),
             reranker_fail_on_job_embedding_error=_bool_env(
                 "RERANKER_FAIL_ON_JOB_EMBEDDING_ERROR", default=False
             ),
@@ -725,12 +723,8 @@ class Settings:
             reranker_job_embedding_l2_normalize=_bool_env(
                 "RERANKER_JOB_EMBEDDING_L2_NORMALIZE", default=True
             ),
-            reranker_job_embedding_batch_size=_int_env(
-                "RERANKER_JOB_EMBEDDING_BATCH_SIZE", 100
-            ),
-            reranker_job_embedding_sleep_s=_float_env(
-                "RERANKER_JOB_EMBEDDING_SLEEP_S", 0.12
-            ),
+            reranker_job_embedding_batch_size=_int_env("RERANKER_JOB_EMBEDDING_BATCH_SIZE", 100),
+            reranker_job_embedding_sleep_s=_float_env("RERANKER_JOB_EMBEDDING_SLEEP_S", 0.12),
             reranker_job_embedding_source=(
                 (os.environ.get("RERANKER_JOB_EMBEDDING_SOURCE") or "llm_classified_skills").strip()
                 or None
