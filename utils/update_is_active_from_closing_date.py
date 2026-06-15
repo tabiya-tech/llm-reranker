@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -125,7 +124,9 @@ def sync_is_active_from_closing_date(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--apply", action="store_true", help="Persist updates to Mongo (default: print counts only)")
+    parser.add_argument(
+        "--apply", action="store_true", help="Persist updates to Mongo (default: print counts only)"
+    )
     parser.add_argument(
         "--missing-policy",
         choices=("keep", "active", "inactive"),

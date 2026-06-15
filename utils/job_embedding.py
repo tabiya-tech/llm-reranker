@@ -12,7 +12,6 @@ from utils.concat_embedding_text import ranked_job_concat_embedding_text
 from utils.gemini_embeddings import (
     EMBEDDING_DIM,
     MODEL_NAME,
-    TASK_TYPE,
     embed_text_list,
     l2_normalize_rows,
 )
@@ -88,9 +87,7 @@ def attach_job_embedding_to_payload(
             vec = l2_normalize_rows(vec)
         row = vec[0]
         if row.size != settings.reranker_job_embedding_dim:
-            raise ValueError(
-                f"expected dim {settings.reranker_job_embedding_dim}, got {row.size}"
-            )
+            raise ValueError(f"expected dim {settings.reranker_job_embedding_dim}, got {row.size}")
         payload["job_embedding"] = [float(x) for x in row.tolist()]
         base_meta = payload.get("llm_reranker_meta")
         if not isinstance(base_meta, dict):

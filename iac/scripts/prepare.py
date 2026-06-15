@@ -53,9 +53,12 @@ def _fetch_secret(project: str, secret_id: str) -> str:
         return response.payload.data.decode("utf-8")
     except NotFound:
         print(f"error: secret '{secret_id}' not found in project '{project}'.", file=sys.stderr)
-        print(f"       Create it with:", file=sys.stderr)
+        print("       Create it with:", file=sys.stderr)
         print(f"         gcloud secrets create {secret_id} --project {project}", file=sys.stderr)
-        print(f"         gcloud secrets versions add {secret_id} --project {project} --data-file=-", file=sys.stderr)
+        print(
+            f"         gcloud secrets versions add {secret_id} --project {project} --data-file=-",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
@@ -72,18 +75,25 @@ def _validate_against_template(template: dict, actual: dict, parent: str = "root
                 print(f"error: {parent}.{key} must be a mapping.")
                 ok = False
             else:
-                ok = _validate_against_template(template_value, actual_value, f"{parent}.{key}") and ok
+                ok = (
+                    _validate_against_template(template_value, actual_value, f"{parent}.{key}")
+                    and ok
+                )
         elif isinstance(template_value, str):
             if _is_regex(template_value):
                 pattern = re.compile(template_value[1:-1], re.DOTALL)
             else:
                 pattern = re.compile(r"[\s\S]+")
             if not re.fullmatch(pattern, str(actual_value)):
-                print(f"error: {parent}.{key} value {actual_value!r} does not match expected pattern {template_value!r}.")
+                print(
+                    f"error: {parent}.{key} value {actual_value!r} does not match expected pattern {template_value!r}."
+                )
                 ok = False
     for key in actual:
         if key not in template:
-            print(f"warning: {parent}.{key} is present but not in the template (will be passed through).")
+            print(
+                f"warning: {parent}.{key} is present but not in the template (will be passed through)."
+            )
     return ok
 
 
@@ -93,7 +103,10 @@ def _validate_stack_config(logical_stack: str, config_content: str) -> dict:
     template = yaml.safe_load(open(template_path))
     actual = yaml.safe_load(config_content)
     if not _validate_against_template(template, actual):
-        print(f"error: stack-config-reranker-{logical_stack} does not satisfy the template. Aborting.", file=sys.stderr)
+        print(
+            f"error: stack-config-reranker-{logical_stack} does not satisfy the template. Aborting.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     print(f"info: stack-config-reranker-{logical_stack} validated.")
     return actual
@@ -112,7 +125,9 @@ def _write_pulumi_yaml(
         if reranker_image:
             config["config"]["tabiya-horizon-reranker-infra:rerankerImage"] = reranker_image
         if reranker_service_image:
-            config["config"]["tabiya-horizon-reranker-infra:rerankerServiceImage"] = reranker_service_image
+            config["config"]["tabiya-horizon-reranker-infra:rerankerServiceImage"] = (
+                reranker_service_image
+            )
 
     path = os.path.join(REPO_ROOT, stack_dir, f"Pulumi.{stack}.yaml")
     with open(path, "w", encoding="utf-8") as f:
@@ -127,20 +142,27 @@ def _main():
     )
     parser.add_argument("--stack", required=True, help="Pulumi stack name (dev / staging / prod)")
     parser.add_argument("--project", required=True, help="GCP project ID for this environment")
-    parser.add_argument("--reranker-image", required=True, help="Reranker Job Docker image URI (commit SHA tag)")
-    parser.add_argument("--reranker-service-image", required=True, help="Reranker Service Docker image URI")
+    parser.add_argument(
+        "--reranker-image", required=True, help="Reranker Job Docker image URI (commit SHA tag)"
+    )
+    parser.add_argument(
+        "--reranker-service-image", required=True, help="Reranker Service Docker image URI"
+    )
     parser.add_argument(
         "--stacks",
         default="all",
         help="Comma-separated logical stacks to prepare (default: all). "
-             "Options: enable-services,infra",
+        "Options: enable-services,infra",
     )
     args = parser.parse_args()
 
     logical_stacks = list(STACKS.keys()) if args.stacks == "all" else args.stacks.split(",")
     for s in logical_stacks:
         if s not in STACKS:
-            print(f"error: unknown logical stack '{s}'. Valid options: {list(STACKS)}", file=sys.stderr)
+            print(
+                f"error: unknown logical stack '{s}'. Valid options: {list(STACKS)}",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     print(f"info: preparing stack '{args.stack}' from project '{args.project}'")

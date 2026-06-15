@@ -148,11 +148,7 @@ def _build_wa_rows_from_work_activity(
         lab = str(row.get("label") or "").strip().lower()
         if lab:
             occ_labels.append(lab)
-    title = (
-        str(((doc.get("classifier_metadata") or {}).get("title")) or "")
-        .strip()
-        .lower()
-    )
+    title = str(((doc.get("classifier_metadata") or {}).get("title")) or "").strip().lower()
     if title:
         occ_labels.append(title)
 
@@ -302,7 +298,9 @@ def run() -> int:
             if used_occ_match:
                 with_occ_match += 1
             elif any(
-                (str(x.get("WA_code") or "").strip() in wa_averages) for x in wa_items if isinstance(x, dict)
+                (str(x.get("WA_code") or "").strip() in wa_averages)
+                for x in wa_items
+                if isinstance(x, dict)
             ):
                 with_avg_match += 1
             else:

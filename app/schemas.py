@@ -93,7 +93,9 @@ def onet_work_activities_path(settings: Settings | None = None) -> Path:
     return settings.resources_dir / "ONET_tasks_WAs_translated.json"
 
 
-def load_job_attributes_schema(path: Path | None = None, *, settings: Settings | None = None) -> JobAttributesSchema:
+def load_job_attributes_schema(
+    path: Path | None = None, *, settings: Settings | None = None
+) -> JobAttributesSchema:
     p = path or job_attributes_schema_path(settings)
     return _load_job_attributes_schema_cached(str(p.resolve()))
 
@@ -134,7 +136,9 @@ def _load_job_attributes_schema_cached(resolved_path: str) -> JobAttributesSchem
     return JobAttributesSchema(attributes=tuple(attrs_out), metadata=meta)
 
 
-def load_onet_work_activities(path: Path | None = None, *, settings: Settings | None = None) -> tuple[OnetWorkActivity, ...]:
+def load_onet_work_activities(
+    path: Path | None = None, *, settings: Settings | None = None
+) -> tuple[OnetWorkActivity, ...]:
     p = path or onet_work_activities_path(settings)
     return _load_onet_work_activities_cached(str(p.resolve()))
 

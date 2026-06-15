@@ -119,7 +119,9 @@ def _resolve_reranker_cutoff(*, country: str, db) -> str | None:
     env_specific = f"{country.upper()}_RERANKER_CUTOFF_DATE"
     env_override = (os.getenv(env_specific) or os.getenv("RERANKER_CUTOFF_DATE") or "").strip()
     if env_override:
-        logger.info("[%s] Cutoff: env override (%s=%s)", country.upper(), env_specific, env_override)
+        logger.info(
+            "[%s] Cutoff: env override (%s=%s)", country.upper(), env_specific, env_override
+        )
         return env_override
 
     state_coll_name = (os.getenv("RERANKER_STATE_COLLECTION") or "reranker_state").strip()
@@ -127,11 +129,7 @@ def _resolve_reranker_cutoff(*, country: str, db) -> str | None:
     last_cutoff = state_doc.get("last_cutoff_date")
     if last_cutoff:
         if isinstance(last_cutoff, datetime):
-            dt = (
-                last_cutoff
-                if last_cutoff.tzinfo
-                else last_cutoff.replace(tzinfo=timezone.utc)
-            )
+            dt = last_cutoff if last_cutoff.tzinfo else last_cutoff.replace(tzinfo=timezone.utc)
             cutoff_str = dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
         else:
             cutoff_str = datetime.fromisoformat(
@@ -152,12 +150,14 @@ def _set_reranker_state(*, country: str, db, jobs_processed: int) -> None:
     state_coll_name = (os.getenv("RERANKER_STATE_COLLECTION") or "reranker_state").strip()
     db[state_coll_name].update_one(
         {"country": country},
-        {"$set": {
-            "country": country,
-            "last_cutoff_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "last_run_at": datetime.now(timezone.utc),
-            "jobs_processed": int(jobs_processed),
-        }},
+        {
+            "$set": {
+                "country": country,
+                "last_cutoff_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "last_run_at": datetime.now(timezone.utc),
+                "jobs_processed": int(jobs_processed),
+            }
+        },
         upsert=True,
     )
     logger.info("[%s] Reranker state saved (jobs=%s)", country.upper(), jobs_processed)
@@ -206,9 +206,7 @@ def run() -> None:
         settings,
         bulk_write_batch_size=batch_size,
         cli_limit=args.limit,
-        log_prompt_debug=(
-            args.log_llm1_prompt or args.log_llm2_prompt or args.log_llm3_prompt
-        ),
+        log_prompt_debug=(args.log_llm1_prompt or args.log_llm2_prompt or args.log_llm3_prompt),
         invocation="batch",
     )
 
@@ -265,9 +263,7 @@ def run() -> None:
     is_active_sync_enabled = _env_bool("RERANKER_SYNC_IS_ACTIVE_FROM_CLOSING_DATE", True)
 
     try:
-        log_prompt_debug = (
-            args.log_llm1_prompt or args.log_llm2_prompt or args.log_llm3_prompt
-        )
+        log_prompt_debug = args.log_llm1_prompt or args.log_llm2_prompt or args.log_llm3_prompt
         workers = settings.reranker_parallel_workers
         use_parallel = workers > 1 and not log_prompt_debug
         if workers > 1 and log_prompt_debug:
@@ -342,9 +338,7 @@ def run() -> None:
                     query=query,
                     settings=settings,
                 ):
-                    futures = [
-                        executor.submit(_run_one, d, _next_job_label()) for d in chunk
-                    ]
+                    futures = [executor.submit(_run_one, d, _next_job_label()) for d in chunk]
                     for fut in as_completed(futures):
                         try:
                             r = fut.result()
@@ -405,7 +399,10 @@ def run() -> None:
         logger.info(
             "Batch %s | documents=%s upserts_queued=%s job_errors=%s elapsed_s=%.3f",
             "complete" if _run_error is None else "FAILED",
-            n, upsert_ops, job_errors, batch_s,
+            n,
+            upsert_ops,
+            job_errors,
+            batch_s,
         )
         if job_errors:
             logger.warning(
@@ -415,9 +412,13 @@ def run() -> None:
         complete_ranking_run_log(
             run_id,
             success=_run_error is None,
-            jobs_processed=n, upserts_queued=upsert_ops,
-            llm1_calls=llm1_calls, llm2_calls=llm2_calls, llm3_calls=llm3_calls,
-            elapsed_s=batch_s, error_message=_run_error,
+            jobs_processed=n,
+            upserts_queued=upsert_ops,
+            llm1_calls=llm1_calls,
+            llm2_calls=llm2_calls,
+            llm3_calls=llm3_calls,
+            elapsed_s=batch_s,
+            error_message=_run_error,
             settings=settings,
         )
         if enrichment_enabled and n > 0:
@@ -454,7 +455,9 @@ def run() -> None:
                     _run_error = f"RuntimeError: post enrichment failed: {e}"
                     logger.exception(_run_error)
                 else:
-                    logger.warning("Post-step | work_activities_enrichment | skipped-on-error | %s", e)
+                    logger.warning(
+                        "Post-step | work_activities_enrichment | skipped-on-error | %s", e
+                    )
         if is_active_sync_enabled and _run_error is None:
             try:
                 t0 = time.perf_counter()

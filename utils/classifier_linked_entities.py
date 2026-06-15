@@ -203,9 +203,7 @@ def extract_linked_entity_candidates(
             ):
                 by_key[key] = cand
     merged = list(by_key.values())
-    return _dedupe_linked_entities_by_label(
-        merged, s.classified_linked_entity_label_dedupe_types
-    )
+    return _dedupe_linked_entities_by_label(merged, s.classified_linked_entity_label_dedupe_types)
 
 
 def group_linked_entities_by_type(

@@ -9,14 +9,21 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
-from app.schemas import JobAttributesResult, OccupationSkillsRelevanceResult, load_onet_work_activities
+from app.schemas import (
+    JobAttributesResult,
+    OccupationSkillsRelevanceResult,
+    load_onet_work_activities,
+)
 from utils.classifier_linked_entities import (
     EscoSkillCandidate,
     LinkedEntityCandidate,
     MappedEscoSkills,
     group_linked_entities_by_type,
 )
-from utils.occupation_to_skills_mapping import occupation_block_skill_counts, tabiya_occupation_id_for_candidate
+from utils.occupation_to_skills_mapping import (
+    occupation_block_skill_counts,
+    tabiya_occupation_id_for_candidate,
+)
 from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap, cell_to_esco_uuid
 from utils.scraper_enrichment_fields import copy_scraper_enrichment_fields
 from utils.skill_groups import derive_skill_groups_origin_uuids
@@ -30,7 +37,7 @@ def _classified_skill_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for c in candidates:
-        esco = ((c.concept_uuid or "").strip().lower() or cell_to_esco_uuid(c.uri) or None)
+        esco = (c.concept_uuid or "").strip().lower() or cell_to_esco_uuid(c.uri) or None
         rows.append(
             {
                 "label": c.label,
@@ -56,7 +63,7 @@ def _classified_occupation_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for c in candidates:
-        esco = ((c.concept_uuid or "").strip().lower() or cell_to_esco_uuid(c.uri) or None)
+        esco = (c.concept_uuid or "").strip().lower() or cell_to_esco_uuid(c.uri) or None
         tabiya_occ: str | None = None
         if occupations_bridge is not None and occupations_all_ids is not None:
             tabiya_occ = tabiya_occupation_id_for_candidate(
@@ -92,7 +99,7 @@ def _skill_row_from_candidate(
     include_score: bool = True,
 ) -> dict[str, Any]:
     uri = (c.uri or "").strip()
-    esco_l = ((c.esco_uuid or "").strip().lower() or cell_to_esco_uuid(uri) or None)
+    esco_l = (c.esco_uuid or "").strip().lower() or cell_to_esco_uuid(uri) or None
     row: dict[str, Any] = {
         "label": c.label,
         "uri": uri or None,
@@ -252,9 +259,7 @@ def occupation_skills_relevance_menu_size(items: list[dict[str, Any]]) -> int:
 def classifier_skill_esco_uuids_lower(candidates: list[EscoSkillCandidate]) -> frozenset[str]:
     """Lowercased ESCO uuid strings from classifier skill linked entities (for LLM3 menu filtering)."""
     return frozenset(
-        (c.esco_uuid or "").strip().lower()
-        for c in candidates
-        if (c.esco_uuid or "").strip()
+        (c.esco_uuid or "").strip().lower() for c in candidates if (c.esco_uuid or "").strip()
     )
 
 
@@ -321,7 +326,9 @@ def filter_occupation_skills_nested_by_signal_include(
     return out
 
 
-def _llm3_menu_skill_sort_tuple(skill: dict[str, Any], bi: int, si: int) -> tuple[int, float, int, int, int]:
+def _llm3_menu_skill_sort_tuple(
+    skill: dict[str, Any], bi: int, si: int
+) -> tuple[int, float, int, int, int]:
     """
     Sort key for LLM3 menu rows: stronger CSV signalling first, then essential over optional,
     then document order. Ascending sort = higher priority first.
@@ -404,9 +411,7 @@ def subset_occupation_nested_for_llm3_prompt(
     if filt != "off":
         max_rank = {"high": 0, "medium": 1, "low": 2}.get(filt)
         if max_rank is not None:
-            entries = [
-                e for e in entries if _llm3_signalling_label_rank(e["skill"]) <= max_rank
-            ]
+            entries = [e for e in entries if _llm3_signalling_label_rank(e["skill"]) <= max_rank]
 
     entries.sort(key=lambda e: e["_sort"])
     entries = entries[:budget]
@@ -463,7 +468,9 @@ def apply_occupation_skills_listing_relevance(
     """
     decision_map: dict[tuple[str, str], bool] = {}
     for d in result.decisions:
-        decision_map[(d.tabiya_occupation_id.strip().lower(), d.skill_id.strip().lower())] = d.is_relevant
+        decision_map[(d.tabiya_occupation_id.strip().lower(), d.skill_id.strip().lower())] = (
+            d.is_relevant
+        )
 
     out = deepcopy(items)
     for block in out:
@@ -530,6 +537,7 @@ def occupation_to_skills_with_meta(items: list[dict[str, Any]]) -> dict[str, Any
 
 def build_llm_reranker_meta(settings: Settings) -> dict[str, Any]:
     return {
+        "schema_version": PIPELINE_SCHEMA_VERSION,
         "skill_ranker_model": settings.gemini_model,
         "occupation_skills_relevance_model": settings.gemini_model,
         "job_attributes_model": settings.gemini_model,

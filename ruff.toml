@@ -1,0 +1,45 @@
+# Ruff configuration for the LLM Re-ranker project.
+# Docs: https://docs.astral.sh/ruff/
+#
+# Linting is enforced in CI (`ruff check`). Formatting is checked but currently
+# advisory (`ruff format --check` is non-blocking) so the existing hand-aligned
+# style can be migrated deliberately rather than in one large reformat.
+#
+# Mirrors the proven sibling `scraper/ruff.toml` — same rule selection, same
+# pragmatic ignores, adjusted for this project (Python 3.11 runtime, see
+# `Dockerfile` and `requirements.txt`).
+
+target-version = "py311"
+line-length = 100
+
+# Vendored virtualenvs, generated caches, the IaC sub-projects' venvs, notebooks,
+# and resource data files (CSV / JSON / Markdown prompt templates) are not ours
+# to lint or format.
+extend-exclude = [
+    "**/venv",
+    "**/.venv",
+    "iac/**/venv",
+    "iac/**/.venv",
+    "*.ipynb",
+    "resources",
+]
+
+[lint]
+# Start from Ruff's default rules (pyflakes `F` + a pragmatic subset of
+# pycodestyle `E`). These catch real defects: undefined names, unused
+# imports/variables, bare excepts, etc.
+select = ["E4", "E7", "E9", "F"]
+
+# Deliberate, pervasive patterns in this codebase:
+#   E402 — modules manipulate sys.path / load .env before importing config,
+#          so imports intentionally appear after top-of-file statements.
+#   E701 — compact one-line `if cond: return X` mappings (e.g. cell parsers,
+#          short helper tables) are intentional and readable here.
+ignore = ["E402", "E701"]
+
+[lint.per-file-ignores]
+# Test modules may keep unused imports for fixtures/parametrization clarity.
+"tests/*" = []
+
+[format]
+quote-style = "preserve"

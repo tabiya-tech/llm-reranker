@@ -127,7 +127,12 @@ def _infer_signalling_value_column(fieldnames: list[str]) -> str | None:
 
 def _infer_signalling_label_column(fieldnames: list[str]) -> str | None:
     lower = {h.lower().replace(" ", "_"): h for h in fieldnames if h and str(h).strip()}
-    for key in ("signallingvaluelabel", "signalingvaluelabel", "signal_label", "signalling_value_label"):
+    for key in (
+        "signallingvaluelabel",
+        "signalingvaluelabel",
+        "signal_label",
+        "signalling_value_label",
+    ):
         if key in lower:
             return lower[key]
     return None
@@ -169,7 +174,9 @@ def _merge_signalling_cells(
         return prev
     if not prev.get("signalling_value") and not prev.get("signalling_label"):
         return cur
-    ka = _signalling_strength_key(prev.get("signalling_label", ""), prev.get("signalling_value", ""))
+    ka = _signalling_strength_key(
+        prev.get("signalling_label", ""), prev.get("signalling_value", "")
+    )
     kc = _signalling_strength_key(cur["signalling_label"], cur["signalling_value"])
     return prev if ka <= kc else cur
 
@@ -497,7 +504,9 @@ def _esco_bridge_keys_for_occupation_row(le: dict[str, Any]) -> list[str]:
     return keys
 
 
-def _bridge_tabiya_for_key(k: str, bridge: Mapping[str, str], all_ids: frozenset[str]) -> str | None:
+def _bridge_tabiya_for_key(
+    k: str, bridge: Mapping[str, str], all_ids: frozenset[str]
+) -> str | None:
     tid = bridge.get(k)
     if tid is None and k in all_ids:
         tid = k
@@ -550,9 +559,7 @@ def tabiya_occupation_id_for_candidate(
         le["similarity_score"] = c.similarity_score
     if c.concept_uuid:
         le["originUUID"] = c.concept_uuid
-    return resolve_occupation_tabiya_id_for_skill_relations(
-        le, bridge, all_ids, settings=settings
-    )
+    return resolve_occupation_tabiya_id_for_skill_relations(le, bridge, all_ids, settings=settings)
 
 
 @dataclass
@@ -704,9 +711,7 @@ def resolve_tabiya_occupation_ids_for_relations(
     mode = (s.occupation_relation_lookup or "tabiya_bridge").strip().lower()
     for le in _classified_occupation_dicts_for_taxonomy(classified_doc, s):
         if mode == "esco_uuid_bridge":
-            tid = resolve_occupation_tabiya_id_for_skill_relations(
-                le, bridge, all_ids, settings=s
-            )
+            tid = resolve_occupation_tabiya_id_for_skill_relations(le, bridge, all_ids, settings=s)
             if tid:
                 tl = tid.strip().lower()
                 if tl not in seen:
@@ -824,11 +829,7 @@ def build_occupation_to_skills_nested(
                 if skills_uuid_tabiya_map:
                     lab = skills_uuid_tabiya_map.label_for_skill_key(esco)
                 if not lab:
-                    lab = (
-                        skill_labels.get(sid_l)
-                        or skill_labels.get(esco)
-                        or skill_labels.get(sid)
-                    )
+                    lab = skill_labels.get(sid_l) or skill_labels.get(esco) or skill_labels.get(sid)
                 if lab:
                     lab = str(lab).strip()
                 if not lab:
@@ -840,9 +841,9 @@ def build_occupation_to_skills_nested(
                     "uri": esco_skill_uri_for_uuid(esco),
                     "relation_type": rel_t,
                 }
-                sig = (sig_root.get(tid_l, {}) or {}).get(sid_l) or (sig_root.get(tid_l, {}) or {}).get(
-                    sid.strip().lower()
-                )
+                sig = (sig_root.get(tid_l, {}) or {}).get(sid_l) or (
+                    sig_root.get(tid_l, {}) or {}
+                ).get(sid.strip().lower())
                 if sig:
                     sv = (sig.get("signalling_value") or "").strip()
                     sl = (sig.get("signalling_label") or "").strip()

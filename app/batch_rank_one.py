@@ -47,7 +47,9 @@ def _elapsed_s(start: float) -> float:
     return time.perf_counter() - start
 
 
-def _classified_occupation_labels_for_log(classified_doc: dict[str, Any], settings: Settings) -> str:
+def _classified_occupation_labels_for_log(
+    classified_doc: dict[str, Any], settings: Settings
+) -> str:
     by_t = group_linked_entities_by_type(classified_doc, settings).get("occupation", [])
     if not by_t:
         return "—"
@@ -55,7 +57,9 @@ def _classified_occupation_labels_for_log(classified_doc: dict[str, Any], settin
     for i, c in enumerate(by_t, start=1):
         lab = (c.label or "").strip() or "(no label)"
         cu = (c.concept_uuid or "").strip()
-        parts.append(f"{i}:{lab}" + (f" ({cu[:8]}…)" if len(cu) >= 8 else (f" ({cu})" if cu else "")))
+        parts.append(
+            f"{i}:{lab}" + (f" ({cu[:8]}…)" if len(cu) >= 8 else (f" ({cu})" if cu else ""))
+        )
     return "; ".join(parts)
 
 
