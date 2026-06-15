@@ -1,4 +1,5 @@
 name: tabiya-horizon-reranker-enable-services
+organization: tabiya-tech
 runtime:
   name: python
   options:

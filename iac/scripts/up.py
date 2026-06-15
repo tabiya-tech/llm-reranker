@@ -25,6 +25,8 @@ import pulumi.automation as auto
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 IAC_DIR = REPO_ROOT / "iac"
 
+PULUMI_ORG = "tabiya-tech"
+
 DEPLOY_ORDER = [
     "enable-services",
     "infra",
@@ -47,10 +49,18 @@ def run_up(stack: str, module: str):
         print(f"error: module directory not found: {work_dir}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"\ninfo: ── deploying {module} (stack: {stack}) ──")
+    # Always pass a fully-qualified stack name so the Pulumi Automation API
+    # cannot fall back to the user's default org. Without this, a personal
+    # access token (e.g. CI's PULUMI_ACCESS_TOKEN scoped to an individual
+    # user) would silently target `<user>/<project>/<stack>` instead of the
+    # real `tabiya-tech/<project>/<stack>`. Allow callers to pass a name
+    # with an explicit org prefix to override (e.g. for testing).
+    fully_qualified = stack if "/" in stack else f"{PULUMI_ORG}/{stack}"
+
+    print(f"\ninfo: ── deploying {module} (stack: {fully_qualified}) ──")
 
     stack_obj = auto.create_or_select_stack(
-        stack_name=stack,
+        stack_name=fully_qualified,
         work_dir=str(work_dir),
     )
 
