@@ -20,9 +20,10 @@ config:
   tabiya-horizon-reranker-infra:overlapLlm1Llm2: <0|1>
   tabiya-horizon-reranker-infra:classifiedLinkedEntityLabelDedupeTypes: <comma-list>
   tabiya-horizon-reranker-infra:enableJobEmbedding: <0|1>
-  tabiya-horizon-reranker-infra:concatWhiteningEnabled: <0|1>
-  tabiya-horizon-reranker-infra:concatWhiteningPath: <artifact-path>
-  tabiya-horizon-reranker-infra:concatWhiteningRequired: <0|1>
+  # Optional — empty/unset defaults to flag-off in iac/infra/__main__.py (concatWhiteningEnabled=0).
+  tabiya-horizon-reranker-infra:concatWhiteningEnabled: /^(|0|1)$/
+  tabiya-horizon-reranker-infra:concatWhiteningPath: /^(|resources\/concat_whitening_gemini\.npz|[\s\S]+)$/
+  tabiya-horizon-reranker-infra:concatWhiteningRequired: /^(|0|1)$/
 
   # Cloud Run Job — resource limits
   tabiya-horizon-reranker-infra:jobMemory: <memory-limit>
