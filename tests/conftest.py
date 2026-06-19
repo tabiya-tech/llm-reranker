@@ -91,6 +91,10 @@ _RERANKER_ENV_VARS = (
     "RERANKER_JOB_EMBEDDING_BATCH_SIZE",
     "RERANKER_JOB_EMBEDDING_SLEEP_S",
     "RERANKER_JOB_EMBEDDING_SOURCE",
+    "RERANKER_CONCAT_WHITENING_ENABLED",
+    "RERANKER_CONCAT_WHITENING_PATH",
+    "RERANKER_CONCAT_WHITENING_REQUIRED",
+    "RERANKER_CONCAT_WHITENING_EXPECTED_SHA256",
     "CLASSIFIED_LINKED_ENTITY_TYPES",
     "CLASSIFIED_LINKED_ENTITY_MIN_SIMILARITY",
     "CLASSIFIER_LINKED_ENTITY_MIN_SIMILARITY",
@@ -132,6 +136,12 @@ def _clear_settings_caches() -> None:
 
         if hasattr(occupation_to_skills_mapping, "_load_occupations_lookup_cached"):
             occupation_to_skills_mapping._load_occupations_lookup_cached.cache_clear()
+    except Exception:
+        pass
+    try:
+        from utils import concat_whitening
+
+        concat_whitening.reset_concat_whitening_cache()
     except Exception:
         pass
 

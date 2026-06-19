@@ -379,6 +379,30 @@ def _resolve_skills_csv_path(
     return under_root if under_root.is_file() else under_res
 
 
+def _resolve_concat_whitening_path(
+    repo_root: Path,
+    resources_dir: Path,
+    raw: str | None,
+) -> Path:
+    """
+    Path to concat whitening artifact (``concat_whitening_gemini.npz``).
+
+    ``RERANKER_CONCAT_WHITENING_PATH``; default ``resources/concat_whitening_gemini.npz``.
+    """
+    default_name = "concat_whitening_gemini.npz"
+    if raw is None or not str(raw).strip():
+        return (resources_dir / default_name).resolve()
+    s = str(raw).strip()
+    p = Path(s)
+    if p.is_absolute():
+        return p.resolve()
+    under_res = (resources_dir / p).resolve()
+    if under_res.is_file():
+        return under_res
+    under_root = (repo_root / p).resolve()
+    return under_root if under_root.is_file() else under_res
+
+
 def _resolve_skill_hierarchy_csv_path(
     repo_root: Path,
     resources_dir: Path,
@@ -556,6 +580,11 @@ class Settings:
     reranker_job_embedding_sleep_s: float
     reranker_job_embedding_source: str | None
 
+    # Concat whitening (v4 parity): offline transform before writing job_embedding.
+    reranker_concat_whitening_enabled: bool
+    reranker_concat_whitening_path: Path
+    reranker_concat_whitening_required: bool
+
     # Classifier ``classification.entities[].linked_entities`` with taxonomy ``esco`` (fixed).
     classified_linked_entity_types: tuple[str, ...]
     # Optional filter on ``linked_entities.similarity_score`` (applies to skills + occupations).
@@ -610,6 +639,10 @@ class Settings:
         skill_hierarchy_raw = os.environ.get("SKILL_HIERARCHY_CSV")
         skill_hierarchy_csv_path = _resolve_skill_hierarchy_csv_path(
             root, resources, skill_hierarchy_raw
+        )
+        concat_whitening_raw = os.environ.get("RERANKER_CONCAT_WHITENING_PATH")
+        concat_whitening_path = _resolve_concat_whitening_path(
+            root, resources, concat_whitening_raw
         )
         skills_include_desc = _bool_env("SKILLS_CSV_INCLUDE_DESCRIPTIONS", default=False)
         skills_desc_col = (os.environ.get("SKILLS_CSV_DESCRIPTION_COLUMN") or "").strip()
@@ -729,6 +762,13 @@ class Settings:
                 (os.environ.get("RERANKER_JOB_EMBEDDING_SOURCE") or "llm_classified_skills").strip()
                 or None
             ),
+            reranker_concat_whitening_enabled=_bool_env(
+                "RERANKER_CONCAT_WHITENING_ENABLED", default=False
+            ),
+            reranker_concat_whitening_path=concat_whitening_path,
+            reranker_concat_whitening_required=_bool_env(
+                "RERANKER_CONCAT_WHITENING_REQUIRED", default=True
+            ),
             classified_linked_entity_types=_entity_types_tuple(
                 os.environ.get("CLASSIFIED_LINKED_ENTITY_TYPES")
             ),
@@ -834,6 +874,8 @@ def log_ranker_run_configuration(
         "RERANKER_PARALLEL_WORKERS=%s | parallel_batch=%s | RERANKER_OVERLAP_LLM1_LLM2=%s | BULK_WRITE_BATCH_SIZE=%s | "
         "RERANKER_RUN_WA_ENRICHMENT=%s | RERANKER_FAIL_ON_WA_ENRICHMENT_ERROR=%s | "
         "RERANKER_SYNC_IS_ACTIVE_FROM_CLOSING_DATE=%s | "
+        "RERANKER_CONCAT_WHITENING_ENABLED=%s | RERANKER_CONCAT_WHITENING_PATH=%s | "
+        "RERANKER_CONCAT_WHITENING_REQUIRED=%s | "
         "cli_limit=%s | log_prompt_debug=%s",
         invocation,
         loc,
@@ -867,6 +909,9 @@ def log_ranker_run_configuration(
         int(wa_run),
         int(wa_fail),
         int(sync_is_active),
+        int(settings.reranker_concat_whitening_enabled),
+        settings.reranker_concat_whitening_path,
+        int(settings.reranker_concat_whitening_required),
         cli_limit if invocation == "batch" else 0,
         int(log_prompt_debug),
     )
