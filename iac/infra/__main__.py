@@ -22,6 +22,9 @@ Required Pulumi config:
   tabiya-horizon-reranker-infra:overlapLlm1Llm2                       — "0" or "1" (default: 1)
   tabiya-horizon-reranker-infra:classifiedLinkedEntityLabelDedupeTypes — comma list (default: occupation,skill)
   tabiya-horizon-reranker-infra:enableJobEmbedding                    — "0" or "1" (default: 1)
+  tabiya-horizon-reranker-infra:concatWhiteningEnabled                — "0" or "1" (default: 0)
+  tabiya-horizon-reranker-infra:concatWhiteningPath                   — artifact path (default: resources/concat_whitening_gemini.npz)
+  tabiya-horizon-reranker-infra:concatWhiteningRequired               — "0" or "1" (default: 1)
   tabiya-horizon-reranker-infra:jobMemory                             — default: 2Gi
   tabiya-horizon-reranker-infra:jobCpu                                — default: 1000m
   tabiya-horizon-reranker-infra:jobTimeout                            — default: 14400s
@@ -60,6 +63,9 @@ classified_linked_entity_label_dedupe_types = (
     config.get("classifiedLinkedEntityLabelDedupeTypes") or "occupation,skill"
 )
 enable_job_embedding = config.get("enableJobEmbedding") or "1"
+concat_whitening_enabled = config.get("concatWhiteningEnabled") or "0"
+concat_whitening_path = config.get("concatWhiteningPath") or "resources/concat_whitening_gemini.npz"
+concat_whitening_required = config.get("concatWhiteningRequired") or "1"
 
 job_memory = config.get("jobMemory") or "2Gi"
 job_cpu = config.get("jobCpu") or "1000m"
@@ -94,6 +100,9 @@ reranker_job = create_reranker_job(
     overlap_llm1_llm2=overlap_llm1_llm2,
     classified_linked_entity_label_dedupe_types=classified_linked_entity_label_dedupe_types,
     enable_job_embedding=enable_job_embedding,
+    concat_whitening_enabled=concat_whitening_enabled,
+    concat_whitening_path=concat_whitening_path,
+    concat_whitening_required=concat_whitening_required,
     memory=job_memory,
     cpu=job_cpu,
     timeout=job_timeout,

@@ -18,6 +18,9 @@ def create_reranker_job(
     overlap_llm1_llm2: str,
     classified_linked_entity_label_dedupe_types: str,
     enable_job_embedding: str,
+    concat_whitening_enabled: str,
+    concat_whitening_path: str,
+    concat_whitening_required: str,
     memory: str,
     cpu: str,
     timeout: str,
@@ -77,6 +80,18 @@ def create_reranker_job(
                             gcp.cloudrunv2.JobTemplateTemplateContainerEnvArgs(
                                 name="RERANKER_ENABLE_JOB_EMBEDDING",
                                 value=enable_job_embedding,
+                            ),
+                            gcp.cloudrunv2.JobTemplateTemplateContainerEnvArgs(
+                                name="RERANKER_CONCAT_WHITENING_ENABLED",
+                                value=concat_whitening_enabled,
+                            ),
+                            gcp.cloudrunv2.JobTemplateTemplateContainerEnvArgs(
+                                name="RERANKER_CONCAT_WHITENING_PATH",
+                                value=concat_whitening_path,
+                            ),
+                            gcp.cloudrunv2.JobTemplateTemplateContainerEnvArgs(
+                                name="RERANKER_CONCAT_WHITENING_REQUIRED",
+                                value=concat_whitening_required,
                             ),
                         ],
                     )

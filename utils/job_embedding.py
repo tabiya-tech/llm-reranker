@@ -9,6 +9,11 @@ from typing import Any
 from app.config import Settings
 
 from utils.concat_embedding_text import ranked_job_concat_embedding_text
+from utils.concat_whitening import (
+    concat_whitening_artifact_sha256,
+    concat_whitening_target,
+    whiten_concat_rows,
+)
 from utils.gemini_embeddings import (
     EMBEDDING_DIM,
     MODEL_NAME,
@@ -28,6 +33,7 @@ def build_embedding_section(
     dim: int = EMBEDDING_DIM,
     source: str | None = DEFAULT_EMBEDDING_SOURCE,
     loaded_at: datetime | None = None,
+    whitening: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Embedding provenance block nested under ``llm_reranker_meta.embedding``."""
     section: dict[str, Any] = {
@@ -37,6 +43,8 @@ def build_embedding_section(
     }
     if source:
         section["source"] = source
+    if whitening:
+        section["whitening"] = whitening
     return section
 
 
@@ -45,6 +53,7 @@ def merge_embedding_into_llm_reranker_meta(
     *,
     settings: Settings,
     loaded_at: datetime | None = None,
+    whitening: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Unify embedding provenance into ``llm_reranker_meta`` (replaces top-level ``embedding_meta``)."""
     out = dict(llm_reranker_meta)
@@ -53,6 +62,7 @@ def merge_embedding_into_llm_reranker_meta(
         dim=settings.reranker_job_embedding_dim,
         source=settings.reranker_job_embedding_source,
         loaded_at=loaded_at,
+        whitening=whitening,
     )
     return out
 
@@ -85,16 +95,38 @@ def attach_job_embedding_to_payload(
         )
         if settings.reranker_job_embedding_l2_normalize:
             vec = l2_normalize_rows(vec)
-        row = vec[0]
-        if row.size != settings.reranker_job_embedding_dim:
-            raise ValueError(f"expected dim {settings.reranker_job_embedding_dim}, got {row.size}")
-        payload["job_embedding"] = [float(x) for x in row.tolist()]
+        raw_row = vec[0]
+        if raw_row.size != settings.reranker_job_embedding_dim:
+            raise ValueError(
+                f"expected dim {settings.reranker_job_embedding_dim}, got {raw_row.size}"
+            )
+
+        loaded_at = datetime.now(timezone.utc)
+        whitening_meta: dict[str, Any] | None = None
+
+        if settings.reranker_concat_whitening_enabled:
+            whitened = whiten_concat_rows(vec, settings=settings)
+            whitened_row = whitened[0]
+            payload["raw_embedding"] = [float(x) for x in raw_row.tolist()]
+            payload["job_embedding"] = [float(x) for x in whitened_row.tolist()]
+            artifact_sha = concat_whitening_artifact_sha256(settings=settings)
+            whitening_meta = {
+                "enabled": True,
+                "artifact_sha256": artifact_sha,
+                "target": concat_whitening_target(settings=settings),
+                "applied_at": loaded_at.isoformat(),
+            }
+        else:
+            payload["job_embedding"] = [float(x) for x in raw_row.tolist()]
+
         base_meta = payload.get("llm_reranker_meta")
         if not isinstance(base_meta, dict):
             base_meta = {}
         payload["llm_reranker_meta"] = merge_embedding_into_llm_reranker_meta(
             base_meta,
             settings=settings,
+            loaded_at=loaded_at,
+            whitening=whitening_meta,
         )
     except Exception as exc:
         if settings.reranker_fail_on_job_embedding_error:
