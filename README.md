@@ -77,6 +77,40 @@ python main.py
 2. **`onet_work_activities`** — Model output includes work-activity context; after a successful batch, optional enrichment can fill or adjust **ONET-style work activities** (importance/level) using the occupation taxonomy reference JSON, when enabled in `.env` (`RERANKER_RUN_WA_ENRICHMENT` and related variables in `.env.example`).
 3. **`is_active` and closing dates** — **`is_active`** can be synced from **`classifier_metadata.closing_date`** (open vs closed relative to today) after a successful batch when enabled in `.env`, or by running `python utils/update_is_active_from_closing_date.py` manually. No documents are deleted; only the flag is updated.
 
+## Countries
+
+`TARGET_COUNTRY` (`zambia` | `kenya` | `south_africa` | `argentina`) is the batch/state
+key and picks the country name used in the prompts. Everything else that varies per
+country is env-driven, so **one image serves every country** — the GCP Workflow supplies
+the differences as env overrides on each Cloud Run Job execution.
+
+### Argentina
+
+Argentina's jobs and taxonomy are in Spanish. No code path differs; only configuration:
+
+```bash
+TARGET_COUNTRY=argentina
+MONGODB_DATABASE=ArgentinaJobs_V2
+MONGODB_SOURCE_COLLECTION=classified_jobs
+
+# Argentine Spanish taxonomy — Tabiya (ESCO 1.1.1), locale AR-es
+OCCUPATIONS_CSV=argentina/occupations.csv
+SKILLS_CSV=argentina/skills.csv
+OCCUPATION_TO_SKILL_RELATIONS_CSV=argentina/occupation_to_skill_relations.csv
+SKILL_HIERARCHY_CSV=argentina/skill_hierarchy.csv
+```
+
+Those four files live in `resources/argentina/`. Their ESCO relation graph is identical
+to the default files (the same 123,788 `escooccupation` rows, the same signalling-value
+distribution); what changes is the Spanish `PREFERREDLABEL` text that LLM1's skill menu
+and LLM2's occupation line are built from. `tests/test_argentina_resources.py` guards
+the drop — presence, required columns, and the `AR-es` locale in `model_info.csv`.
+
+`RERANKER_PREFER_TRANSLATION` (default `1`) makes the LLM prompts use
+`translation.text_en` / `translation.fields_en` from `classified_jobs` when a document
+carries them. Documents without a `translation` field fall through to the Spanish text
+unchanged, so the flag is safe to leave on either way.
+
 ## Deployment
 
 | Mode | Entrypoint | GCP |

@@ -63,6 +63,29 @@ Bootstrap stack configs with:
 python iac/scripts/configure.py --stack dev --project horizon-dev-481316
 ```
 
+## Per-country configuration
+
+Nothing country-specific is baked into the deployed Job. `TARGET_COUNTRY`,
+`MONGODB_DATABASE`, and the taxonomy CSV paths are supplied by the `job-pipeline` GCP
+Workflow as env overrides on each execution, so one image serves Zambia, Kenya, and
+Argentina:
+
+```bash
+gcloud run jobs execute llm-reranker --region us-central1 \
+  --update-env-vars \
+TARGET_COUNTRY=argentina,MONGODB_DATABASE=ArgentinaJobs_V2,\
+OCCUPATIONS_CSV=argentina/occupations.csv,SKILLS_CSV=argentina/skills.csv,\
+OCCUPATION_TO_SKILL_RELATIONS_CSV=argentina/occupation_to_skill_relations.csv,\
+SKILL_HIERARCHY_CSV=argentina/skill_hierarchy.csv
+```
+
+The Argentine Spanish taxonomy ships in the image at `resources/argentina/` — see the
+Argentina section of the repo README.
+
+If a stack should *default* to one country instead, set the optional `extraEnv` mapping
+in its stack config (see `iac/templates/stack_config.infra.template.yaml`). Leaving it
+unset produces the same Job definition as before the option existed.
+
 ## Local deployment
 
 ```bash

@@ -30,6 +30,21 @@ Required Pulumi config:
   tabiya-horizon-reranker-infra:jobTimeout                            — default: 14400s
   tabiya-horizon-reranker-infra:jobMaxRetries                         — default: 3
 
+  # Optional: extra env vars baked into the Cloud Run Job (map of name -> value).
+  # Country selection normally arrives as a per-execution override from the GCP
+  # Workflow (TARGET_COUNTRY, MONGODB_DATABASE, and the taxonomy CSV paths), so one
+  # image serves every country. Use this only for a stack that should default to one
+  # country, e.g. an Argentina-only stack:
+  #   tabiya-horizon-reranker-infra:extraEnv:
+  #     TARGET_COUNTRY: argentina
+  #     MONGODB_DATABASE: ArgentinaJobs_V2
+  #     OCCUPATIONS_CSV: argentina/occupations.csv
+  #     SKILLS_CSV: argentina/skills.csv
+  #     OCCUPATION_TO_SKILL_RELATIONS_CSV: argentina/occupation_to_skill_relations.csv
+  #     SKILL_HIERARCHY_CSV: argentina/skill_hierarchy.csv
+  # Unset (the default) leaves the deployed job unchanged.
+  tabiya-horizon-reranker-infra:extraEnv                              — default: {}
+
   # Service resources
   tabiya-horizon-reranker-infra:serviceMemory                         — default: 4Gi
   tabiya-horizon-reranker-infra:serviceCpu                            — default: 2
@@ -66,6 +81,8 @@ enable_job_embedding = config.get("enableJobEmbedding") or "1"
 concat_whitening_enabled = config.get("concatWhiteningEnabled") or "0"
 concat_whitening_path = config.get("concatWhiteningPath") or "resources/concat_whitening_gemini.npz"
 concat_whitening_required = config.get("concatWhiteningRequired") or "1"
+
+extra_env = config.get_object("extraEnv") or {}
 
 job_memory = config.get("jobMemory") or "2Gi"
 job_cpu = config.get("jobCpu") or "1000m"
@@ -107,6 +124,7 @@ reranker_job = create_reranker_job(
     cpu=job_cpu,
     timeout=job_timeout,
     max_retries=job_max_retries,
+    extra_env=extra_env,
 )
 pulumi.export("rerankerJobName", reranker_job.name)
 
