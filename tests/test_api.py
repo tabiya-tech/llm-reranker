@@ -101,4 +101,11 @@ def test_health_endpoint_returns_ok(make_settings, monkeypatch):
     with TestClient(api.app) as client:
         resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok", "taxonomy_loaded": True}
+    # Health also reports which languages this image serves and which packs are loaded.
+    assert resp.json() == {
+        "status": "ok",
+        "taxonomy_loaded": True,
+        "default_language": "en",
+        "supported_languages": ["en", "es"],
+        "loaded_languages": ["en"],
+    }

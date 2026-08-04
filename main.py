@@ -31,6 +31,7 @@ from app.database import (
     iter_classified_jobs_chunks,
     update_ranking_run_progress,
 )
+from app.languages import LANGUAGE_REGISTRY
 from app.logging_config import configure_logging
 from app.pipeline import load_taxonomy_context
 from utils.update_is_active_from_closing_date import sync_is_active_from_closing_date
@@ -88,6 +89,16 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "Only process classified_jobs whose job_id is not yet in MONGODB_TARGET_COLLECTION "
             "(same as RERANKER_SKIP_ALREADY_RANKED=1)."
+        ),
+    )
+    p.add_argument(
+        "--language",
+        default=None,
+        metavar="LANG",
+        help=(
+            f"Language of the job ads: {', '.join(LANGUAGE_REGISTRY)} (a locale like AR-es also "
+            "works). Selects resources/<language>/ — taxonomy labels, prompts, job attributes. "
+            "Same as RERANKER_LANGUAGE. Default: derived from TARGET_COUNTRY."
         ),
     )
     return p.parse_args()
@@ -166,6 +177,10 @@ def _set_reranker_state(*, country: str, db, jobs_processed: int) -> None:
 def run() -> None:
     configure_logging()
     args = _parse_args()
+    if args.language:
+        # Exported before the first get_settings() so every resource path — taxonomy
+        # labels, prompts, job attributes — resolves inside this language's pack.
+        os.environ["RERANKER_LANGUAGE"] = str(args.language).strip()
     settings = get_settings()
     batch_size = (
         args.bulk_batch_size if args.bulk_batch_size is not None else settings.bulk_write_batch_size

@@ -15,6 +15,7 @@ from pymongo.collection import Collection
 from pymongo.database import Database
 
 from app.config import Settings, get_settings
+from app.languages import language_setting
 from app.job_context import JobDescriptionContext
 from app.logging_config import sanitize_mongodb_uri
 from app.schemas import JobAttributesResult
@@ -510,13 +511,19 @@ def _parse_object_id(value: str | ObjectId) -> ObjectId:
         raise ValueError(f"Invalid ObjectId value: {value!r}") from e
 
 
-def _reranker_prefer_translation() -> bool:
-    """Use ``translation`` on classified_jobs for LLM listing text (English MT path)."""
-    return os.getenv("RERANKER_PREFER_TRANSLATION", "1").strip().lower() not in (
-        "0",
-        "false",
-        "no",
-    )
+def _reranker_prefer_translation(settings: Settings | None = None) -> bool:
+    """Use ``translation`` on classified_jobs for LLM listing text (English MT path).
+
+    ``RERANKER_PREFER_TRANSLATION`` wins when set. Otherwise the language decides: English
+    prompts want the English machine translation, while a language with its own prompt and
+    taxonomy pack wants the original text — prompting in Spanish over English MT text would
+    mix the two. See ``prefer_translation`` in ``app/languages/{lang}_config.py``.
+    """
+    raw = (os.getenv("RERANKER_PREFER_TRANSLATION") or "").strip().lower()
+    if raw:
+        return raw not in ("0", "false", "no")
+    settings = settings or get_settings()
+    return bool(language_setting(settings.language, "prefer_translation", True))
 
 
 def _overlay_translation_listing_fields(
@@ -525,9 +532,10 @@ def _overlay_translation_listing_fields(
     title: str | None,
     raw_jd: str | None,
     req_text: str | None,
+    settings: Settings | None = None,
 ) -> tuple[str | None, str | None, str | None]:
     """Prefer ``translation.text_en`` / ``fields_en`` when present (e.g. Argentina)."""
-    if not _reranker_prefer_translation():
+    if not _reranker_prefer_translation(settings):
         return title, raw_jd, req_text
     tr = classified_doc.get("translation")
     if not isinstance(tr, dict) or not tr:
@@ -586,7 +594,7 @@ def build_job_description_context(
     employment = _multi_key_top_or_metadata(classified_doc, *settings.keys_employment)
 
     title, raw_jd, req_text = _overlay_translation_listing_fields(
-        classified_doc, title=title, raw_jd=raw_jd, req_text=req_text
+        classified_doc, title=title, raw_jd=raw_jd, req_text=req_text, settings=settings
     )
 
     return JobDescriptionContext(

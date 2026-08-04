@@ -3,10 +3,11 @@
 All configuration is parameterized via Pulumi config — nothing is hardcoded.
 The image URI is injected by CI with the commit SHA tag at deploy time.
 
-Per-country settings (``TARGET_COUNTRY``, ``MONGODB_DATABASE``, the taxonomy CSV
-overrides) are deliberately **not** baked in as named parameters: one deployed image
-serves every country, and the GCP Workflow supplies them as env overrides on each
-execution. ``extra_env`` exists for the cases where a stack wants a baked-in default —
+Per-country settings (``TARGET_COUNTRY``, ``MONGODB_DATABASE``) and the language
+(``RERANKER_LANGUAGE``, which selects the ``resources/<lang>/`` pack and defaults from the
+country) are deliberately **not** baked in as named parameters: one deployed image serves
+every country and every language, and the GCP Workflow supplies them as env overrides on
+each execution. ``extra_env`` exists for the cases where a stack wants a baked-in default —
 see ``extraEnv`` in ``__main__.py``.
 """
 

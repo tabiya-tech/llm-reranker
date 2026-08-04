@@ -5,6 +5,7 @@ from typing import Any, Sequence
 
 from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
+from app.languages import DEFAULT_LANGUAGE, language_setting
 from app.prompt_resources import (
     load_job_attributes_system_prompt,
     load_occupation_skills_relevance_system_prompt,
@@ -16,14 +17,29 @@ from utils.occupation_to_skills_mapping import tabiya_occupation_id_for_candidat
 from utils.uuid_to_tabiya_id import cell_to_esco_uuid
 
 
+def prompt_label(key: str, settings: Settings | None = None) -> str:
+    """One scaffolding string of the LLM2 user block, in the run's language.
+
+    Falls back to English for a key a language has not translated, so adding a key here
+    never breaks a language pack that predates it.
+    """
+    s = settings or get_settings()
+    labels = language_setting(s.language, "prompt_labels", {}) or {}
+    if key in labels:
+        return str(labels[key])
+    english = language_setting(DEFAULT_LANGUAGE, "prompt_labels", {}) or {}
+    return str(english.get(key, key))
+
+
 def llm2_opening_line_from_context(
     ctx: JobDescriptionContext, *, settings: Settings | None = None
 ) -> str:
     """
     First line of the LLM2 user block: region field (county/district/etc.) when present, else city.
 
-    Uses :attr:`Settings.country_name` from ``TARGET_COUNTRY``. If ``city`` equals the country
-    name or slug, avoid duplicating the country in the phrasing.
+    Uses :attr:`Settings.country_name` from ``TARGET_COUNTRY``, phrased in the run's
+    language (``prompt_labels`` in ``app/languages/{lang}_config.py``). If ``city`` equals
+    the country name or slug, avoid duplicating the country in the phrasing.
     """
     s = settings or get_settings()
     country = s.country_name
@@ -34,14 +50,12 @@ def llm2_opening_line_from_context(
     city_is_country = ci.lower() in (slug, cl, country)
 
     if co:
-        return f"Estimate job attributes for the following occupation in {co}, {country}:"
+        return prompt_label("opening_with_region", s).format(region=co, country=country)
     if ci:
         if city_is_country:
-            return f"Estimate job attributes for the following occupation in {country}:"
-        return f"Estimate job attributes for the following occupation in {ci}, {country}:"
-    return (
-        f"Estimate job attributes for the following occupation in {country} (region not specified):"
-    )
+            return prompt_label("opening_country_only", s).format(country=country)
+        return prompt_label("opening_with_region", s).format(region=ci, country=country)
+    return prompt_label("opening_no_region", s).format(country=country)
 
 
 @dataclass(frozen=True)
@@ -192,43 +206,49 @@ def build_single_county_job_attributes_user_prompt(
     notes: str | None = None,
     job_listing_body: str | None = None,
     job_listing_metadata: str | None = None,
+    settings: Settings | None = None,
 ) -> str:
     """
     User message for LLM2: locale framing (from env), occupation-centric block, then attribute menu.
 
+    Field headings come from the run's language (``prompt_labels`` in
+    ``app/languages/{lang}_config.py``); the attribute names and level ids inside
+    ``attr_desc`` are identifiers and stay as the schema defines them.
+
     ``included_tasks`` is **classification task text**, not ONET ``WA_Element_ID`` values (those appear in the appendix).
 
     When ``job_listing_body`` / ``job_listing_metadata`` are set (non-``None``), they are inserted after the occupation
-    block and before ``## Attributes to Estimate`` (job-ad context for the classifier).
+    block and before the attributes heading (job-ad context for the classifier).
     """
+    s = settings or get_settings()
     attr_desc = build_attribute_descriptions(schema)
     parts = [
         opening_line,
         "",
-        f"**Occupation:** {preferred_label}",
+        f"**{prompt_label('occupation', s)}:** {preferred_label}",
     ]
     alt_label_text = "; ".join(alt_labels) if alt_labels else None
     if code:
-        parts.append(f"**KESCO Code:** {code}")
+        parts.append(f"**{prompt_label('code', s)}:** {code}")
     if alt_label_text:
-        parts.append(f"**Alternative Names:** {alt_label_text}")
+        parts.append(f"**{prompt_label('alt_names', s)}:** {alt_label_text}")
     if description:
-        parts.append(f"**Description:** {description}")
+        parts.append(f"**{prompt_label('description', s)}:** {description}")
     if included_occupations:
-        parts.append(f"**Included Occupations:** {included_occupations}")
+        parts.append(f"**{prompt_label('included_occupations', s)}:** {included_occupations}")
     if excluded_occupations:
-        parts.append(f"**Excluded Occupations:** {excluded_occupations}")
+        parts.append(f"**{prompt_label('excluded_occupations', s)}:** {excluded_occupations}")
     if included_tasks:
-        parts.append(f"**Included Tasks:** {included_tasks}")
+        parts.append(f"**{prompt_label('included_tasks', s)}:** {included_tasks}")
     if notes:
-        parts.append(f"**Notes:** {notes}")
+        parts.append(f"**{prompt_label('notes', s)}:** {notes}")
     if context_str:
         parts.append(context_str)
     if job_listing_body is not None:
         parts.extend(
             [
                 "",
-                "**Job listing — description and requirements (use together with the occupation above):**",
+                f"**{prompt_label('job_listing_block', s)}**",
                 job_listing_body,
             ]
         )
@@ -236,17 +256,17 @@ def build_single_county_job_attributes_user_prompt(
         parts.extend(
             [
                 "",
-                "**Additional listing metadata (may be incomplete):**",
+                f"**{prompt_label('listing_metadata_block', s)}**",
                 job_listing_metadata,
             ]
         )
     parts.extend(
         [
             "",
-            "## Attributes to Estimate",
+            prompt_label("attributes_heading", s),
             attr_desc,
             "",
-            "For each attribute, select the most appropriate level_id and provide brief reasoning.",
+            prompt_label("attributes_instruction", s),
         ]
     )
     return "\n".join(parts)
@@ -446,6 +466,9 @@ def _job_attributes_onet_and_json_appendix(
         _kenya_requires_post_secondary_prompt_block() if s.target_country == "kenya" else ""
     )
     kenya_json_field = ',\n  "requires_post_secondary": true' if s.target_country == "kenya" else ""
+    # Must be the same heading text the user block emitted, or the model is pointed at a
+    # section that does not exist in its prompt.
+    attributes_heading = prompt_label("attributes_heading", s)
     return f"""
 
 ---
@@ -461,7 +484,7 @@ Use **only** ids from this list (no invented ids):
 
 Respond with **only** a single JSON object (no markdown fences, no text before or after).
 
-- `attributes`: **array**; include **one object per** attribute from "## Attributes to Estimate", each with:
+- `attributes`: **array**; include **one object per** attribute from "{attributes_heading}", each with:
   - `attribute_name` (string, must match the attribute's `name`),
   - `selected_level_id` (string, must be a listed level `id` for that attribute),
   - `confidence`: `high`, `medium`, or `low`,
@@ -509,6 +532,7 @@ def build_job_attributes_prompt(
         schema=schema,
         job_listing_body=job_listing_body,
         job_listing_metadata=job_listing_metadata,
+        settings=s,
         **fields,
     )
     appendix = _job_attributes_onet_and_json_appendix(onet_work_activities, settings=s)

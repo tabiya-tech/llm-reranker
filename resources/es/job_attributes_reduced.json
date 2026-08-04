@@ -1,0 +1,62 @@
+{
+  "metadata": {
+    "description": "Esquema reducido de atributos del puesto para el experimento de elección discreta (español, Argentina)",
+    "version": "1.1.0",
+    "last_updated": "2026-08",
+    "translated_from": "en/job_attributes_reduced.json",
+    "earnings_calibration_note": "Los identificadores de nivel (earn_15k … earn_70k) son el contrato con el servicio de matching y NO deben cambiar: sólo se traduce la etiqueta que lee el modelo. Las etiquetas de ingresos se expresan como múltiplos del Salario Mínimo Vital y Móvil en lugar de montos fijos en ARS, porque un monto nominal queda desactualizado con la inflación. Reemplazar por bandas en ARS cuando Empujar aporte una calibración local."
+  },
+  "attributes": [
+    {
+      "name": "earnings_per_month",
+      "label": "Ingresos mensuales",
+      "group": "Financial",
+      "type": "ordered",
+      "coding": "linear",
+      "levels": [
+        { "id": "earn_15k", "label": "Alrededor del Salario Mínimo Vital y Móvil" },
+        { "id": "earn_30k", "label": "Aproximadamente 1,5 veces el Salario Mínimo Vital y Móvil" },
+        { "id": "earn_50k", "label": "Aproximadamente 2,5 veces el Salario Mínimo Vital y Móvil" },
+        { "id": "earn_70k", "label": "Aproximadamente 3,5 veces el Salario Mínimo Vital y Móvil o más" }
+      ]
+    },
+    {
+      "name": "physical_demand",
+      "label": "Exigencia física y riesgo",
+      "group": "Work Environment",
+      "type": "categorical",
+      "coding": "dummy",
+      "base_level_id": "phys_light",
+      "levels": [
+        { "id": "phys_light", "label": "Trabajo físico liviano y en general seguro" },
+        { "id": "phys_heavy", "label": "Trabajo físico exigente o con mayor riesgo de lesiones" }
+      ]
+    },
+    {
+      "name": "social_interaction",
+      "label": "Interacción social",
+      "group": "Work Environment",
+      "type": "categorical",
+      "coding": "dummy",
+      "base_level_id": "soc_alone",
+      "levels": [
+        { "id": "soc_alone", "label": "Trabajar solo/a (de forma independiente)" },
+        { "id": "soc_peers", "label": "Trabajar con compañeros/as de trabajo (pares)" },
+        { "id": "soc_customers", "label": "Trabajar en contacto directo con clientes" }
+      ]
+    },
+    {
+      "name": "career_growth",
+      "label": "Crecimiento profesional",
+      "group": "Future Prospects",
+      "type": "ordered",
+      "coding": "dummy",
+      "base_level_id": "growth_low",
+      "levels": [
+        { "id": "growth_low", "label": "Pocas oportunidades de aprender nuevas habilidades o de progresar" },
+        { "id": "growth_med", "label": "Algunas oportunidades de desarrollar habilidades o mejorar las opciones a futuro" },
+        { "id": "growth_high", "label": "Buenas oportunidades de aprender habilidades y acceder a mejores puestos" }
+      ]
+    }
+  ]
+}

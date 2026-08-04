@@ -78,10 +78,16 @@ def _load_config() -> Config:
         p = Path(occ_db_raw)
         occupation_db_path = p if p.is_absolute() else (Path(__file__).resolve().parents[1] / p)
     else:
-        occupation_db_path = (
-            Path(__file__).resolve().parents[1]
-            / "resources"
-            / "combined_occupation_database_with_wa.json"
+        # Language pack first, then the English pack, then the flat pre-language layout.
+        # The occupation→work-activity mapping is keyed on ISCO codes and WA_Element_IDs,
+        # so a language that ships no translated copy is served correctly by English.
+        from app.config import get_settings, language_resource_dirs
+
+        settings = get_settings()
+        name = "combined_occupation_database_with_wa.json"
+        candidates = language_resource_dirs(settings.resources_dir, settings.language)
+        occupation_db_path = next(
+            (d / name for d in candidates if (d / name).is_file()), candidates[0] / name
         )
 
     return Config(

@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from app.config import Settings, get_settings
+from app.config import Settings, get_settings, language_resource_dirs
 from utils.classifier_linked_entities import strip_json_fence
 
 
@@ -89,8 +89,19 @@ def job_attributes_schema_path(settings: Settings | None = None) -> Path:
 
 
 def onet_work_activities_path(settings: Settings | None = None) -> Path:
+    """``ONET_tasks_WAs_translated.json`` from the run's language pack.
+
+    Falls back to the English pack: a language that has not translated the ONET work
+    activity descriptors still gets them, and the ``WA_Element_ID`` values downstream
+    stages key on are language-neutral either way.
+    """
     settings = settings or get_settings()
-    return settings.resources_dir / "ONET_tasks_WAs_translated.json"
+    name = "ONET_tasks_WAs_translated.json"
+    for directory in language_resource_dirs(settings.resources_dir, settings.language):
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return language_resource_dirs(settings.resources_dir, settings.language)[0] / name
 
 
 def load_job_attributes_schema(
