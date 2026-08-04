@@ -27,6 +27,9 @@ if str(_ROOT) not in sys.path:
 # Subset of env vars that ``app.config.Settings.from_env`` reads. We clear all of
 # them between tests so callers get a predictable baseline (defaults from code).
 _RERANKER_ENV_VARS = (
+    "RERANKER_LANGUAGE",
+    "TARGET_LANGUAGE",
+    "RERANKER_PREFER_TRANSLATION",
     "MONGODB_URI",
     "MONGODB_DATABASE",
     "MONGODB_SOURCE_COLLECTION",
@@ -117,7 +120,17 @@ def _clear_settings_caches() -> None:
     from app import config as app_config
 
     app_config.get_settings.cache_clear()
+    app_config.get_settings_for_language.cache_clear()
     app_config._gcp_project_from_default_credentials.cache_clear()
+    try:
+        from app import languages as app_languages
+
+        # Language configs read env at import time; clearing lets a test change
+        # RERANKER_LANGUAGE and per-language overrides and see them applied.
+        app_languages.get_language_config.cache_clear()
+        app_languages._locale_index.cache_clear()
+    except Exception:
+        pass
     try:
         from app import schemas as app_schemas
 

@@ -29,17 +29,16 @@ config:
   # of the template on purpose: a template mapping would force every existing stack to
   # declare one. Adding it to a stack config only logs a "passed through" warning.
   #
-  # Country selection normally arrives as a per-execution override from the GCP Workflow
-  # (TARGET_COUNTRY, MONGODB_DATABASE, taxonomy CSV paths), so one image serves every
-  # country. Set this only for a stack that should default to one country:
+  # Country and language selection normally arrive as per-execution overrides from the
+  # GCP Workflow (TARGET_COUNTRY, MONGODB_DATABASE), so one image serves every country and
+  # every language. Set this only for a stack that should default to one country:
   #
   #   tabiya-horizon-reranker-infra:extraEnv:
   #     TARGET_COUNTRY: argentina
   #     MONGODB_DATABASE: ArgentinaJobs_V2
-  #     OCCUPATIONS_CSV: argentina/occupations.csv
-  #     SKILLS_CSV: argentina/skills.csv
-  #     OCCUPATION_TO_SKILL_RELATIONS_CSV: argentina/occupation_to_skill_relations.csv
-  #     SKILL_HIERARCHY_CSV: argentina/skill_hierarchy.csv
+  #
+  # TARGET_COUNTRY=argentina implies RERANKER_LANGUAGE=es and the resources/es/ pack;
+  # set RERANKER_LANGUAGE only to break that pairing.
 
   # Cloud Run Job — resource limits
   tabiya-horizon-reranker-infra:jobMemory: <memory-limit>

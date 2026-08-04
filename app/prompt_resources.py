@@ -1,10 +1,14 @@
 """
-Load prompt text from ``Settings.resources_dir`` (default: repo ``resources/``).
+Load prompt text from the run's language pack under ``Settings.resources_dir``.
 
-Relative paths:
+Each file is looked up in ``resources/<language>/`` → ``resources/en/`` → ``resources/``
+(see :func:`app.config.language_resource_dirs`), so a language only has to ship the
+prompts it actually translates:
 
 - ``Skills_reranker_prompts.md``
 - ``prompts.py`` (``JOB_ATTRIBUTES_SYSTEM_PROMPT`` for LLM call 2, ``OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT`` for LLM call 3)
+
+Placeholders substituted in these files: ``{country}`` and ``{language}``.
 """
 
 from __future__ import annotations
@@ -12,22 +16,36 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from app.config import Settings, get_settings
+from app.config import Settings, get_settings, language_resource_dirs
 
 _SKILLS_REL = Path("Skills_reranker_prompts.md")
 _PREF_PROMPTS_REL = Path("prompts.py")
 
 
 def country_prompt_format_kwargs(settings: Settings) -> dict[str, str]:
-    """``{country}`` for ``resources/prompts.py`` (from :attr:`Settings.country_name`)."""
-    return {"country": settings.country_name}
+    """Placeholders for the prompt files: ``{country}`` and ``{language}``.
+
+    ``{language}`` is the language the model must answer in — the same language the skill
+    menu and occupation labels are written in (:attr:`Settings.language_name`).
+    """
+    return {"country": settings.country_name, "language": settings.language_name}
 
 
 def format_country_prompt_template(body: str, settings: Settings) -> str:
-    """Substitute ``{country}`` from ``settings``."""
+    """Substitute ``{country}`` / ``{language}`` from ``settings``.
+
+    A placeholder the prompt file uses but we do not supply is left as-is rather than
+    raising: these files are hand-edited, and a stray brace should not fail a batch.
+    """
     if "{" not in body:
         return body
-    return body.format(**country_prompt_format_kwargs(settings))
+    kwargs = country_prompt_format_kwargs(settings)
+    try:
+        return body.format(**kwargs)
+    except (KeyError, IndexError, ValueError):
+        for key, value in kwargs.items():
+            body = body.replace("{" + key + "}", value)
+        return body
 
 
 # Verbatim fallback if files under ``resources/`` are absent.
@@ -98,12 +116,21 @@ Rules:
 - Output nothing but the JSON object specified in the user message: a decisions array only, no summary or reasons."""
 
 
-def _skills_md_path(settings: Settings) -> Path:
-    return settings.resources_dir / _SKILLS_REL
+def _resolve_prompt_file(settings: Settings, relative: Path) -> Path | None:
+    """First existing copy of ``relative`` across the language pack, English, ``resources/``."""
+    for directory in language_resource_dirs(settings.resources_dir, settings.language):
+        candidate = directory / relative
+        if candidate.is_file():
+            return candidate
+    return None
 
 
-def _pref_prompts_path(settings: Settings) -> Path:
-    return settings.resources_dir / _PREF_PROMPTS_REL
+def _skills_md_path(settings: Settings) -> Path | None:
+    return _resolve_prompt_file(settings, _SKILLS_REL)
+
+
+def _pref_prompts_path(settings: Settings) -> Path | None:
+    return _resolve_prompt_file(settings, _PREF_PROMPTS_REL)
 
 
 def load_skills_ranker_prompt_template(settings: Settings | None = None) -> str:
@@ -114,7 +141,7 @@ def load_skills_ranker_prompt_template(settings: Settings | None = None) -> str:
     """
     s = settings or get_settings()
     path = _skills_md_path(s)
-    if not path.is_file():
+    if path is None:
         return _FALLBACK_SKILLS_TEMPLATE
     raw = path.read_text(encoding="utf-8").strip()
     if raw.startswith("```"):
@@ -138,7 +165,7 @@ def load_job_attributes_system_prompt(settings: Settings | None = None) -> str:
     """Load ``JOB_ATTRIBUTES_SYSTEM_PROMPT`` from ``resources/prompts.py`` and apply country placeholders."""
     s = settings or get_settings()
     path = _pref_prompts_path(s)
-    if not path.is_file():
+    if path is None:
         return format_country_prompt_template(_FALLBACK_JOB_ATTRIBUTES_SYSTEM, s)
     text = path.read_text(encoding="utf-8")
     m = re.search(
@@ -155,7 +182,7 @@ def load_occupation_skills_relevance_system_prompt(settings: Settings | None = N
     """Load ``OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT`` from ``resources/prompts.py`` and apply country placeholders."""
     s = settings or get_settings()
     path = _pref_prompts_path(s)
-    if not path.is_file():
+    if path is None:
         return format_country_prompt_template(_FALLBACK_OCCUPATION_SKILLS_RELEVANCE_SYSTEM, s)
     text = path.read_text(encoding="utf-8")
     m = re.search(

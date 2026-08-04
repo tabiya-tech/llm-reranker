@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from app.config import get_settings, log_ranker_run_configuration
+from app.config import get_settings, get_settings_for_language, log_ranker_run_configuration
+from app.languages import LANGUAGE_REGISTRY, normalise_language
 from app.logging_config import configure_logging
 from app.pipeline import JobResult, TaxonomyContext, load_taxonomy_context, process_single_job
 
@@ -38,6 +40,37 @@ def _normalize_mongo_extended_json(obj: Any) -> Any:
 
 
 _taxonomy: TaxonomyContext | None = None
+# One taxonomy context per language: the CSV label packs differ per language, so a
+# Spanish request cannot be served from the English lookups. Loaded on first use.
+_taxonomies: dict[str, TaxonomyContext] = {}
+_taxonomy_lock = threading.Lock()
+
+
+def get_taxonomy(language: str) -> TaxonomyContext:
+    """Taxonomy context for a language, loading its CSV pack on first use.
+
+    :raises HTTPException: 503 if the service has not finished starting up.
+    """
+    if _taxonomy is None:
+        raise HTTPException(status_code=503, detail="Service not ready — taxonomy not loaded.")
+    cached = _taxonomies.get(language)
+    if cached is not None:
+        return cached
+    with _taxonomy_lock:
+        cached = _taxonomies.get(language)
+        if cached is not None:
+            return cached
+        settings = get_settings_for_language(language)
+        logger.info("Loading taxonomy data for language=%s (CSV lookups)…", language)
+        context = load_taxonomy_context(settings)
+        _taxonomies[language] = context
+        logger.info(
+            "Taxonomy ready | language=%s | resources=%s | occupations=%s",
+            language,
+            settings.language_resources_dir.name,
+            len(context.occ_map),
+        )
+        return context
 
 
 @asynccontextmanager
@@ -49,13 +82,17 @@ async def lifespan(application: FastAPI):
         raise RuntimeError("GEMINI_API_KEY is not configured — cannot start API server.")
     logger.info("Loading taxonomy data (CSV lookups)…")
     _taxonomy = load_taxonomy_context(settings)
+    _taxonomies[settings.language] = _taxonomy
     logger.info(
-        "API ready | model=%s | taxonomy_occupations=%s",
+        "API ready | model=%s | language=%s | taxonomy_occupations=%s | supported_languages=%s",
         settings.gemini_model,
+        settings.language,
         len(_taxonomy.occ_map),
+        ",".join(LANGUAGE_REGISTRY),
     )
     yield
     _taxonomy = None
+    _taxonomies.clear()
 
 
 app = FastAPI(
@@ -82,11 +119,18 @@ class RankResponse(BaseModel):
 
 
 @app.post("/rank", response_model=RankResponse)
-async def rank_job(body: dict[str, Any]) -> RankResponse:
-    """Rank a single classified job document. Send the document directly as the JSON body."""
-    if _taxonomy is None:
-        raise HTTPException(status_code=503, detail="Service not ready — taxonomy not loaded.")
-    settings = get_settings()
+async def rank_job(body: dict[str, Any], language: str | None = None) -> RankResponse:
+    """Rank a single classified job document. Send the document directly as the JSON body.
+
+    ``?language=es`` (or a ``language`` field on the document) picks the resource pack the
+    job is ranked against — taxonomy labels, prompts, job attributes. Omitted, the
+    service default applies, so existing callers are unaffected.
+    """
+    doc = _normalize_mongo_extended_json(body)
+    requested = language or (doc.get("language") if isinstance(doc, dict) else None)
+    lang = normalise_language(requested) if requested else get_settings().language
+    taxonomy = get_taxonomy(lang)
+    settings = get_settings_for_language(lang)
     log_ranker_run_configuration(
         logger,
         settings,
@@ -95,11 +139,10 @@ async def rank_job(body: dict[str, Any]) -> RankResponse:
         log_prompt_debug=False,
         invocation="api",
     )
-    doc = _normalize_mongo_extended_json(body)
     try:
         result: JobResult = process_single_job(
             doc,
-            _taxonomy,
+            taxonomy,
             settings=settings,
         )
     except Exception as exc:
@@ -116,4 +159,10 @@ async def rank_job(body: dict[str, Any]) -> RankResponse:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "taxonomy_loaded": _taxonomy is not None}
+    return {
+        "status": "ok",
+        "taxonomy_loaded": _taxonomy is not None,
+        "default_language": get_settings().language,
+        "supported_languages": list(LANGUAGE_REGISTRY),
+        "loaded_languages": sorted(_taxonomies),
+    }

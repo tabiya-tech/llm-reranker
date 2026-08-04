@@ -9,6 +9,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.languages import (
+    DEFAULT_LANGUAGE,
+    LANGUAGE_REGISTRY,
+    get_language_config,
+    language_from_env,
+    language_setting,
+    normalise_language,
+)
+
 
 def _repo_root() -> Path:
     """Repo root: parent of the ``app/`` package directory."""
@@ -279,160 +288,172 @@ def _unique_key_order(*groups: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(out)
 
 
+def language_resource_dirs(resources_dir: Path, language: str) -> tuple[Path, ...]:
+    """Directories searched for a resource basename, most specific first.
+
+    ``resources/<language>/`` → ``resources/en/`` → ``resources/``. The English pack is a
+    fallback so a language only has to ship the files that actually differ (the AR-es pack
+    ships taxonomy labels and prompts, not the ONET reference data). ``resources/`` itself
+    stays in the chain for the flat, pre-language layout and for language-neutral
+    artifacts such as ``concat_whitening_gemini.npz``.
+    """
+    subdir = language_setting(language, "resources_subdir", language) or language
+    dirs = [resources_dir / subdir]
+    en_subdir = (
+        language_setting(DEFAULT_LANGUAGE, "resources_subdir", DEFAULT_LANGUAGE) or DEFAULT_LANGUAGE
+    )
+    if en_subdir != subdir:
+        dirs.append(resources_dir / en_subdir)
+    dirs.append(resources_dir)
+    return tuple(d.resolve() for d in dirs)
+
+
+def _resolve_language_resource_path(
+    repo_root: Path,
+    resources_dir: Path,
+    language: str,
+    raw: str | None,
+    default_name: str,
+    extra_fallbacks: tuple[Path, ...] = (),
+) -> Path:
+    """Absolute path for one resource file.
+
+    With an explicit env value: an absolute path is used as given; a relative path is
+    tried against each directory in :func:`language_resource_dirs`, then the repo root.
+    Without one, ``default_name`` is looked up in the same directory order, then in
+    ``extra_fallbacks``.
+
+    When nothing exists, the path inside the *language's own* pack is returned, so a
+    "not found" error names the file the pack is missing rather than a fallback.
+    """
+    candidates = language_resource_dirs(resources_dir, language)
+
+    if raw is not None and str(raw).strip():
+        p = Path(str(raw).strip())
+        if p.is_absolute():
+            return p.resolve()
+        for directory in candidates:
+            candidate = (directory / p).resolve()
+            if candidate.is_file():
+                return candidate
+        under_root = (repo_root / p).resolve()
+        if under_root.is_file():
+            return under_root
+        return (candidates[0] / p).resolve()
+
+    for directory in candidates:
+        candidate = (directory / default_name).resolve()
+        if candidate.is_file():
+            return candidate
+    for fallback in extra_fallbacks:
+        if fallback.is_file():
+            return fallback.resolve()
+    return (candidates[0] / default_name).resolve()
+
+
 def _resolve_job_attributes_schema_path(
     repo_root: Path,
     resources_dir: Path,
     raw: str | None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> Path:
     """
     Path to the job-attributes JSON (same structure for any number of attributes).
 
-    ``JOB_ATTRIBUTES_SCHEMA`` / ``JOB_ATTRIBUTES_SCHEMA_FILE``:
-    absolute path, or relative to ``resources_dir`` (preferred), or relative to repo root.
-    Default basename: ``job_attributes_reduced.json`` under ``resources_dir``.
+    ``JOB_ATTRIBUTES_SCHEMA`` / ``JOB_ATTRIBUTES_SCHEMA_FILE``: absolute path, or relative
+    to the language pack / ``resources/``, or relative to repo root. Default basename comes
+    from the language config (``job_attributes_reduced.json``), so a language can ship its
+    own translated attribute labels and currency levels.
     """
-    default_name = "job_attributes_reduced.json"
-    if raw is None or not str(raw).strip():
-        return (resources_dir / default_name).resolve()
-    s = str(raw).strip()
-    p = Path(s)
-    if p.is_absolute():
-        return p.resolve()
-    under_res = (resources_dir / p).resolve()
-    if under_res.is_file():
-        return under_res
-    under_root = (repo_root / p).resolve()
-    return under_root if under_root.is_file() else under_res
+    default_name = (
+        language_setting(language, "job_attributes_schema", "job_attributes_reduced.json")
+        or "job_attributes_reduced.json"
+    )
+    return _resolve_language_resource_path(repo_root, resources_dir, language, raw, default_name)
 
 
 def _resolve_occupation_to_skill_relations_path(
     repo_root: Path,
     resources_dir: Path,
     raw: str | None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> Path:
     """
     Path to occupation→skill relations CSV (see ``OCCUPATION_TO_SKILL_RELATIONS_CSV``).
 
-    Default: ``resources/occupation_to_skill_relations.csv`` (file may be created later).
+    Default: ``resources/<language>/occupation_to_skill_relations.csv``.
     """
-    default_name = "occupation_to_skill_relations.csv"
-    if raw is None or not str(raw).strip():
-        return (resources_dir / default_name).resolve()
-    s = str(raw).strip()
-    p = Path(s)
-    if p.is_absolute():
-        return p.resolve()
-    under_res = (resources_dir / p).resolve()
-    if under_res.is_file():
-        return under_res
-    under_root = (repo_root / p).resolve()
-    return under_root if under_root.is_file() else under_res
+    return _resolve_language_resource_path(
+        repo_root, resources_dir, language, raw, "occupation_to_skill_relations.csv"
+    )
 
 
 def _resolve_occupations_csv_path(
     repo_root: Path,
     resources_dir: Path,
     raw: str | None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> Path:
     """
     Tabiya ``occupations.csv``: ``ID`` + ``UUIDHISTORY`` / ``ORIGINURI``.
 
-    Row ``ID`` must match ``OCCUPATIONID`` in ``occupation_to_skill_relations.csv``.
+    Row ``ID`` must match ``OCCUPATIONID`` in ``occupation_to_skill_relations.csv`` — so
+    this file and the relations file must come from the *same* language pack.
 
-    ``OCCUPATIONS_CSV``; default ``resources/occupations.csv``.
+    ``OCCUPATIONS_CSV``; default ``resources/<language>/occupations.csv``.
     """
-    default_name = "occupations.csv"
-    if raw is None or not str(raw).strip():
-        return (resources_dir / default_name).resolve()
-    s = str(raw).strip()
-    p = Path(s)
-    if p.is_absolute():
-        return p.resolve()
-    under_res = (resources_dir / p).resolve()
-    if under_res.is_file():
-        return under_res
-    under_root = (repo_root / p).resolve()
-    return under_root if under_root.is_file() else under_res
+    return _resolve_language_resource_path(
+        repo_root, resources_dir, language, raw, "occupations.csv"
+    )
 
 
 def _resolve_skills_csv_path(
     repo_root: Path,
     resources_dir: Path,
     raw: str | None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> Path:
     """
     Tabiya ``skills.csv``: ``ID`` + ``PREFERREDLABEL`` + ``UUIDHISTORY`` / ``ORIGINURI``.
 
-    ``SKILLS_CSV``; default ``resources/skills.csv``.
+    ``SKILLS_CSV``; default ``resources/<language>/skills.csv``.
     """
-    default_name = "skills.csv"
-    if raw is None or not str(raw).strip():
-        return (resources_dir / default_name).resolve()
-    s = str(raw).strip()
-    p = Path(s)
-    if p.is_absolute():
-        return p.resolve()
-    under_res = (resources_dir / p).resolve()
-    if under_res.is_file():
-        return under_res
-    under_root = (repo_root / p).resolve()
-    return under_root if under_root.is_file() else under_res
+    return _resolve_language_resource_path(repo_root, resources_dir, language, raw, "skills.csv")
 
 
 def _resolve_concat_whitening_path(
     repo_root: Path,
     resources_dir: Path,
     raw: str | None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> Path:
     """
     Path to concat whitening artifact (``concat_whitening_gemini.npz``).
 
+    Language-neutral (it transforms embeddings, not text), so it lives at ``resources/``.
+
     ``RERANKER_CONCAT_WHITENING_PATH``; default ``resources/concat_whitening_gemini.npz``.
     """
-    default_name = "concat_whitening_gemini.npz"
-    if raw is None or not str(raw).strip():
-        return (resources_dir / default_name).resolve()
-    s = str(raw).strip()
-    p = Path(s)
-    if p.is_absolute():
-        return p.resolve()
-    under_res = (resources_dir / p).resolve()
-    if under_res.is_file():
-        return under_res
-    under_root = (repo_root / p).resolve()
-    return under_root if under_root.is_file() else under_res
+    return _resolve_language_resource_path(
+        repo_root, resources_dir, language, raw, "concat_whitening_gemini.npz"
+    )
 
 
 def _resolve_skill_hierarchy_csv_path(
     repo_root: Path,
     resources_dir: Path,
     raw: str | None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> Path:
     """
     Path to ``skill_hierarchy.csv`` used for skill -> skill-group derivation.
 
     Resolution order:
       1) explicit env path (absolute or relative)
-      2) ``resources/skill_hierarchy.csv``
+      2) ``resources/<language>/skill_hierarchy.csv``, then the English pack, then ``resources/``
       3) sibling repo fallback:
          ``../shp-matching-algorithm/backend/resources/skill_taxonomy/skill_hierarchy.csv``
     """
-    default_name = "skill_hierarchy.csv"
-    if raw is not None and str(raw).strip():
-        s = str(raw).strip()
-        p = Path(s)
-        if p.is_absolute():
-            return p.resolve()
-        under_res = (resources_dir / p).resolve()
-        if under_res.is_file():
-            return under_res
-        under_root = (repo_root / p).resolve()
-        return under_root if under_root.is_file() else under_res
-
-    under_res = (resources_dir / default_name).resolve()
-    if under_res.is_file():
-        return under_res
-
     sibling = (
         repo_root.parent
         / "shp-matching-algorithm"
@@ -440,10 +461,15 @@ def _resolve_skill_hierarchy_csv_path(
         / "resources"
         / "skill_taxonomy"
         / "skill_hierarchy.csv"
-    ).resolve()
-    if sibling.is_file():
-        return sibling
-    return under_res
+    )
+    return _resolve_language_resource_path(
+        repo_root,
+        resources_dir,
+        language,
+        raw,
+        "skill_hierarchy.csv",
+        extra_fallbacks=(sibling,),
+    )
 
 
 def _resources_dir(repo_root: Path) -> Path:
@@ -596,10 +622,27 @@ class Settings:
     target_country: str
     country_name: str
 
+    # Language of the job ads being ranked: selects the ``resources/<language>/`` pack
+    # (taxonomy labels, prompts, job-attributes schema) and the language the prompts ask
+    # the model to answer in. See ``app.languages``.
+    language: str = DEFAULT_LANGUAGE
+    # Human-readable name inserted into prompts as ``{language}``.
+    language_name: str = "English"
+    # Resolved ``resources/<language>/`` for this run (files may fall back to English).
+    language_resources_dir: Path = Path("resources") / DEFAULT_LANGUAGE
+
     @staticmethod
-    def from_env() -> Settings:
+    def from_env(language: str | None = None) -> Settings:
         root = _repo_root()
         resources = _resources_dir(root)
+        # Resolved before any resource path: every pack lookup depends on it.
+        tc_for_language = _target_country_slug_from_env()
+        lang = (
+            normalise_language(language)
+            if language is not None
+            else language_from_env(tc_for_language)
+        )
+        lang_cfg = get_language_config(lang)
         creds_resolved = _resolve_google_credentials_path(
             root,
             os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
@@ -623,32 +666,32 @@ class Settings:
             "JOB_ATTRIBUTES_SCHEMA_FILE"
         )
         job_attributes_schema_path = _resolve_job_attributes_schema_path(
-            root, resources, ja_schema_raw
+            root, resources, ja_schema_raw, lang
         )
         occ_skill_raw = os.environ.get("OCCUPATION_TO_SKILL_RELATIONS_CSV")
         occupation_to_skill_relations_path = _resolve_occupation_to_skill_relations_path(
-            root, resources, occ_skill_raw
+            root, resources, occ_skill_raw, lang
         )
         occ_csv_raw = os.environ.get("OCCUPATIONS_CSV")
-        occupations_csv_path = _resolve_occupations_csv_path(root, resources, occ_csv_raw)
+        occupations_csv_path = _resolve_occupations_csv_path(root, resources, occ_csv_raw, lang)
         occ_label_col = (os.environ.get("OCCUPATIONS_CSV_LABEL_COLUMN") or "PREFERREDLABEL").strip()
         occ_inc_desc = _bool_env("OCCUPATIONS_CSV_INCLUDE_DESCRIPTIONS", default=False)
         occ_desc_col = (os.environ.get("OCCUPATIONS_CSV_DESCRIPTION_COLUMN") or "").strip()
         skills_csv_raw = os.environ.get("SKILLS_CSV")
-        skills_csv_path = _resolve_skills_csv_path(root, resources, skills_csv_raw)
+        skills_csv_path = _resolve_skills_csv_path(root, resources, skills_csv_raw, lang)
         skill_hierarchy_raw = os.environ.get("SKILL_HIERARCHY_CSV")
         skill_hierarchy_csv_path = _resolve_skill_hierarchy_csv_path(
-            root, resources, skill_hierarchy_raw
+            root, resources, skill_hierarchy_raw, lang
         )
         concat_whitening_raw = os.environ.get("RERANKER_CONCAT_WHITENING_PATH")
         concat_whitening_path = _resolve_concat_whitening_path(
-            root, resources, concat_whitening_raw
+            root, resources, concat_whitening_raw, lang
         )
         skills_include_desc = _bool_env("SKILLS_CSV_INCLUDE_DESCRIPTIONS", default=False)
         skills_desc_col = (os.environ.get("SKILLS_CSV_DESCRIPTION_COLUMN") or "").strip()
         occ_rel_lookup, occ_rel_esco_fb = _occupation_relation_lookup_from_env()
         occ_skill_relation_types = _occupation_skill_relation_occupation_types_from_env()
-        tc = _target_country_slug_from_env()
+        tc = tc_for_language
         c_name = _country_name_from_slug(tc)
         return Settings(
             mongodb_uri=os.environ.get("MONGODB_URI", "mongodb://localhost:27017"),
@@ -779,6 +822,9 @@ class Settings:
             classified_linked_entity_label_dedupe_types=_classified_linked_entity_label_dedupe_types_from_env(),
             target_country=tc,
             country_name=c_name,
+            language=lang,
+            language_name=str(lang_cfg.get("prompt_language") or lang_cfg.get("name") or lang),
+            language_resources_dir=language_resource_dirs(resources, lang)[0],
         )
 
 
@@ -863,7 +909,8 @@ def log_ranker_run_configuration(
     loc = f"{settings.target_country} ({settings.country_name})"
 
     log.info(
-        "Ranker run configuration | invocation=%s | TARGET_COUNTRY=%s | GEMINI_MODEL=%s | GEMINI_API_KEY=...%s | "
+        "Ranker run configuration | invocation=%s | TARGET_COUNTRY=%s | "
+        "RERANKER_LANGUAGE=%s | resources=%s | GEMINI_MODEL=%s | GEMINI_API_KEY=...%s | "
         "MONGODB_SOURCE_COLLECTION=%s | MONGODB_TARGET_COLLECTION=%s | "
         "RERANKER_ENABLE_LLM3=%s | RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE=%s | "
         "RERANKER_LLM3_MAX_MENU_SKILLS=%s | RERANKER_LLM3_MENU_SIGNAL_FILTER=%s | "
@@ -879,6 +926,8 @@ def log_ranker_run_configuration(
         "cli_limit=%s | log_prompt_debug=%s",
         invocation,
         loc,
+        f"{settings.language} ({settings.language_name})",
+        settings.language_resources_dir.name,
         settings.gemini_model,
         key_tail,
         settings.mongodb_source_collection,
@@ -920,3 +969,21 @@ def log_ranker_run_configuration(
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings.from_env()
+
+
+@lru_cache(maxsize=len(LANGUAGE_REGISTRY) + 1)
+def get_settings_for_language(language: str | None) -> Settings:
+    """Settings for one language.
+
+    The batch CLI runs a whole collection in one language (``--language`` exports
+    ``RERANKER_LANGUAGE`` before anything reads settings), so it uses
+    :func:`get_settings`. The HTTP service can be asked for a different language per
+    request, which is what this is for. ``None`` means "whatever the environment says".
+    """
+    if language is None:
+        return get_settings()
+    lang = normalise_language(language)
+    base = get_settings()
+    if lang == base.language:
+        return base
+    return Settings.from_env(language=lang)

@@ -31,17 +31,15 @@ Required Pulumi config:
   tabiya-horizon-reranker-infra:jobMaxRetries                         — default: 3
 
   # Optional: extra env vars baked into the Cloud Run Job (map of name -> value).
-  # Country selection normally arrives as a per-execution override from the GCP
-  # Workflow (TARGET_COUNTRY, MONGODB_DATABASE, and the taxonomy CSV paths), so one
-  # image serves every country. Use this only for a stack that should default to one
-  # country, e.g. an Argentina-only stack:
+  # Country and language selection normally arrive as per-execution overrides from the
+  # GCP Workflow (TARGET_COUNTRY, MONGODB_DATABASE), so one image serves every country
+  # and every language. Use this only for a stack that should default to one country,
+  # e.g. an Argentina-only stack:
   #   tabiya-horizon-reranker-infra:extraEnv:
   #     TARGET_COUNTRY: argentina
   #     MONGODB_DATABASE: ArgentinaJobs_V2
-  #     OCCUPATIONS_CSV: argentina/occupations.csv
-  #     SKILLS_CSV: argentina/skills.csv
-  #     OCCUPATION_TO_SKILL_RELATIONS_CSV: argentina/occupation_to_skill_relations.csv
-  #     SKILL_HIERARCHY_CSV: argentina/skill_hierarchy.csv
+  # TARGET_COUNTRY=argentina already implies RERANKER_LANGUAGE=es (and with it the whole
+  # resources/es/ pack); set RERANKER_LANGUAGE explicitly only to break that pairing.
   # Unset (the default) leaves the deployed job unchanged.
   tabiya-horizon-reranker-infra:extraEnv                              — default: {}
 
