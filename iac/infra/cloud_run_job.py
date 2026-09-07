@@ -9,6 +9,11 @@ country) are deliberately **not** baked in as named parameters: one deployed ima
 every country and every language, and the GCP Workflow supplies them as env overrides on
 each execution. ``extra_env`` exists for the cases where a stack wants a baked-in default —
 see ``extraEnv`` in ``__main__.py``.
+
+``extra_secrets`` is the same idea for values that must not sit in Pulumi config as
+plaintext. Its reason to exist is the configurable reranker model: selecting a
+non-Gemini provider takes plain env vars (``RERANKER_LLM_PROVIDER``,
+``RERANKER_LLM_MODEL``, …), but that provider's API key belongs in Secret Manager.
 """
 
 from typing import Mapping, Optional
@@ -35,9 +40,10 @@ def create_reranker_job(
     timeout: str,
     max_retries: int,
     extra_env: Optional[Mapping[str, str]] = None,
+    extra_secrets: Optional[Mapping[str, str]] = None,
 ):
     # Names this function already sets — from Secret Manager or a dedicated Pulumi
-    # config key. extra_env must not shadow them.
+    # config key. Neither extra_env nor extra_secrets may shadow them.
     reserved = frozenset(
         {
             "MONGODB_URI",
@@ -117,6 +123,39 @@ def create_reranker_job(
                 "a dedicated Pulumi config key."
             )
         envs.append(gcp.cloudrunv2.JobTemplateTemplateContainerEnvArgs(name=name, value=str(value)))
+
+    # Secret-backed env vars: value is "<secretId>" or "<secretId>:<version>". Like
+    # extraEnv, an unset extraSecrets leaves the deployed job unchanged. The secret must
+    # already exist in this project and be readable by the job's service account — this
+    # references it, it does not create it.
+    declared_extra_env = {str(n).strip() for n in (extra_env or {})}
+    for name, ref in sorted((extra_secrets or {}).items()):
+        env_name = str(name).strip()
+        secret_ref = str(ref or "").strip()
+        if not env_name or not secret_ref:
+            continue
+        if env_name in reserved:
+            raise ValueError(
+                f"extraSecrets may not override {env_name!r} — it is set from Secret "
+                "Manager or a dedicated Pulumi config key."
+            )
+        if env_name in declared_extra_env:
+            raise ValueError(
+                f"{env_name!r} is declared in both extraEnv and extraSecrets — pick one, "
+                "so it is unambiguous whether the value comes from config or Secret Manager."
+            )
+        secret_id, _, version = secret_ref.partition(":")
+        envs.append(
+            gcp.cloudrunv2.JobTemplateTemplateContainerEnvArgs(
+                name=env_name,
+                value_source=gcp.cloudrunv2.JobTemplateTemplateContainerEnvValueSourceArgs(
+                    secret_key_ref=gcp.cloudrunv2.JobTemplateTemplateContainerEnvValueSourceSecretKeyRefArgs(
+                        secret=secret_id.strip(),
+                        version=(version.strip() or "latest"),
+                    ),
+                ),
+            )
+        )
 
     job = gcp.cloudrunv2.Job(
         "llm-reranker",

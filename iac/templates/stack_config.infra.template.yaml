@@ -39,6 +39,21 @@ config:
   #
   # TARGET_COUNTRY=argentina implies RERANKER_LANGUAGE=es and the resources/es/ pack;
   # set RERANKER_LANGUAGE only to break that pairing.
+  #
+  # Optional — secret-backed env vars for the Cloud Run Job, as a YAML mapping of env
+  # name to "<secretId>" or "<secretId>:<version>". Also left out of the template on
+  # purpose. Use it for credentials, which must not go in extraEnv as plaintext. The
+  # main case is backing the reranker with a non-Gemini model: the selection is plain
+  # env, the key is a secret:
+  #
+  #   tabiya-horizon-reranker-infra:extraEnv:
+  #     RERANKER_LLM_PROVIDER: anthropic
+  #     RERANKER_LLM_MODEL: claude-opus-5
+  #   tabiya-horizon-reranker-infra:extraSecrets:
+  #     RERANKER_LLM_API_KEY: RERANKER_LLM_API_KEY
+  #
+  # The secret must already exist in this project and be readable by the job's service
+  # account. GEMINI_API_KEY stays wired regardless — the job-embedding step needs it.
 
   # Cloud Run Job — resource limits
   tabiya-horizon-reranker-infra:jobMemory: <memory-limit>

@@ -112,6 +112,18 @@ _RERANKER_ENV_VARS = (
     "KENYA_RERANKER_CUTOFF_DATE",
     "ZAMBIA_RERANKER_CUTOFF_DATE",
     "GEMINI_TRANSIENT_MAX_ATTEMPTS",
+    "RERANKER_LLM_PROVIDER",
+    "RERANKER_LLM_CLIENT_CLASS",
+    "RERANKER_LLM_MODEL",
+    "RERANKER_LLM_API_KEY",
+    "RERANKER_LLM_BASE_URL",
+    "RERANKER_LLM_TEMPERATURE",
+    "RERANKER_LLM_MAX_OUTPUT_TOKENS",
+    "RERANKER_LLM_TIMEOUT_S",
+    "RERANKER_LLM_MAX_ATTEMPTS",
+    "RERANKER_LLM_OPTIONS",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
 )
 
 
@@ -155,6 +167,14 @@ def _clear_settings_caches() -> None:
         from utils import concat_whitening
 
         concat_whitening.reset_concat_whitening_cache()
+    except Exception:
+        pass
+    try:
+        from app.llm import reset_llm_clients
+
+        # A cached client is bound to the LlmConfig it was built from, so a test that
+        # changes RERANKER_LLM_* must not inherit the previous test's client.
+        reset_llm_clients()
     except Exception:
         pass
 

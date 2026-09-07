@@ -536,11 +536,19 @@ def occupation_to_skills_with_meta(items: list[dict[str, Any]]) -> dict[str, Any
 
 
 def build_llm_reranker_meta(settings: Settings) -> dict[str, Any]:
+    """``classifier_metadata`` block: schema version plus the model behind each pass.
+
+    All three passes share one configured client, so the three model fields are equal;
+    they stay separate because the shape is a published contract read by the matching
+    service. ``llm_provider`` is additive — a Gemini deployment still writes the same
+    model string it always did.
+    """
     return {
         "schema_version": PIPELINE_SCHEMA_VERSION,
-        "skill_ranker_model": settings.gemini_model,
-        "occupation_skills_relevance_model": settings.gemini_model,
-        "job_attributes_model": settings.gemini_model,
+        "llm_provider": settings.llm.provider,
+        "skill_ranker_model": settings.llm.model,
+        "occupation_skills_relevance_model": settings.llm.model,
+        "job_attributes_model": settings.llm.model,
         "classified_linked_entity_types": list(settings.classified_linked_entity_types),
     }
 

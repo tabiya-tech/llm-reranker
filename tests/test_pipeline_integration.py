@@ -1,20 +1,28 @@
 """Integration test for ``app.pipeline.process_single_job``.
 
 We exercise the full per-job pipeline (LLM1 -> LLM3 -> LLM2 -> document
-assembly) with the three Gemini-facing functions monkeypatched at the
+assembly) with the three model-facing functions monkeypatched at the
 ``app.pipeline`` module level (so the pipeline sees stubs without needing
 network access). Real taxonomy/CSV resources from ``resources/`` are used to
 ensure the wiring around the LLM calls — taxonomy resolution, occupation
 mapping, ranked-document construction — is genuinely tested end to end.
+
+``TestPipelineOverAConfiguredModel`` goes one level deeper: instead of stubbing the
+``run_*_for_job`` helpers it leaves them real and lets configuration select a fake
+:class:`~app.llm.base.LlmClient`. That covers the whole chain — env vars, LlmConfig,
+the provider factory, prompt assembly, response parsing, document assembly — and is
+the guarantee that swapping the backing model needs no change to pipeline code.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
 
 from app import pipeline as pipeline_module
+from app.llm import LlmClient
 from app.pipeline import load_taxonomy_context, process_single_job
 from app.schemas import AttributeEstimate, JobAttributesResult
 from utils.classifier_linked_entities import MappedEscoSkills
@@ -192,3 +200,77 @@ class TestProcessSingleJob:
         taxonomy = load_taxonomy_context(s)
         result = process_single_job(_classified_doc(), taxonomy, settings=s)
         assert result.ran_llm3 is False
+
+
+class ScriptedLlmClient(LlmClient):
+    """A whole model backend in twenty lines — the interface really is this small.
+
+    Answers each reranker pass from ``purpose`` alone. Records the prompts it was
+    given so a test can assert the pipeline actually went through the client.
+    """
+
+    #: (purpose, prompt) for every call, across instances.
+    calls: list[tuple[str, str]] = []
+
+    def generate_json(self, prompt: str, *, purpose: str = "") -> str:
+        ScriptedLlmClient.calls.append((purpose, prompt))
+        if purpose == "skill_ranker":
+            return json.dumps({"essential_skills": ["Python"], "optional_skills": []})
+        if purpose == "job_attributes":
+            return json.dumps(
+                {
+                    "attributes": [
+                        {
+                            "attribute_name": "earnings_per_month",
+                            "selected_level_id": "earn_15k",
+                            "confidence": "medium",
+                            "reasoning": "scripted",
+                        }
+                    ],
+                    "summary": "ranked by a configured non-Gemini model",
+                    "work_activities": [],
+                }
+            )
+        if purpose == "occupation_skills_relevance":
+            return json.dumps({"decisions": []})
+        raise AssertionError(f"unexpected purpose {purpose!r}")
+
+
+@pytest.mark.integration
+class TestPipelineOverAConfiguredModel:
+    """The pipeline runs unmodified on a model selected only by configuration."""
+
+    def test_ranked_document_is_produced_through_a_configured_client(self, make_settings):
+        ScriptedLlmClient.calls = []
+        s = make_settings(
+            TARGET_COUNTRY="kenya",
+            RERANKER_LLM_CLIENT_CLASS="tests.test_pipeline_integration:ScriptedLlmClient",
+            RERANKER_LLM_MODEL="scripted-model-v1",
+            # No GEMINI_API_KEY: nothing in the ranking path should need one.
+        )
+        taxonomy = load_taxonomy_context(s)
+
+        result = process_single_job(_classified_doc(), taxonomy, settings=s)
+
+        assert result.ran_llm1 is True
+        assert result.ran_llm2 is True
+        ranked = result.ranked_document
+        assert ranked is not None
+        # LLM1's answer survived parsing and label→URI mapping.
+        essential = ranked["llm_classified_skills"]["essential"]
+        assert [sk["uri"] for sk in essential] == [
+            "http://data.europa.eu/esco/skill/5247a6ce-6ed0-4fb3-b121-758921dcc44e"
+        ]
+        # LLM2's answer landed in the attributes block.
+        assert ranked["llm_job_attributes"]["summary"] == "ranked by a configured non-Gemini model"
+        assert ranked["llm_job_attributes"]["attributes"]["earnings_per_month"] == "earn_15k"
+        # The document records which model produced it.
+        meta = ranked["llm_reranker_meta"]
+        assert meta["skill_ranker_model"] == "scripted-model-v1"
+        assert meta["job_attributes_model"] == "scripted-model-v1"
+        assert meta["llm_provider"] == "custom"
+        # Both passes went through the configured client, with real assembled prompts.
+        purposes = [p for p, _ in ScriptedLlmClient.calls]
+        assert sorted(purposes) == ["job_attributes", "skill_ranker"]
+        llm1_prompt = next(pr for p, pr in ScriptedLlmClient.calls if p == "skill_ranker")
+        assert "Python" in llm1_prompt
