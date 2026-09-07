@@ -56,6 +56,12 @@ Pulumi updates the Cloud Run Job and Service to reference the exact `:sha` / `:s
 | `MONGODB_URI` | MongoDB connection string (consumed by Cloud Run Job) |
 | `GEMINI_API_KEY` | Google Gemini API key (consumed by Job + Service) |
 
+Backing the reranker with a non-Gemini model needs no change here: put the selection in
+`extraEnv` (`RERANKER_LLM_PROVIDER`, `RERANKER_LLM_MODEL`, `RERANKER_LLM_BASE_URL`) and the
+credential in `extraSecrets`, which references any secret in the project by id. See
+`../README.md#choosing-the-model`. `GEMINI_API_KEY` stays required either way — the
+job-embedding step is pinned to Gemini.
+
 These stack config secrets are reranker-specific (separate from the scraper's `stack-config-*` secrets) to avoid naming collisions when both IaC stacks share a GCP project.
 
 Bootstrap stack configs with:

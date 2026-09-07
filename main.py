@@ -20,7 +20,12 @@ from typing import Any
 from pymongo.operations import UpdateOne
 
 from app.batch_rank_one import RankOneJobResult, rank_one_classified_document
-from app.config import get_settings, log_ranker_run_configuration, reranker_enable_llm3_from_env
+from app.config import (
+    Settings,
+    get_settings,
+    log_ranker_run_configuration,
+    reranker_enable_llm3_from_env,
+)
 from app.database import (
     bulk_write_llm_upserts,
     complete_ranking_run_log,
@@ -32,6 +37,12 @@ from app.database import (
     update_ranking_run_progress,
 )
 from app.languages import LANGUAGE_REGISTRY
+from app.llm import (
+    LlmClient,
+    LlmConfigurationError,
+    describe_available_providers,
+    get_llm_client,
+)
 from app.logging_config import configure_logging
 from app.pipeline import load_taxonomy_context
 from utils.update_is_active_from_closing_date import sync_is_active_from_closing_date
@@ -104,14 +115,26 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _gemini_or_exit(settings) -> None:
-    if not settings.gemini_api_key:
+def _settings_and_llm_or_exit() -> tuple[Settings, LlmClient]:
+    settings: Settings | None = None
+    try:
+        settings = get_settings()
+        return settings, get_llm_client(settings.llm)
+    except LlmConfigurationError as e:
+        selection = (
+            f"Configured selection: provider={settings.llm.provider} "
+            f"model={settings.llm.model or '(unset)'} class={settings.llm.client_class}\n\n"
+            if settings is not None
+            else ""
+        )
         print(
-            "No Gemini API key configured. Set GEMINI_API_KEY in .env.\n"
-            "Create one at https://aistudio.google.com/apikey",
+            f"LLM configuration error: {e}\n\n"
+            f"{selection}"
+            f"Available providers (RERANKER_LLM_PROVIDER):\n"
+            f"{describe_available_providers()}",
             file=sys.stderr,
         )
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
 
 def _env_bool(name: str, default: bool = True) -> bool:
@@ -181,7 +204,7 @@ def run() -> None:
         # Exported before the first get_settings() so every resource path — taxonomy
         # labels, prompts, job attributes — resolves inside this language's pack.
         os.environ["RERANKER_LANGUAGE"] = str(args.language).strip()
-    settings = get_settings()
+    settings, llm = _settings_and_llm_or_exit()
     batch_size = (
         args.bulk_batch_size if args.bulk_batch_size is not None else settings.bulk_write_batch_size
     )
@@ -195,14 +218,14 @@ def run() -> None:
     limit_log = "all" if args.limit <= 0 else str(args.limit)
     logger.info(
         "Batch start | db=%s | limit=%s | target_collection=%s bulk_batch_size=%s | "
-        "startup_load_s=%.3f | taxonomy_relation_occupations=%s | model=%s",
+        "startup_load_s=%.3f | taxonomy_relation_occupations=%s | llm=%s",
         settings.mongodb_database,
         limit_log,
         settings.mongodb_target_collection,
         batch_size,
         startup_s,
         len(taxonomy.occ_map),
-        settings.gemini_model,
+        settings.llm.describe(),
     )
     logger.debug(
         "Batch config detail | job_attributes_schema=%s occupation_relations_csv=%s "
@@ -214,7 +237,6 @@ def run() -> None:
         list(settings.classified_linked_entity_types),
     )
 
-    _gemini_or_exit(settings)
     enable_llm3 = reranker_enable_llm3_from_env()
     log_ranker_run_configuration(
         logger,
@@ -260,7 +282,7 @@ def run() -> None:
     run_id = insert_ranking_run_log(
         settings=settings,
         limit=args.limit,
-        model=settings.gemini_model,
+        model=llm.model,
         source_collection=settings.mongodb_source_collection,
         target_collection=settings.mongodb_target_collection,
     )

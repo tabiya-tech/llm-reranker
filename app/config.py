@@ -17,6 +17,14 @@ from app.languages import (
     language_setting,
     normalise_language,
 )
+from app.llm.base import (
+    CUSTOM_PROVIDER,
+    DEFAULT_TEMPERATURE,
+    PROVIDER_API_KEY_ENV_VARS,
+    LlmConfig,
+    normalise_provider,
+    resolve_provider_class_path,
+)
 
 
 def _repo_root() -> Path:
@@ -118,6 +126,110 @@ def _float_env(name: str, default: float, *, min_v: float = 0.0, max_v: float = 
     except ValueError:
         return default
     return max(min_v, min(v, max_v))
+
+
+# Total attempts per LLM call, including the first. The historical Gemini path clamped
+# ``GEMINI_TRANSIENT_MAX_ATTEMPTS`` to 1..12; that clamp is preserved for every provider.
+_LLM_MAX_ATTEMPTS_DEFAULT = 5
+_LLM_MAX_ATTEMPTS_CEILING = 12
+
+# Gemini model used when nothing is configured — the reranker's historical default.
+_GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+
+
+def _llm_api_key_from_env(provider: str) -> str:
+    """API key for ``provider``: the generic variable first, then that provider's own.
+
+    The per-provider fallback is what lets an existing Gemini deployment keep working
+    untouched — it already sets ``GEMINI_API_KEY`` and never hears of
+    ``RERANKER_LLM_API_KEY``.
+    """
+    generic = (os.environ.get("RERANKER_LLM_API_KEY") or "").strip()
+    if generic:
+        return generic
+    for name in PROVIDER_API_KEY_ENV_VARS.get(provider, ()):
+        v = (os.environ.get(name) or "").strip()
+        if v:
+            return v
+    return ""
+
+
+def _llm_model_from_env(provider: str) -> str:
+    """Model id for ``provider``.
+
+    ``RERANKER_LLM_MODEL`` is the provider-neutral name. Gemini additionally honours the
+    pre-existing ``GEMINI_MODEL`` / ``VERTEX_MODEL`` chain and its baked-in default, so
+    switching to the new config path changes no Gemini deployment's model. Other
+    providers have no default: a missing model id is a configuration error raised by the
+    client at startup, not a silent fallback to somebody else's model.
+    """
+    explicit = (os.environ.get("RERANKER_LLM_MODEL") or "").strip()
+    if explicit:
+        return explicit
+    if provider == "gemini":
+        return (
+            os.environ.get("GEMINI_MODEL")
+            or os.environ.get("VERTEX_MODEL")
+            or _GEMINI_DEFAULT_MODEL
+        ).strip()
+    return ""
+
+
+def _llm_config_from_env() -> LlmConfig:
+    """Resolve the deployment's model selection into a frozen :class:`LlmConfig`.
+
+    Selection order:
+
+    1. ``RERANKER_LLM_CLIENT_CLASS`` — an explicit dotted path always wins, and may name
+       a class outside this repo.
+    2. ``RERANKER_LLM_PROVIDER`` — a shipped alias, mapped through
+       :data:`app.llm.base.PROVIDER_CLASS_PATHS`.
+    3. Neither set — Gemini, so an existing deployment's behaviour is unchanged.
+
+    Setting both is legal and useful: the class path selects the implementation while the
+    provider alias still supplies the API-key fallback (e.g. a hand-rolled Anthropic
+    client that should read ``ANTHROPIC_API_KEY``).
+
+    An unknown provider alias raises :class:`~app.llm.errors.LlmConfigurationError` here,
+    at config time. Everything else that can be wrong (unimportable class, missing model
+    id or key) is validated when the client is built, which the batch CLI and the API
+    both do before processing any job.
+    """
+    class_path_raw = (os.environ.get("RERANKER_LLM_CLIENT_CLASS") or "").strip()
+    provider_raw = (os.environ.get("RERANKER_LLM_PROVIDER") or "").strip()
+
+    if provider_raw:
+        provider = normalise_provider(provider_raw)
+        # Validates the alias even when a class path overrides it, so a typo is never silent.
+        alias_path = resolve_provider_class_path(provider, raw=provider_raw)
+        client_class = class_path_raw or alias_path
+    elif class_path_raw:
+        provider = CUSTOM_PROVIDER
+        client_class = class_path_raw
+    else:
+        provider = "gemini"
+        client_class = resolve_provider_class_path(provider)
+
+    return LlmConfig(
+        provider=provider,
+        client_class=client_class,
+        model=_llm_model_from_env(provider),
+        api_key=_llm_api_key_from_env(provider),
+        base_url=(os.environ.get("RERANKER_LLM_BASE_URL") or "").strip().rstrip("/"),
+        temperature=_float_env("RERANKER_LLM_TEMPERATURE", DEFAULT_TEMPERATURE, max_v=2.0),
+        max_output_tokens=_int_env_min0("RERANKER_LLM_MAX_OUTPUT_TOKENS", 0, max_v=1_000_000),
+        timeout_s=_float_env("RERANKER_LLM_TIMEOUT_S", 0.0),
+        max_attempts=_int_env(
+            "RERANKER_LLM_MAX_ATTEMPTS",
+            _int_env(
+                "GEMINI_TRANSIENT_MAX_ATTEMPTS",
+                _LLM_MAX_ATTEMPTS_DEFAULT,
+                max_v=_LLM_MAX_ATTEMPTS_CEILING,
+            ),
+            max_v=_LLM_MAX_ATTEMPTS_CEILING,
+        ),
+        options_json=(os.environ.get("RERANKER_LLM_OPTIONS") or "").strip(),
+    )
 
 
 def _llm3_menu_signal_filter_from_env() -> str:
@@ -559,7 +671,17 @@ class Settings:
     field_closing_date: str
     field_source_platform: str
 
-    # Gemini (GenAI API key or Vertex AI fallback)
+    # The reranker's backing LLM: which implementation to load and how to call it.
+    # This — not the ``gemini_*`` fields below — is what the three grading/enrichment
+    # passes use. See ``app.llm`` and ``RERANKER_LLM_*`` in ``.env.example``.
+    llm: LlmConfig
+
+    # Gemini specifics. ``gemini_api_key`` is still read directly by the job-embedding
+    # step (``utils/gemini_embeddings.py``), which is pinned to Gemini because
+    # match_v4's vector space and the whitening artifact are built from that model.
+    # ``gemini_model`` / ``vertex_model`` remain the source of the default for
+    # ``llm.model`` when the provider is Gemini; read ``settings.llm.model`` for
+    # "which model actually ran".
     gemini_api_key: str
     gemini_model: str
     gcp_project_id: str
@@ -761,6 +883,7 @@ class Settings:
             field_source_platform=os.environ.get(
                 "CLASSIFIED_FIELD_SOURCE_PLATFORM", "source_platform"
             ),
+            llm=_llm_config_from_env(),
             gemini_api_key=(
                 os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY") or ""
             ).strip(),
@@ -905,12 +1028,14 @@ def log_ranker_run_configuration(
     wa_run = _bool_env("RERANKER_RUN_WA_ENRICHMENT", default=True)
     wa_fail = _bool_env("RERANKER_FAIL_ON_WA_ENRICHMENT_ERROR", default=False)
     sync_is_active = _bool_env("RERANKER_SYNC_IS_ACTIVE_FROM_CLOSING_DATE", default=True)
-    key_tail = settings.gemini_api_key[-4:] if settings.gemini_api_key else "?"
+    key_tail = settings.llm.api_key_tail()
     loc = f"{settings.target_country} ({settings.country_name})"
 
     log.info(
         "Ranker run configuration | invocation=%s | TARGET_COUNTRY=%s | "
-        "RERANKER_LANGUAGE=%s | resources=%s | GEMINI_MODEL=%s | GEMINI_API_KEY=...%s | "
+        "RERANKER_LANGUAGE=%s | resources=%s | "
+        "RERANKER_LLM_PROVIDER=%s | RERANKER_LLM_MODEL=%s | RERANKER_LLM_CLIENT_CLASS=%s | "
+        "llm_api_key=...%s | "
         "MONGODB_SOURCE_COLLECTION=%s | MONGODB_TARGET_COLLECTION=%s | "
         "RERANKER_ENABLE_LLM3=%s | RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE=%s | "
         "RERANKER_LLM3_MAX_MENU_SKILLS=%s | RERANKER_LLM3_MENU_SIGNAL_FILTER=%s | "
@@ -928,7 +1053,9 @@ def log_ranker_run_configuration(
         loc,
         f"{settings.language} ({settings.language_name})",
         settings.language_resources_dir.name,
-        settings.gemini_model,
+        settings.llm.provider,
+        settings.llm.model,
+        settings.llm.client_class,
         key_tail,
         settings.mongodb_source_collection,
         settings.mongodb_target_collection,

@@ -16,7 +16,8 @@ Batch pipeline and HTTP API that processes classified job documents from MongoDB
 | `api.py` | FastAPI service — single-job HTTP endpoint (Cloud Run Service) |
 | `main.py` | Batch CLI — process full collection (Cloud Run Job) |
 | `app/pipeline.py` | Shared per-job processing core |
-| `app/` | Config, MongoDB, prompts, Gemini client, schemas, logging |
+| `app/llm/` | The backing LLM: `LlmClient` interface, provider factory, provider implementations |
+| `app/` | Config, MongoDB, prompts, schemas, logging |
 | `utils/` | Classifier entities, ESCO–Tabiya mapping, occupation–skill relations |
 | `app/languages/` | Language registry — one config module per language |
 | `resources/<lang>/` | Per-language pack: taxonomy label CSVs, prompts, job-attribute schema |
@@ -26,7 +27,7 @@ Batch pipeline and HTTP API that processes classified job documents from MongoDB
 
 - Python 3.11+
 - MongoDB
-- [Gemini API key](https://aistudio.google.com/apikey)
+- An API key for whichever model backs the reranker — a [Gemini API key](https://aistudio.google.com/apikey) by default (see [Choosing the model](#choosing-the-model))
 
 ## Setup
 
@@ -37,6 +38,65 @@ cp .env.example .env
 ```
 
 Edit `.env` with: `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_SOURCE_COLLECTION`, `MONGODB_TARGET_COLLECTION`, and `GEMINI_API_KEY`. See `.env.example` for all available options.
+
+## Choosing the model
+
+The three LLM passes talk to a model only through `LlmClient` (`app/llm/base.py`), and configuration decides which implementation answers. Nothing in the grading or enrichment code — prompts, parsing, `pipeline.py`, `ranked_job_schema.py` — knows which provider is in use, so swapping models is an env change.
+
+**Default (unchanged).** Set nothing and the reranker runs on Gemini from `GEMINI_API_KEY` / `GEMINI_MODEL`, with the same temperature, JSON mode, and retry policy it always had.
+
+**Pick a shipped provider** with `RERANKER_LLM_PROVIDER`:
+
+| Alias | Backend | Needs |
+|---|---|---|
+| `gemini` | Google GenAI SDK | `GEMINI_API_KEY`; model defaults to `gemini-2.5-flash` |
+| `anthropic` | Claude Messages API | `ANTHROPIC_API_KEY`, `RERANKER_LLM_MODEL` |
+| `openai` | OpenAI Chat Completions | `OPENAI_API_KEY`, `RERANKER_LLM_MODEL` |
+| `openai_compatible` | Any server speaking Chat Completions — Qwen/DashScope, vLLM, Ollama, LM Studio, llama.cpp, Together, Groq | `RERANKER_LLM_BASE_URL`, `RERANKER_LLM_MODEL`; API key optional |
+
+```bash
+# Claude
+RERANKER_LLM_PROVIDER=anthropic
+RERANKER_LLM_MODEL=claude-opus-5
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Qwen on a local vLLM / Ollama server
+RERANKER_LLM_PROVIDER=openai_compatible
+RERANKER_LLM_BASE_URL=http://localhost:11434/v1
+RERANKER_LLM_MODEL=qwen3:32b
+```
+
+Only Anthropic and OpenAI-compatible providers need no extra dependency — they use the documented REST APIs over `httpx`, which is already installed. See `.env.example` for the tuning knobs (`RERANKER_LLM_TEMPERATURE`, `RERANKER_LLM_MAX_OUTPUT_TOKENS`, `RERANKER_LLM_TIMEOUT_S`, `RERANKER_LLM_MAX_ATTEMPTS`) and `RERANKER_LLM_OPTIONS`, a JSON object merged into the provider's request body for anything not covered by those.
+
+**Add a provider** by implementing one method and pointing config at the class — no registration, no edit to `app/llm/`:
+
+```python
+# my_pkg/my_model.py
+from app.llm import LlmClient, LlmConfigurationError, LlmInvocationError
+
+class MyLlmClient(LlmClient):
+    def __init__(self, config):
+        super().__init__(config)
+        self.key = config.require_api_key(env_hint="MY_VENDOR_API_KEY")
+        config.require_model()          # raises LlmConfigurationError if unset
+
+    def generate_json(self, prompt: str, *, purpose: str = "") -> str:
+        ...                             # return the model's raw text
+```
+
+```bash
+RERANKER_LLM_CLIENT_CLASS=my_pkg.my_model:MyLlmClient
+RERANKER_LLM_MODEL=my-model-v1
+RERANKER_LLM_API_KEY=...
+```
+
+The contract is in `app/llm/base.py`: return raw text (fenced ```json is tolerated — every parser strips fences), never return an empty string, raise `LlmConfigurationError` for anything a retry cannot fix and `LlmInvocationError` for a failed call. Clients are built once per process and shared across `RERANKER_PARALLEL_WORKERS` threads, so they must be thread-safe. `app/llm/retry.py` provides the transient-failure retry the shipped providers use.
+
+**Misconfiguration fails at startup**, not one job at a time: both `main.py` and the API build the client before reading MongoDB, so an unknown provider, an unimportable class, a class that is not an `LlmClient`, a missing model id, or a missing key stops the run with a message naming the variable to fix.
+
+**Not covered by this setting:** the job-embedding step (`RERANKER_JOB_EMBEDDING_MODEL`) stays on `gemini-embedding-001` and still needs `GEMINI_API_KEY` when enabled. It writes into match_v4's stage-1 vector space, whose whitening artifact was fitted on that model — a different embedding model would not be a swap but a re-fit across two repos.
+
+The model that actually ran is recorded per document in `classifier_metadata` (`llm_provider`, `skill_ranker_model`, `job_attributes_model`, `occupation_skills_relevance_model`) and in each run log.
 
 ## API — single job
 

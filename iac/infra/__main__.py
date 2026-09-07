@@ -43,6 +43,16 @@ Required Pulumi config:
   # Unset (the default) leaves the deployed job unchanged.
   tabiya-horizon-reranker-infra:extraEnv                              — default: {}
 
+  # Optional: secret-backed env vars for the Cloud Run Job (map of env name -> secret
+  # reference, "<secretId>" or "<secretId>:<version>"). Use this for credentials, which
+  # must not sit in Pulumi config as plaintext. Its main use is a non-Gemini reranker
+  # model: RERANKER_LLM_PROVIDER / RERANKER_LLM_MODEL go in extraEnv, the key here:
+  #   tabiya-horizon-reranker-infra:extraSecrets:
+  #     RERANKER_LLM_API_KEY: RERANKER_LLM_API_KEY
+  # The secret must already exist in this project and be readable by the job's service
+  # account. Unset (the default) leaves the deployed job unchanged.
+  tabiya-horizon-reranker-infra:extraSecrets                          — default: {}
+
   # Service resources
   tabiya-horizon-reranker-infra:serviceMemory                         — default: 4Gi
   tabiya-horizon-reranker-infra:serviceCpu                            — default: 2
@@ -81,6 +91,7 @@ concat_whitening_path = config.get("concatWhiteningPath") or "resources/concat_w
 concat_whitening_required = config.get("concatWhiteningRequired") or "1"
 
 extra_env = config.get_object("extraEnv") or {}
+extra_secrets = config.get_object("extraSecrets") or {}
 
 job_memory = config.get("jobMemory") or "2Gi"
 job_cpu = config.get("jobCpu") or "1000m"
@@ -123,6 +134,7 @@ reranker_job = create_reranker_job(
     timeout=job_timeout,
     max_retries=job_max_retries,
     extra_env=extra_env,
+    extra_secrets=extra_secrets,
 )
 pulumi.export("rerankerJobName", reranker_job.name)
 

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings, get_settings_for_language, log_ranker_run_configuration
 from app.languages import LANGUAGE_REGISTRY, normalise_language
+from app.llm import get_llm_client
 from app.logging_config import configure_logging
 from app.pipeline import JobResult, TaxonomyContext, load_taxonomy_context, process_single_job
 
@@ -78,14 +79,17 @@ async def lifespan(application: FastAPI):
     configure_logging()
     global _taxonomy
     settings = get_settings()
-    if not settings.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY is not configured — cannot start API server.")
+    # Build the configured model up front: a misconfigured selection must fail the
+    # container's startup probe, not the first request that reaches it. This also
+    # warms the process-wide client that every request will reuse.
+    llm = get_llm_client(settings.llm)
     logger.info("Loading taxonomy data (CSV lookups)…")
     _taxonomy = load_taxonomy_context(settings)
     _taxonomies[settings.language] = _taxonomy
     logger.info(
-        "API ready | model=%s | language=%s | taxonomy_occupations=%s | supported_languages=%s",
-        settings.gemini_model,
+        "API ready | llm=%s (%s) | language=%s | taxonomy_occupations=%s | supported_languages=%s",
+        llm.model,
+        settings.llm.provider,
         settings.language,
         len(_taxonomy.occ_map),
         ",".join(LANGUAGE_REGISTRY),

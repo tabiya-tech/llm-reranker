@@ -1,25 +1,21 @@
-"""Gemini calls — JSON responses for skill ranking, job attributes, and occupation-skills relevance.
+"""The reranker's three LLM passes: skill ranking, job attributes, occupation-skill relevance.
 
-Prefers the Google GenAI SDK (``GEMINI_API_KEY``) when an API key is configured;
-falls back to Vertex AI SDK (service account) otherwise.
+Prompt assembly and response parsing live here; *which model answers* does not. Every
+call goes through :class:`app.llm.base.LlmClient`, loaded from configuration by
+:mod:`app.llm.factory`, so pointing a deployment at Claude, GPT, Qwen or a local
+server changes no code in this module.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-import random
-import time
 from dataclasses import asdict, replace
 from typing import Any
 
-import httpx
-from google import genai
-from google.genai import types as genai_types
-
 from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
+from app.llm import LlmClient, get_llm_client
 from app.prompts import (
     JobAttributesLlm2Extras,
     OccupationPromptEnrichment,
@@ -54,129 +50,29 @@ from utils.classifier_linked_entities import (
 
 logger = logging.getLogger(__name__)
 
-_genai_client: genai.Client | None = None
+# Labels passed to the client as ``purpose`` — they identify the pass in provider logs
+# and error messages, and are the same strings used in ``classifier_metadata``.
+PURPOSE_SKILL_RANKER = "skill_ranker"
+PURPOSE_JOB_ATTRIBUTES = "job_attributes"
+PURPOSE_OCCUPATION_SKILLS_RELEVANCE = "occupation_skills_relevance"
 
 
-def _get_genai_client(settings: Settings) -> genai.Client:
-    """Return a process-scoped GenAI client (created once, reused across calls)."""
-    global _genai_client
-    if _genai_client is not None:
-        return _genai_client
-    api_key = settings.gemini_api_key
-    if not api_key:
-        raise RuntimeError(
-            "No Gemini API key found. Set GEMINI_API_KEY (or API_KEY) in .env.\n"
-            "Create one at https://aistudio.google.com/apikey for your GCP project."
-        )
-    _genai_client = genai.Client(api_key=api_key)
-    return _genai_client
+def llm_client(settings: Settings | None = None) -> LlmClient:
+    """The configured model for this run (built once per process, per configuration)."""
+    s = settings or get_settings()
+    return get_llm_client(s.llm)
 
 
-def _reset_genai_client() -> None:
-    """Drop cached client so the next call opens a fresh HTTP pool (after connection drops)."""
-    global _genai_client
-    _genai_client = None
-
-
-def _transient_gemini_network_error(exc: BaseException) -> bool:
-    """True for errors where retrying the same request may succeed (load balancers, idle TCP, Wi‑Fi)."""
-    if isinstance(
-        exc,
-        (
-            httpx.ReadError,
-            httpx.ConnectError,
-            httpx.RemoteProtocolError,
-            httpx.TimeoutException,
-            ConnectionResetError,
-            BrokenPipeError,
-            TimeoutError,
-        ),
-    ):
-        return True
-    msg = str(exc).lower()
-    for needle in (
-        "connection reset",
-        "connection aborted",
-        "broken pipe",
-        "econnreset",
-        "readerror",
-        "temporarily unavailable",
-    ):
-        if needle in msg:
-            return True
-    errno = getattr(exc, "errno", None)
-    if errno == 54:  # macOS ECONNRESET / "connection reset by peer" on some runs
-        return True
-    cause = getattr(exc, "__cause__", None)
-    if cause is not None and cause is not exc:
-        return _transient_gemini_network_error(cause)
-    return False
-
-
-def _gemini_transient_max_attempts() -> int:
-    raw = (os.environ.get("GEMINI_TRANSIENT_MAX_ATTEMPTS") or "5").strip()
-    try:
-        n = int(raw)
-    except ValueError:
-        return 5
-    return max(1, min(n, 12))
-
-
-def _call_gemini_json(prompt: str, *, settings: Settings) -> str:
-    """Gemini call via GenAI SDK with JSON MIME; retries transient network failures across batches."""
-    config = genai_types.GenerateContentConfig(
-        temperature=0.2,
-        response_mime_type="application/json",
-    )
-    max_attempts = _gemini_transient_max_attempts()
-    last_exc: BaseException | None = None
-
-    for attempt in range(max_attempts):
-        client = _get_genai_client(settings)
-        try:
-            response = client.models.generate_content(
-                model=settings.gemini_model,
-                contents=prompt,
-                config=config,
-            )
-        except Exception as e:
-            last_exc = e
-            msg = str(e)
-            if "404" in msg or "not found" in msg.lower():
-                raise RuntimeError(
-                    f"Model {settings.gemini_model!r} not found (or project has no access). "
-                    f"Check the model id at https://ai.google.dev/gemini-api/docs/models — "
-                    f"preview models use a -preview suffix (e.g. gemini-3-pro-preview)."
-                ) from e
-            if attempt + 1 < max_attempts and _transient_gemini_network_error(e):
-                delay = min(60.0, (2**attempt) + random.uniform(0.0, 1.5))
-                logger.warning(
-                    "Gemini transient network error (attempt %s/%s): %s — retry in %.1fs; "
-                    "recreating API client",
-                    attempt + 1,
-                    max_attempts,
-                    e,
-                    delay,
-                )
-                time.sleep(delay)
-                _reset_genai_client()
-                continue
-            ename = type(e).__name__
-            raise RuntimeError(f"Gemini API error ({ename}): {msg}") from e
-
-        text = _response_text(response)
-        if not text.strip():
-            raise RuntimeError("Empty response from Gemini")
-        return text
-
-    raise RuntimeError(f"Gemini API error: exhausted retries ({last_exc})") from last_exc
+def _generate_json(prompt: str, *, purpose: str, settings: Settings) -> str:
+    """Ask the configured model for JSON; retries and error translation are the client's job."""
+    return llm_client(settings).generate_json(prompt, purpose=purpose)
 
 
 def call_skill_ranker_model(prompt: str, *, settings: Settings | None = None) -> str:
     """LLM call 1 — skill ranker; expect JSON."""
     s = settings or get_settings()
-    logger.debug("LLM call 1 (skill ranker): invoking model=%s", s.gemini_model)
-    out = _call_gemini_json(prompt, settings=s)
+    logger.debug("LLM call 1 (skill ranker): invoking %s", s.llm.describe())
+    out = _generate_json(prompt, purpose=PURPOSE_SKILL_RANKER, settings=s)
     logger.debug("LLM call 1 (skill ranker): completed")
     return out
 
@@ -184,8 +80,8 @@ def call_skill_ranker_model(prompt: str, *, settings: Settings | None = None) ->
 def call_job_attributes_model(prompt: str, *, settings: Settings | None = None) -> str:
     """LLM call 2 — job attributes; expect JSON with ``attributes`` and ``work_activities``."""
     s = settings or get_settings()
-    logger.debug("LLM call 2 (job attributes): invoking model=%s", s.gemini_model)
-    out = _call_gemini_json(prompt, settings=s)
+    logger.debug("LLM call 2 (job attributes): invoking %s", s.llm.describe())
+    out = _generate_json(prompt, purpose=PURPOSE_JOB_ATTRIBUTES, settings=s)
     logger.debug("LLM call 2 (job attributes): completed")
     return out
 
@@ -193,8 +89,8 @@ def call_job_attributes_model(prompt: str, *, settings: Settings | None = None) 
 def call_occupation_skills_relevance_model(prompt: str, *, settings: Settings | None = None) -> str:
     """LLM call 3 — occupation-skills listing relevance; expect valid JSON."""
     s = settings or get_settings()
-    logger.debug("LLM call 3 (occupation skills relevance): invoking model=%s", s.gemini_model)
-    out = _call_gemini_json(prompt, settings=s)
+    logger.debug("LLM call 3 (occupation skills relevance): invoking %s", s.llm.describe())
+    out = _generate_json(prompt, purpose=PURPOSE_OCCUPATION_SKILLS_RELEVANCE, settings=s)
     logger.debug("LLM call 3 (occupation skills relevance): completed")
     return out
 
@@ -326,20 +222,6 @@ def run_job_attributes_for_job(
     raw = call_job_attributes_model(prompt, settings=s)
     parsed = parse_job_attributes_response(raw, schema_resolved, onet_resolved, settings=s)
     return replace(parsed, raw_response=raw)
-
-
-def _response_text(response: Any) -> str:
-    t = getattr(response, "text", None)
-    if isinstance(t, str) and t.strip():
-        return t
-    cands = getattr(response, "candidates", None) or []
-    if not cands:
-        return ""
-    parts = getattr(cands[0].content, "parts", None) or []
-    if not parts:
-        return ""
-    p0 = parts[0]
-    return getattr(p0, "text", "") or ""
 
 
 def run_skill_ranker_for_job(

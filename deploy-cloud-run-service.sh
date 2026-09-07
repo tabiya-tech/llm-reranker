@@ -26,18 +26,25 @@ IMAGE="${RERANKER_IMAGE:-us-central1-docker.pkg.dev/${PROJECT}/job-pipeline/llm-
 # Container listens on 8080 (Cloud Run default PORT).
 CONTAINER_PORT=8080
 
-# --- Non-secret env vars (add more with repeated --update-env-vars or use Console) ---
+# --- Non-secret env vars (comma-separated NAME=VALUE) ---
 # Minimal set; mirror your local .env for full behavior (database, model, paths).
-ENV_VARS="PYTHONUNBUFFERED=1"
+# Append the reranker's model selection here when it is not the Gemini default:
+#   export RERANKER_SERVICE_ENV_VARS="RERANKER_LLM_PROVIDER=anthropic,RERANKER_LLM_MODEL=claude-opus-5"
+ENV_VARS="PYTHONUNBUFFERED=1${RERANKER_SERVICE_ENV_VARS:+,${RERANKER_SERVICE_ENV_VARS}}"
 
-# REQUIRED in practice: mount GEMINI_API_KEY (API exits on startup without it; uvicorn never binds → Cloud Run error).
+# REQUIRED in practice: mount the API key for whichever model backs the reranker. The API
+# builds its LLM client at startup and exits if that fails, so uvicorn never binds and
+# Cloud Run reports a deploy error.
 #   export RERANKER_SERVICE_SECRETS="GEMINI_API_KEY=YOUR_SECRET_NAME:latest"
+# For another provider, mount that provider's variable instead (ANTHROPIC_API_KEY,
+# OPENAI_API_KEY, or the generic RERANKER_LLM_API_KEY) — plus GEMINI_API_KEY if the
+# job-embedding step is enabled, since it stays on Gemini.
 # Cloud Run's service account needs secretmanager.secretAccessor on that secret.
 # Optional extra: ,MONGODB_URI=...
 SECRETS="${RERANKER_SERVICE_SECRETS:-}"
 
 if [[ -z "${SECRETS}" ]]; then
-  echo "WARNING: RERANKER_SERVICE_SECRETS is empty — deploy often fails (no GEMINI_API_KEY)." >&2
+  echo "WARNING: RERANKER_SERVICE_SECRETS is empty — deploy often fails (no LLM API key)." >&2
   echo "  Example: export RERANKER_SERVICE_SECRETS='GEMINI_API_KEY=GEMINI_API_KEY:latest'" >&2
 fi
 
