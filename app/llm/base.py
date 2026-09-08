@@ -30,8 +30,12 @@ PROVIDER_CLASS_PATHS: dict[str, str] = {
     "gemini": "app.llm.providers.gemini:GeminiLlmClient",
     "anthropic": "app.llm.providers.anthropic:AnthropicLlmClient",
     "openai": "app.llm.providers.openai:OpenAiLlmClient",
-    # Any OpenAI-Chat-Completions-compatible server: Qwen/DashScope compatible mode,
-    # vLLM, Ollama, LM Studio, llama.cpp, Together, Groq, … — set RERANKER_LLM_BASE_URL.
+    # Hosted Qwen through Alibaba DashScope's OpenAI-compatible mode.
+    "qwen": "app.llm.providers.qwen:QwenLlmClient",
+    # A local (or Ollama Cloud) Ollama, over its native /api/chat.
+    "ollama": "app.llm.providers.ollama:OllamaLlmClient",
+    # Any other OpenAI-Chat-Completions-compatible server: vLLM, SGLang, LM Studio,
+    # llama.cpp, Together, Groq, … — set RERANKER_LLM_BASE_URL.
     "openai_compatible": "app.llm.providers.openai:OpenAiCompatibleLlmClient",
 }
 
@@ -42,7 +46,18 @@ PROVIDER_API_KEY_ENV_VARS: dict[str, tuple[str, ...]] = {
     "gemini": ("GEMINI_API_KEY", "API_KEY"),
     "anthropic": ("ANTHROPIC_API_KEY",),
     "openai": ("OPENAI_API_KEY",),
+    "qwen": ("DASHSCOPE_API_KEY", "QWEN_API_KEY"),
+    # A local Ollama has no auth; Ollama Cloud / a proxied instance takes a key.
+    "ollama": ("OLLAMA_API_KEY",),
     "openai_compatible": (),
+}
+
+# Provider alias → env vars consulted for the API endpoint when
+# ``RERANKER_LLM_BASE_URL`` is unset. ``OLLAMA_HOST`` is the variable the Ollama
+# CLI itself reads, so a host that already runs Ollama elsewhere needs no new one;
+# it may omit the scheme (``127.0.0.1:11434``), which :mod:`app.config` adds.
+PROVIDER_BASE_URL_ENV_VARS: dict[str, tuple[str, ...]] = {
+    "ollama": ("OLLAMA_BASE_URL", "OLLAMA_HOST"),
 }
 
 # Provider name recorded for a selection made purely by class path.
@@ -97,7 +112,7 @@ class LlmConfig:
     provider: str
     # Dotted path (``module:Class`` or ``module.Class``) of the LlmClient to load.
     client_class: str
-    # Provider-specific model id, e.g. ``gemini-2.5-flash``, ``claude-opus-5``, ``qwen3-32b``.
+    # Provider-specific model id, e.g. ``gemini-2.5-flash``, ``claude-opus-5``, ``qwen3:32b``.
     model: str
     api_key: str = ""
     # Override the provider's API host — required for self-hosted / OpenAI-compatible servers.

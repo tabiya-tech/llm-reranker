@@ -31,7 +31,9 @@ from app.llm import (
 )
 from app.llm.providers.anthropic import AnthropicLlmClient
 from app.llm.providers.gemini import GeminiLlmClient
+from app.llm.providers.ollama import OllamaLlmClient
 from app.llm.providers.openai import OpenAiCompatibleLlmClient, OpenAiLlmClient
+from app.llm.providers.qwen import QwenLlmClient
 
 pytestmark = pytest.mark.unit
 
@@ -130,6 +132,56 @@ class TestConfigResolution:
             RERANKER_LLM_PROVIDER="openai", RERANKER_LLM_MODEL="gpt-4.1", OPENAI_API_KEY="sk-oai"
         )
         assert s.llm.api_key == "sk-oai"
+
+    def test_dashscope_key_env_is_used_for_the_qwen_provider(self, make_settings):
+        s = make_settings(
+            RERANKER_LLM_PROVIDER="qwen",
+            RERANKER_LLM_MODEL="qwen-plus",
+            DASHSCOPE_API_KEY="sk-dashscope",
+        )
+        assert s.llm.client_class == PROVIDER_CLASS_PATHS["qwen"]
+        assert s.llm.api_key == "sk-dashscope"
+
+    def test_qwen_api_key_is_the_second_dashscope_fallback(self, make_settings):
+        s = make_settings(
+            RERANKER_LLM_PROVIDER="qwen", RERANKER_LLM_MODEL="qwen-plus", QWEN_API_KEY="sk-qwen"
+        )
+        assert s.llm.api_key == "sk-qwen"
+
+    def test_ollama_needs_only_a_model(self, make_settings):
+        """A local Ollama has no key and listens on a known port — nothing else to set."""
+        s = make_settings(RERANKER_LLM_PROVIDER="ollama", RERANKER_LLM_MODEL="qwen3:32b")
+        assert s.llm.client_class == PROVIDER_CLASS_PATHS["ollama"]
+        assert s.llm.api_key == ""
+        assert s.llm.base_url == ""
+        assert build_llm_client(s.llm).base_url == "http://localhost:11434"
+
+    def test_ollama_host_env_supplies_the_endpoint_and_gains_a_scheme(self, make_settings):
+        """OLLAMA_HOST is the variable the Ollama CLI itself reads, and is scheme-less."""
+        s = make_settings(
+            RERANKER_LLM_PROVIDER="ollama",
+            RERANKER_LLM_MODEL="qwen3:32b",
+            OLLAMA_HOST="ollama.internal:11434",
+        )
+        assert s.llm.base_url == "http://ollama.internal:11434"
+
+    def test_generic_base_url_wins_over_the_ollama_var(self, make_settings):
+        s = make_settings(
+            RERANKER_LLM_PROVIDER="ollama",
+            RERANKER_LLM_MODEL="qwen3:32b",
+            OLLAMA_HOST="ollama.internal:11434",
+            RERANKER_LLM_BASE_URL="http://127.0.0.1:9999/",
+        )
+        assert s.llm.base_url == "http://127.0.0.1:9999"
+
+    def test_ollama_host_is_not_read_for_another_provider(self, make_settings):
+        s = make_settings(
+            OLLAMA_HOST="ollama.internal:11434",
+            RERANKER_LLM_PROVIDER="openai",
+            RERANKER_LLM_MODEL="gpt-4.1",
+            OPENAI_API_KEY="sk-oai",
+        )
+        assert s.llm.base_url == ""
 
     def test_gemini_key_is_not_leaked_to_another_provider(self, make_settings):
         """A machine with GEMINI_API_KEY exported must not send it to Anthropic."""
@@ -767,3 +819,188 @@ class TestOpenAiCompatibleClient:
         )
         with pytest.raises(LlmConfigurationError, match="http://"):
             build_llm_client(cfg)
+
+
+class TestOllamaClient:
+    def _client(self, **overrides) -> OllamaLlmClient:
+        cfg = LlmConfig(
+            provider="ollama",
+            client_class=PROVIDER_CLASS_PATHS["ollama"],
+            model="qwen3:32b",
+            **overrides,
+        )
+        return OllamaLlmClient(cfg)
+
+    def _ok(self, content: str = "{}") -> httpx.Response:
+        return _json_response(200, {"message": {"role": "assistant", "content": content}})
+
+    def test_posts_the_native_chat_endpoint_with_json_format(self, monkeypatch):
+        client = self._client()
+        seen = _stub_http(monkeypatch, client, lambda r: self._ok('{"ok": 1}'))
+        assert client.generate_json("prompt", purpose="skill_ranker") == '{"ok": 1}'
+        (request,) = seen
+        assert str(request.url) == "http://localhost:11434/api/chat"
+        body = json.loads(request.content)
+        assert body["model"] == "qwen3:32b"
+        assert body["messages"] == [{"role": "user", "content": "prompt"}]
+        assert body["stream"] is False
+        assert body["format"] == "json"
+        assert body["options"] == {"temperature": 0.2}
+
+    def test_local_server_needs_no_api_key(self, monkeypatch):
+        client = self._client()
+        seen = _stub_http(monkeypatch, client, lambda r: self._ok())
+        client.generate_json("p")
+        assert "authorization" not in seen[0].headers
+
+    def test_a_configured_key_is_sent_as_a_bearer_token(self, monkeypatch):
+        client = self._client(api_key="ollama-cloud-key", base_url="https://ollama.com")
+        seen = _stub_http(monkeypatch, client, lambda r: self._ok())
+        client.generate_json("p")
+        assert str(seen[0].url) == "https://ollama.com/api/chat"
+        assert seen[0].headers["authorization"] == "Bearer ollama-cloud-key"
+
+    def test_openai_compat_base_url_is_tolerated(self, monkeypatch):
+        """Operators paste the /v1 URL from the compat docs; the native API is one level up."""
+        client = self._client(base_url="http://ollama.internal:11434/v1")
+        seen = _stub_http(monkeypatch, client, lambda r: self._ok())
+        client.generate_json("p")
+        assert str(seen[0].url) == "http://ollama.internal:11434/api/chat"
+
+    def test_token_cap_becomes_num_predict_and_extras_land_in_options(self, monkeypatch):
+        client = self._client(
+            max_output_tokens=4096,
+            options_json='{"top_p": 0.9, "num_ctx": 8192, "keep_alive": "10m"}',
+        )
+        seen = _stub_http(monkeypatch, client, lambda r: self._ok())
+        client.generate_json("p")
+        body = json.loads(seen[0].content)
+        assert body["options"] == {
+            "temperature": 0.2,
+            "num_predict": 4096,
+            "top_p": 0.9,
+            "num_ctx": 8192,
+        }
+        # keep_alive is a request field, not a runtime option.
+        assert body["keep_alive"] == "10m"
+
+    def test_format_can_be_a_schema_or_disabled(self, monkeypatch):
+        schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+        client = self._client(options_json=json.dumps({"format": schema}))
+        seen = _stub_http(monkeypatch, client, lambda r: self._ok())
+        client.generate_json("p")
+        assert json.loads(seen[0].content)["format"] == schema
+
+        off = self._client(options_json='{"format": null}')
+        seen = _stub_http(monkeypatch, off, lambda r: self._ok())
+        off.generate_json("p")
+        assert "format" not in json.loads(seen[0].content)
+
+    def test_a_model_that_was_never_pulled_is_a_configuration_error(self, monkeypatch):
+        client = self._client(max_attempts=5)
+        seen = _stub_http(
+            monkeypatch,
+            client,
+            lambda r: _json_response(404, {"error": 'model "qwen3:32b" not found, try pulling it'}),
+        )
+        with pytest.raises(LlmConfigurationError, match="try pulling it"):
+            client.generate_json("p")
+        assert len(seen) == 1
+
+    def test_truncation_before_any_text_is_reported_actionably(self, monkeypatch):
+        client = self._client()
+        _stub_http(
+            monkeypatch,
+            client,
+            lambda r: _json_response(200, {"message": {"content": ""}, "done_reason": "length"}),
+        )
+        with pytest.raises(LlmInvocationError, match="RERANKER_LLM_MAX_OUTPUT_TOKENS"):
+            client.generate_json("p")
+
+    def test_a_response_from_something_that_is_not_ollama_says_so(self, monkeypatch):
+        client = self._client()
+        _stub_http(monkeypatch, client, lambda r: _json_response(200, {"choices": []}))
+        with pytest.raises(LlmInvocationError, match="RERANKER_LLM_BASE_URL"):
+            client.generate_json("p")
+
+    def test_requires_a_model_id(self):
+        cfg = LlmConfig(
+            provider="ollama",
+            client_class=PROVIDER_CLASS_PATHS["ollama"],
+            model="",
+        )
+        with pytest.raises(LlmConfigurationError, match="RERANKER_LLM_MODEL"):
+            build_llm_client(cfg)
+
+    def test_a_cold_local_model_gets_a_longer_default_timeout(self):
+        assert self._client().timeout_s > 120.0
+        assert self._client(timeout_s=30.0).timeout_s == 30.0
+
+
+class TestQwenClient:
+    def _client(self, **overrides) -> QwenLlmClient:
+        cfg = LlmConfig(
+            provider="qwen",
+            client_class=PROVIDER_CLASS_PATHS["qwen"],
+            model="qwen-plus",
+            api_key="sk-dashscope",
+            **overrides,
+        )
+        return QwenLlmClient(cfg)
+
+    def _ok(self, content: str = "{}") -> httpx.Response:
+        return _json_response(200, {"choices": [{"message": {"content": content}}]})
+
+    def test_posts_dashscope_compatible_mode_with_thinking_off(self, monkeypatch):
+        client = self._client()
+        seen = _stub_http(monkeypatch, client, lambda r: self._ok('{"ok": 1}'))
+        assert client.generate_json("prompt", purpose="job_attributes") == '{"ok": 1}'
+        (request,) = seen
+        assert str(request.url) == (
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+        )
+        assert request.headers["authorization"] == "Bearer sk-dashscope"
+        body = json.loads(request.content)
+        assert body["model"] == "qwen-plus"
+        assert body["temperature"] == 0.2
+        assert body["response_format"] == {"type": "json_object"}
+        # A non-streaming DashScope call rejects qwen3's default thinking mode.
+        assert body["enable_thinking"] is False
+
+    def test_thinking_can_be_re_enabled_or_omitted(self, monkeypatch):
+        on = self._client(options_json='{"enable_thinking": true}')
+        seen = _stub_http(monkeypatch, on, lambda r: self._ok())
+        on.generate_json("p")
+        assert json.loads(seen[0].content)["enable_thinking"] is True
+
+        off = self._client(options_json='{"enable_thinking": null}')
+        seen = _stub_http(monkeypatch, off, lambda r: self._ok())
+        off.generate_json("p")
+        assert "enable_thinking" not in json.loads(seen[0].content)
+
+    def test_the_beijing_region_is_a_base_url_override(self, monkeypatch):
+        client = self._client(base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
+        seen = _stub_http(monkeypatch, client, lambda r: self._ok())
+        client.generate_json("p")
+        assert str(seen[0].url).startswith("https://dashscope.aliyuncs.com/compatible-mode/v1")
+
+    def test_missing_key_names_the_dashscope_var(self):
+        cfg = LlmConfig(
+            provider="qwen",
+            client_class=PROVIDER_CLASS_PATHS["qwen"],
+            model="qwen-plus",
+            api_key="",
+        )
+        with pytest.raises(LlmConfigurationError, match="DASHSCOPE_API_KEY"):
+            build_llm_client(cfg)
+
+    def test_bad_key_is_a_configuration_error_and_is_not_retried(self, monkeypatch):
+        client = self._client(max_attempts=5)
+        seen = _stub_http(
+            monkeypatch,
+            client,
+            lambda r: _json_response(401, {"error": {"message": "Incorrect API key"}}),
+        )
+        with pytest.raises(LlmConfigurationError, match="Incorrect API key"):
+            client.generate_json("p")
+        assert len(seen) == 1

@@ -37,8 +37,10 @@ ENV_VARS="PYTHONUNBUFFERED=1${RERANKER_SERVICE_ENV_VARS:+,${RERANKER_SERVICE_ENV
 # Cloud Run reports a deploy error.
 #   export RERANKER_SERVICE_SECRETS="GEMINI_API_KEY=YOUR_SECRET_NAME:latest"
 # For another provider, mount that provider's variable instead (ANTHROPIC_API_KEY,
-# OPENAI_API_KEY, or the generic RERANKER_LLM_API_KEY) — plus GEMINI_API_KEY if the
-# job-embedding step is enabled, since it stays on Gemini.
+# OPENAI_API_KEY, DASHSCOPE_API_KEY, or the generic RERANKER_LLM_API_KEY) — plus
+# GEMINI_API_KEY if the job-embedding step is enabled, since it stays on Gemini.
+# The ollama provider needs no secret, but Cloud Run has no local Ollama: point
+# RERANKER_LLM_BASE_URL at a reachable one (a sidecar, or Ollama Cloud + OLLAMA_API_KEY).
 # Cloud Run's service account needs secretmanager.secretAccessor on that secret.
 # Optional extra: ,MONGODB_URI=...
 SECRETS="${RERANKER_SERVICE_SECRETS:-}"
