@@ -41,6 +41,9 @@ class HttpJsonLlmClient(LlmClient):
     default_base_url = ""
     #: Whether a usable client requires an API key (local servers often do not).
     requires_api_key = True
+    #: Request timeout when ``RERANKER_LLM_TIMEOUT_S`` is unset. Providers that are
+    #: slow by nature (a local model loading its weights) raise it.
+    default_timeout_s = DEFAULT_TIMEOUT_S
 
     def __init__(self, config: LlmConfig) -> None:
         super().__init__(config)
@@ -51,7 +54,7 @@ class HttpJsonLlmClient(LlmClient):
             else (config.api_key or "").strip()
         )
         self.base_url = self._resolve_base_url(config)
-        self.timeout_s = config.timeout_s if config.timeout_s > 0 else DEFAULT_TIMEOUT_S
+        self.timeout_s = config.timeout_s if config.timeout_s > 0 else self.default_timeout_s
         self._http: httpx.Client | None = None
         self._http_lock = threading.Lock()
 

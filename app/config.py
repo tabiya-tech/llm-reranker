@@ -21,6 +21,7 @@ from app.llm.base import (
     CUSTOM_PROVIDER,
     DEFAULT_TEMPERATURE,
     PROVIDER_API_KEY_ENV_VARS,
+    PROVIDER_BASE_URL_ENV_VARS,
     LlmConfig,
     normalise_provider,
     resolve_provider_class_path,
@@ -154,6 +155,27 @@ def _llm_api_key_from_env(provider: str) -> str:
     return ""
 
 
+def _llm_base_url_from_env(provider: str) -> str:
+    """API endpoint for ``provider``: the generic variable first, then that provider's own.
+
+    Only Ollama has one (``OLLAMA_BASE_URL`` / ``OLLAMA_HOST``), which is what lets a
+    host that already runs Ollama point the reranker at it without a reranker-specific
+    variable. ``OLLAMA_HOST`` is conventionally scheme-less (``127.0.0.1:11434``), so a
+    scheme is added here; ``RERANKER_LLM_BASE_URL`` stays strict and is rejected by the
+    client when it has none.
+    """
+    generic = (os.environ.get("RERANKER_LLM_BASE_URL") or "").strip()
+    if generic:
+        return generic.rstrip("/")
+    for name in PROVIDER_BASE_URL_ENV_VARS.get(provider, ()):
+        v = (os.environ.get(name) or "").strip()
+        if v:
+            if not v.startswith(("http://", "https://")):
+                v = f"http://{v}"
+            return v.rstrip("/")
+    return ""
+
+
 def _llm_model_from_env(provider: str) -> str:
     """Model id for ``provider``.
 
@@ -215,7 +237,7 @@ def _llm_config_from_env() -> LlmConfig:
         client_class=client_class,
         model=_llm_model_from_env(provider),
         api_key=_llm_api_key_from_env(provider),
-        base_url=(os.environ.get("RERANKER_LLM_BASE_URL") or "").strip().rstrip("/"),
+        base_url=_llm_base_url_from_env(provider),
         temperature=_float_env("RERANKER_LLM_TEMPERATURE", DEFAULT_TEMPERATURE, max_v=2.0),
         max_output_tokens=_int_env_min0("RERANKER_LLM_MAX_OUTPUT_TOKENS", 0, max_v=1_000_000),
         timeout_s=_float_env("RERANKER_LLM_TIMEOUT_S", 0.0),

@@ -52,7 +52,9 @@ The three LLM passes talk to a model only through `LlmClient` (`app/llm/base.py`
 | `gemini` | Google GenAI SDK | `GEMINI_API_KEY`; model defaults to `gemini-2.5-flash` |
 | `anthropic` | Claude Messages API | `ANTHROPIC_API_KEY`, `RERANKER_LLM_MODEL` |
 | `openai` | OpenAI Chat Completions | `OPENAI_API_KEY`, `RERANKER_LLM_MODEL` |
-| `openai_compatible` | Any server speaking Chat Completions — Qwen/DashScope, vLLM, Ollama, LM Studio, llama.cpp, Together, Groq | `RERANKER_LLM_BASE_URL`, `RERANKER_LLM_MODEL`; API key optional |
+| `qwen` | Qwen on Alibaba DashScope (compatible mode) | `DASHSCOPE_API_KEY`, `RERANKER_LLM_MODEL` |
+| `ollama` | Ollama's native `/api/chat` — any pulled model (Qwen, Llama, Mistral, …) | `RERANKER_LLM_MODEL`; endpoint defaults to `http://localhost:11434` |
+| `openai_compatible` | Any other server speaking Chat Completions — vLLM, SGLang, LM Studio, llama.cpp, Together, Groq | `RERANKER_LLM_BASE_URL`, `RERANKER_LLM_MODEL`; API key optional |
 
 ```bash
 # Claude
@@ -60,13 +62,25 @@ RERANKER_LLM_PROVIDER=anthropic
 RERANKER_LLM_MODEL=claude-opus-5
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Qwen on a local vLLM / Ollama server
-RERANKER_LLM_PROVIDER=openai_compatible
-RERANKER_LLM_BASE_URL=http://localhost:11434/v1
+# Hosted Qwen (DashScope)
+RERANKER_LLM_PROVIDER=qwen
+RERANKER_LLM_MODEL=qwen-plus
+DASHSCOPE_API_KEY=sk-...
+
+# Qwen on a local Ollama — `ollama pull qwen3:32b` first
+RERANKER_LLM_PROVIDER=ollama
 RERANKER_LLM_MODEL=qwen3:32b
+# RERANKER_LLM_BASE_URL=http://ollama.internal:11434   # or OLLAMA_HOST, if already set
+
+# Qwen on a local vLLM / SGLang
+RERANKER_LLM_PROVIDER=openai_compatible
+RERANKER_LLM_BASE_URL=http://localhost:8000/v1
+RERANKER_LLM_MODEL=Qwen/Qwen3-32B
 ```
 
-Only Anthropic and OpenAI-compatible providers need no extra dependency — they use the documented REST APIs over `httpx`, which is already installed. See `.env.example` for the tuning knobs (`RERANKER_LLM_TEMPERATURE`, `RERANKER_LLM_MAX_OUTPUT_TOKENS`, `RERANKER_LLM_TIMEOUT_S`, `RERANKER_LLM_MAX_ATTEMPTS`) and `RERANKER_LLM_OPTIONS`, a JSON object merged into the provider's request body for anything not covered by those.
+Every provider except Gemini needs no extra dependency — they use the documented REST APIs over `httpx`, which is already installed. See `.env.example` for the tuning knobs (`RERANKER_LLM_TEMPERATURE`, `RERANKER_LLM_MAX_OUTPUT_TOKENS`, `RERANKER_LLM_TIMEOUT_S`, `RERANKER_LLM_MAX_ATTEMPTS`) and `RERANKER_LLM_OPTIONS`, a JSON object merged into the provider's request body for anything not covered by those.
+
+Two provider-specific behaviours are worth knowing. **Ollama** is addressed by its native API, so `RERANKER_LLM_OPTIONS` carries Ollama's runtime options (`{"num_ctx": 8192, "top_p": 0.9}`) into the request's `options` block, `{"format": {…}}` swaps free-form JSON for a constrained schema decode, and the default timeout is 600 s because a cold local model spends the first minutes loading weights; a `/v1` suffix on the base URL is stripped, so pasting the OpenAI-compat URL still works. **Qwen** on DashScope sends `enable_thinking=false`: Qwen3 hybrid models think by default and DashScope serves thinking only over streaming, which this non-streaming call is not — override with `RERANKER_LLM_OPTIONS={"enable_thinking": true}`.
 
 **Add a provider** by implementing one method and pointing config at the class — no registration, no edit to `app/llm/`:
 
