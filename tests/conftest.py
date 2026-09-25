@@ -129,6 +129,18 @@ _RERANKER_ENV_VARS = (
     "OLLAMA_API_KEY",
     "OLLAMA_BASE_URL",
     "OLLAMA_HOST",
+    "RERANKER_ENABLE_TRACING",
+    "RERANKER_LANGFUSE_PUBLIC_KEY",
+    "RERANKER_LANGFUSE_SECRET_KEY",
+    "RERANKER_LANGFUSE_HOST",
+    "RERANKER_TRACING_ENVIRONMENT",
+    "RERANKER_TRACING_RELEASE",
+    "RERANKER_TRACING_CONFIG",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_HOST",
+    "LANGFUSE_BASE_URL",
+    "K_REVISION",
 )
 
 
@@ -182,6 +194,22 @@ def _clear_settings_caches() -> None:
         reset_llm_clients()
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _tracing_off(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep Langfuse off in every test, whatever the developer's ``.env`` says.
+
+    ``api.lifespan`` initialises tracing from the environment; without this a local
+    ``RERANKER_ENABLE_TRACING=1`` would make the test suite export traces. Tests that
+    assert on spans use ``app.observability.testing.in_memory_tracing`` instead.
+    """
+    monkeypatch.setenv("RERANKER_ENABLE_TRACING", "0")
+    yield
+    from app.observability import tracing
+
+    tracing._client = None
+    tracing._config = tracing.TracingConfig()
 
 
 @pytest.fixture

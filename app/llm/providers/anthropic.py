@@ -4,7 +4,7 @@ from typing import Any, Mapping
 
 from app.llm.base import LlmConfig
 from app.llm.errors import LlmInvocationError
-from app.llm.providers._http import HttpJsonLlmClient
+from app.llm.providers._http import HttpJsonLlmClient, _usage_details
 
 DEFAULT_BASE_URL = "https://api.anthropic.com"
 DEFAULT_API_VERSION = "2023-06-01"
@@ -79,3 +79,19 @@ class AnthropicLlmClient(HttpJsonLlmClient):
                 "RERANKER_LLM_MAX_OUTPUT_TOKENS."
             )
         return text
+
+    def extract_usage(self, payload: Mapping[str, Any]) -> dict[str, int] | None:
+        """Messages API ``usage``; cache reads/writes are kept as their own usage types."""
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        out = _usage_details(usage.get("input_tokens"), usage.get("output_tokens")) or {}
+        for key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int) and value > 0:
+                out[key] = value
+        # ``input_tokens`` excludes cached tokens, so the total has to add them back.
+        out.pop("total", None)
+        if out:
+            out["total"] = sum(out.values())
+        return out or None

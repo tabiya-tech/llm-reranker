@@ -4,7 +4,7 @@ from typing import Any, Mapping
 
 from app.llm.base import LlmConfig
 from app.llm.errors import LlmInvocationError
-from app.llm.providers._http import HttpJsonLlmClient
+from app.llm.providers._http import HttpJsonLlmClient, _usage_details
 
 # Ollama's own default listen address. A deployment that runs it as a sidecar or
 # behind a proxy overrides this with RERANKER_LLM_BASE_URL / OLLAMA_HOST.
@@ -111,3 +111,7 @@ class OllamaLlmClient(HttpJsonLlmClient):
             f"Ollama response has no message.content (keys: {sorted(payload)}). "
             f"Check that RERANKER_LLM_BASE_URL points at an Ollama server."
         )
+
+    def extract_usage(self, payload: Mapping[str, Any]) -> dict[str, int] | None:
+        """``/api/chat`` reports prompt and completion tokens as eval counts."""
+        return _usage_details(payload.get("prompt_eval_count"), payload.get("eval_count"))

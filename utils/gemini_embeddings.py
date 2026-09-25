@@ -7,6 +7,8 @@ from typing import Any, Optional, Sequence
 
 import numpy as np
 
+from app.observability import report_usage, traced_observation, update_observation
+
 MODEL_NAME = "gemini-embedding-001"
 EMBEDDING_DIM = 3072
 TASK_TYPE = "SEMANTIC_SIMILARITY"
@@ -24,30 +26,74 @@ def _embed_chunk(
     embedding_dim: int,
     task_type: str,
 ) -> np.ndarray:
+    """One ``embed_content`` request (with retries), recorded as a Langfuse embedding."""
     from google.genai import types as genai_types
 
     payload = list(texts)
-    last_err: Optional[BaseException] = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            result = client.models.embed_content(
-                model=model,
-                contents=payload,
-                config=genai_types.EmbedContentConfig(
-                    task_type=task_type,
-                    output_dimensionality=embedding_dim,
-                ),
-            )
-            rows = []
-            for emb in result.embeddings:
-                rows.append(np.asarray(emb.values, dtype=np.float32))
-            return np.stack(rows, axis=0)
-        except Exception as e:
-            last_err = e
-            if attempt == MAX_RETRIES - 1:
-                break
-            time.sleep(2**attempt)
+    with traced_observation(
+        name="embed_content",
+        as_type="embedding",
+        input=payload,
+        model=model,
+        model_parameters={"task_type": task_type, "output_dimensionality": embedding_dim},
+        metadata={
+            "provider": "gemini",
+            "texts": len(payload),
+            "input_characters": sum(len(t) for t in payload),
+        },
+    ) as observation:
+        last_err: Optional[BaseException] = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                result = client.models.embed_content(
+                    model=model,
+                    contents=payload,
+                    config=genai_types.EmbedContentConfig(
+                        task_type=task_type,
+                        output_dimensionality=embedding_dim,
+                    ),
+                )
+                rows = []
+                for emb in result.embeddings:
+                    rows.append(np.asarray(emb.values, dtype=np.float32))
+                mat = np.stack(rows, axis=0)
+                # The vectors themselves are not exported: 3072 floats per text is ingest
+                # cost with nothing to read. Their count and shape are what a trace needs.
+                update_observation(
+                    observation,
+                    output={"vectors": int(mat.shape[0]), "dim": int(mat.shape[1])},
+                    metadata={"attempts": attempt + 1},
+                )
+                report_usage(_embedding_usage(result))
+                return mat
+            except Exception as e:
+                last_err = e
+                if attempt == MAX_RETRIES - 1:
+                    break
+                time.sleep(2**attempt)
+        update_observation(
+            observation,
+            level="ERROR",
+            status_message=f"{type(last_err).__name__}: {last_err}",
+            metadata={"attempts": MAX_RETRIES},
+        )
     raise RuntimeError(f"Gemini embed_content failed after {MAX_RETRIES} attempts: {last_err}")
+
+
+def _embedding_usage(result: Any) -> dict[str, int] | None:
+    """Input tokens, when the API reports them.
+
+    Vertex AI returns a per-vector ``statistics.token_count``; the Gemini Developer API
+    returns none, and then no usage is recorded rather than an invented one.
+    """
+    total = 0
+    seen = False
+    for emb in getattr(result, "embeddings", None) or []:
+        count = getattr(getattr(emb, "statistics", None), "token_count", None)
+        if isinstance(count, (int, float)) and not isinstance(count, bool):
+            total += int(count)
+            seen = True
+    return {"input": total, "total": total} if seen else None
 
 
 def embed_text_list(

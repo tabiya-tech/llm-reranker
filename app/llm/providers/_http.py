@@ -10,6 +10,7 @@ import httpx
 from app.llm.base import LlmClient, LlmConfig
 from app.llm.errors import LlmConfigurationError, LlmInvocationError
 from app.llm.retry import call_with_transient_retry, is_transient_network_error
+from app.observability import report_usage
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,19 @@ class HttpJsonLlmClient(LlmClient):
         """Completion text from the parsed response body."""
         raise NotImplementedError
 
+    def extract_usage(self, payload: Mapping[str, Any]) -> dict[str, int] | None:
+        """Token counts for the Langfuse generation, as ``{"input", "output", "total"}``.
+
+        Defaults to the Chat Completions ``usage`` block, which OpenAI, Qwen and most
+        compatible servers return. ``None`` when the server reports none.
+        """
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        return _usage_details(
+            usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens")
+        )
+
     # ------------------------------------------------------------------- the call
 
     def generate_json(self, prompt: str, *, purpose: str = "") -> str:
@@ -171,6 +185,10 @@ class HttpJsonLlmClient(LlmClient):
             ) from e
 
         text = self.extract_text(payload)
+        try:
+            report_usage(self.extract_usage(payload))
+        except Exception as e:  # usage is best-effort; it must never fail the call
+            logger.debug("Could not read token usage from %s response: %s", self.provider_label, e)
         if not text.strip():
             raise LlmInvocationError(
                 f"Empty response from {self.provider_label} "
@@ -178,6 +196,19 @@ class HttpJsonLlmClient(LlmClient):
                 f"Response keys: {sorted(payload)}"
             )
         return text
+
+
+def _usage_details(
+    input_tokens: Any, output_tokens: Any, total: Any = None
+) -> dict[str, int] | None:
+    """Langfuse ``usage_details`` from whichever counts a provider returned."""
+    out: dict[str, int] = {}
+    for key, value in (("input", input_tokens), ("output", output_tokens), ("total", total)):
+        if isinstance(value, int) and not isinstance(value, bool):
+            out[key] = value
+    if "total" not in out and "input" in out and "output" in out:
+        out["total"] = out["input"] + out["output"]
+    return out or None
 
 
 def _error_snippet(response: httpx.Response, *, limit: int = 500) -> str:

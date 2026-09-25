@@ -12,6 +12,13 @@ from app.config import get_settings, get_settings_for_language, log_ranker_run_c
 from app.languages import LANGUAGE_REGISTRY, normalise_language
 from app.llm import get_llm_client
 from app.logging_config import configure_logging
+from app.observability import (
+    init_tracing,
+    job_trace,
+    shutdown_tracing,
+    tracing_config_from_env,
+    update_observation,
+)
 from app.pipeline import JobResult, TaxonomyContext, load_taxonomy_context, process_single_job
 
 logger = logging.getLogger(__name__)
@@ -83,6 +90,7 @@ async def lifespan(application: FastAPI):
     # container's startup probe, not the first request that reaches it. This also
     # warms the process-wide client that every request will reuse.
     llm = get_llm_client(settings.llm)
+    init_tracing(tracing_config_from_env())
     logger.info("Loading taxonomy data (CSV lookups)…")
     _taxonomy = load_taxonomy_context(settings)
     _taxonomies[settings.language] = _taxonomy
@@ -95,6 +103,8 @@ async def lifespan(application: FastAPI):
         ",".join(LANGUAGE_REGISTRY),
     )
     yield
+    # Flush buffered traces before Cloud Run tears the instance down.
+    shutdown_tracing()
     _taxonomy = None
     _taxonomies.clear()
 
@@ -144,11 +154,22 @@ async def rank_job(body: dict[str, Any], language: str | None = None) -> RankRes
         invocation="api",
     )
     try:
-        result: JobResult = process_single_job(
-            doc,
-            taxonomy,
-            settings=settings,
-        )
+        with job_trace(doc, settings=settings, invocation="api") as trace:
+            result: JobResult = process_single_job(
+                doc,
+                taxonomy,
+                settings=settings,
+            )
+            update_observation(
+                trace,
+                output={
+                    "ran_llm1": result.ran_llm1,
+                    "ran_llm2": result.ran_llm2,
+                    "ran_llm3": result.ran_llm3,
+                    "ranked": result.ranked_document is not None,
+                    "timings": result.timings,
+                },
+            )
     except Exception as exc:
         logger.exception("Error processing job: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
