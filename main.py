@@ -44,6 +44,13 @@ from app.llm import (
     get_llm_client,
 )
 from app.logging_config import configure_logging
+from app.observability import (
+    init_tracing,
+    job_trace,
+    shutdown_tracing,
+    tracing_config_from_env,
+    update_observation,
+)
 from app.pipeline import load_taxonomy_context
 from utils.update_is_active_from_closing_date import sync_is_active_from_closing_date
 from utils.work_activities_enrichment import run as run_work_activities_enrichment
@@ -205,6 +212,8 @@ def run() -> None:
         # labels, prompts, job attributes — resolves inside this language's pack.
         os.environ["RERANKER_LANGUAGE"] = str(args.language).strip()
     settings, llm = _settings_and_llm_or_exit()
+    # After settings, so the repo .env has been loaded into the environment.
+    init_tracing(tracing_config_from_env())
     batch_size = (
         args.bulk_batch_size if args.bulk_batch_size is not None else settings.bulk_write_batch_size
     )
@@ -357,14 +366,32 @@ def run() -> None:
             return f"#{j}"
 
         def _run_one(doc: dict[str, Any], job_label: str) -> RankOneJobResult:
-            return rank_one_classified_document(
+            # One Langfuse trace per job, grouped into a session per batch run.
+            with job_trace(
                 doc,
-                job_label=job_label,
-                args=args,
                 settings=settings,
-                taxonomy=taxonomy,
-                enable_llm3=enable_llm3,
-            )
+                invocation="batch",
+                session_id=run_id,
+                job_label=job_label,
+            ) as trace:
+                r = rank_one_classified_document(
+                    doc,
+                    job_label=job_label,
+                    args=args,
+                    settings=settings,
+                    taxonomy=taxonomy,
+                    enable_llm3=enable_llm3,
+                )
+                update_observation(
+                    trace,
+                    output={
+                        "ran_llm1": bool(r.llm1_inc),
+                        "ran_llm2": bool(r.llm2_inc),
+                        "ran_llm3": bool(r.llm3_inc),
+                        "upsert_queued": bool(r.upsert_increment),
+                    },
+                )
+                return r
 
         if use_parallel:
             chunk_sz = max(1, workers)
@@ -529,7 +556,11 @@ def run() -> None:
 
 
 def main() -> None:
-    run()
+    try:
+        run()
+    finally:
+        # The container goes away with the process: flush the last jobs' traces first.
+        shutdown_tracing()
 
 
 if __name__ == "__main__":

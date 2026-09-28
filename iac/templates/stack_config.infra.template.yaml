@@ -54,6 +54,16 @@ config:
   #
   # The secret must already exist in this project and be readable by the job's service
   # account. GEMINI_API_KEY stays wired regardless — the job-embedding step needs it.
+  #
+  # Langfuse tracing (see README "LLM tracing") is wired the same way:
+  #
+  #   tabiya-horizon-reranker-infra:extraEnv:
+  #     RERANKER_ENABLE_TRACING: "1"
+  #     RERANKER_LANGFUSE_HOST: https://cloud.langfuse.com
+  #     RERANKER_TRACING_ENVIRONMENT: dev
+  #   tabiya-horizon-reranker-infra:extraSecrets:
+  #     RERANKER_LANGFUSE_PUBLIC_KEY: RERANKER_LANGFUSE_PUBLIC_KEY
+  #     RERANKER_LANGFUSE_SECRET_KEY: RERANKER_LANGFUSE_SECRET_KEY
 
   # Cloud Run Job — resource limits
   tabiya-horizon-reranker-infra:jobMemory: <memory-limit>

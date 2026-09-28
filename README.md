@@ -17,6 +17,7 @@ Batch pipeline and HTTP API that processes classified job documents from MongoDB
 | `main.py` | Batch CLI — process full collection (Cloud Run Job) |
 | `app/pipeline.py` | Shared per-job processing core |
 | `app/llm/` | The backing LLM: `LlmClient` interface, provider factory, provider implementations |
+| `app/observability/` | LLM tracing to Langfuse — generations and embeddings, per job |
 | `app/` | Config, MongoDB, prompts, schemas, logging |
 | `utils/` | Classifier entities, ESCO–Tabiya mapping, occupation–skill relations |
 | `app/languages/` | Language registry — one config module per language |
@@ -253,6 +254,46 @@ English level **ids** (they are the contract with the matching service) and expr
 labels as multiples of the Salario Mínimo Vital y Móvil rather than nominal ARS amounts,
 which go stale with inflation. Replace them with ARS bands once Empujar supplies a local
 calibration.
+
+## LLM tracing (Langfuse)
+
+Every model call the reranker makes can be traced to [Langfuse](https://langfuse.com). The
+layer in `app/observability/` is the one the compass-connect backend runs, adapted to jobs
+instead of conversations. It is **off by default**; a deployment with no Langfuse
+credentials behaves exactly as before.
+
+What is recorded, per ranked job:
+
+| Observation | Type | Carries |
+|---|---|---|
+| `rank_job` | trace | job id, title, employer, platform; tags `invocation:`, `country:`, `language:`, `llm_provider:` |
+| `skill_ranker`, `job_attributes`, `occupation_skills_relevance` | generation | prompt, raw JSON output, model, temperature, token usage |
+| `embed_content` | embedding | the text embedded, model, `task_type`, `output_dimensionality`, vector count/dim, token usage when reported |
+
+Batch jobs from one run share a Langfuse **session**, named by the `reranker_logs` run `_id`.
+Token usage comes from every shipped provider (Gemini counts thinking tokens as output).
+The Gemini Developer API does not report embedding tokens, so embedding usage appears only
+on Vertex AI. The vectors are never exported, only their shape.
+
+Turn it on in `.env`:
+
+```bash
+RERANKER_ENABLE_TRACING=1
+RERANKER_LANGFUSE_HOST=https://cloud.langfuse.com
+RERANKER_LANGFUSE_PUBLIC_KEY=pk-lf-...
+RERANKER_LANGFUSE_SECRET_KEY=sk-lf-...
+RERANKER_TRACING_ENVIRONMENT=dev
+RERANKER_TRACING_CONFIG={"batchSampleRate": 1.0, "apiSampleRate": 1.0, "maskPii": true, "maxPayloadChars": 100000}
+```
+
+Sampling is deterministic per job id, so a sampled job is always traced whole. `maskPii`
+redacts e-mail addresses, phone numbers and long digit runs before export. It is a
+heuristic: for job ads that must not leave your infrastructure, point the host at a
+self-hosted Langfuse.
+
+On the Cloud Run **Job**, wire the keys without an IaC change through the existing stack
+config: `extraEnv` for `RERANKER_ENABLE_TRACING` / `RERANKER_LANGFUSE_HOST`, and
+`extraSecrets` for the keys (see `iac/templates/stack_config.infra.template.yaml`).
 
 ## Deployment
 

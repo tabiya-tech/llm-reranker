@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -138,8 +139,11 @@ def run_llm1_llm2_phase(
 
     if use_overlap:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            f1 = pool.submit(_llm1)
-            f2 = pool.submit(_llm2)
+            # Each call runs in a copy of this thread's context, so its Langfuse
+            # generation nests under the job's trace instead of starting a new one.
+            # One copy per call: a Context cannot be entered by two threads at once.
+            f1 = pool.submit(contextvars.copy_context().run, _llm1)
+            f2 = pool.submit(contextvars.copy_context().run, _llm2)
             llm1_s, essential, optional, skill_mapped, skill_raw = f1.result()
             llm2_s, ja = f2.result()
         ran_skill = True

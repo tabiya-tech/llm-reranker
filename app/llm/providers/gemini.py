@@ -9,6 +9,7 @@ from google.genai import types as genai_types
 from app.llm.base import LlmClient, LlmConfig
 from app.llm.errors import LlmConfigurationError, LlmInvocationError
 from app.llm.retry import call_with_transient_retry, is_transient_network_error
+from app.observability import report_usage
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ class GeminiLlmClient(LlmClient):
         model = self.config.model
         label = f"Gemini[{purpose or 'json'}]"
 
-        def _once() -> str:
+        def _once() -> object:
             client = self._client()
             try:
                 response = client.models.generate_content(
@@ -101,10 +102,10 @@ class GeminiLlmClient(LlmClient):
                         f"preview models use a -preview suffix (e.g. gemini-3-pro-preview)."
                     ) from e
                 raise
-            return _response_text(response)
+            return response
 
         try:
-            text = call_with_transient_retry(
+            response = call_with_transient_retry(
                 _once,
                 max_attempts=self.config.max_attempts,
                 label=label,
@@ -116,6 +117,8 @@ class GeminiLlmClient(LlmClient):
         except Exception as e:
             raise LlmInvocationError(f"Gemini API error ({type(e).__name__}): {e}") from e
 
+        text = _response_text(response)
+        report_usage(_usage_details(response))
         if not text.strip():
             raise LlmInvocationError("Empty response from Gemini")
         return text
@@ -134,3 +137,27 @@ def _response_text(response: object) -> str:
         return ""
     p0 = parts[0]
     return getattr(p0, "text", "") or ""
+
+
+def _usage_details(response: object) -> dict[str, int] | None:
+    """Token counts from ``usage_metadata``; thinking tokens are billed as output."""
+    meta = getattr(response, "usage_metadata", None)
+    if meta is None:
+        return None
+
+    def _count(name: str) -> int | None:
+        value = getattr(meta, name, None)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    prompt = _count("prompt_token_count")
+    candidates = _count("candidates_token_count")
+    thoughts = _count("thoughts_token_count")
+    total = _count("total_token_count")
+    out: dict[str, int] = {}
+    if prompt is not None:
+        out["input"] = prompt
+    if candidates is not None or thoughts is not None:
+        out["output"] = (candidates or 0) + (thoughts or 0)
+    if total is not None:
+        out["total"] = total
+    return out or None

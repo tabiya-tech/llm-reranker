@@ -16,6 +16,7 @@ from typing import Any
 from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
 from app.llm import LlmClient, get_llm_client
+from app.observability import traced_observation, update_observation
 from app.prompts import (
     JobAttributesLlm2Extras,
     OccupationPromptEnrichment,
@@ -64,8 +65,32 @@ def llm_client(settings: Settings | None = None) -> LlmClient:
 
 
 def _generate_json(prompt: str, *, purpose: str, settings: Settings) -> str:
-    """Ask the configured model for JSON; retries and error translation are the client's job."""
-    return llm_client(settings).generate_json(prompt, purpose=purpose)
+    """Ask the configured model for JSON; retries and error translation are the client's job.
+
+    Every LLM pass goes through here, which is why the Langfuse generation lives here
+    rather than in each provider. Providers only add the token usage they parse out of
+    their response (``app.observability.report_usage``).
+    """
+    client = llm_client(settings)
+    cfg = settings.llm
+    with traced_observation(
+        name=purpose or "generate_json",
+        as_type="generation",
+        input=prompt,
+        model=client.model,
+        model_parameters={
+            "temperature": cfg.temperature,
+            "max_output_tokens": cfg.max_output_tokens or None,
+        },
+        metadata={"purpose": purpose, "provider": cfg.provider, "client_class": cfg.client_class},
+    ) as generation:
+        try:
+            out = client.generate_json(prompt, purpose=purpose)
+        except Exception as e:
+            update_observation(generation, level="ERROR", status_message=f"{type(e).__name__}: {e}")
+            raise
+        update_observation(generation, output=out)
+        return out
 
 
 def call_skill_ranker_model(prompt: str, *, settings: Settings | None = None) -> str:
