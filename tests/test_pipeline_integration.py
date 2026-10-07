@@ -16,11 +16,14 @@ the guarantee that swapping the backing model needs no change to pipeline code.
 
 from __future__ import annotations
 
+import argparse
 import json
 from typing import Any
 
+import numpy as np
 import pytest
 
+from app import batch_rank_one as batch_module
 from app import pipeline as pipeline_module
 from app.llm import LlmClient
 from app.pipeline import load_taxonomy_context, process_single_job
@@ -200,6 +203,124 @@ class TestProcessSingleJob:
         taxonomy = load_taxonomy_context(s)
         result = process_single_job(_classified_doc(), taxonomy, settings=s)
         assert result.ran_llm3 is False
+
+
+def _occupation_menu() -> list[dict[str, Any]]:
+    """One occupation block with two taxonomy skills of different signalling strength."""
+    return [
+        {
+            "occupation_label": "Welder",
+            "tabiya_occupation_id": "occ-1",
+            "skill_counts": {"total": 2, "essential": 1, "optional": 1, "unspecified": 0},
+            "skills": [
+                {
+                    "skill_id": "11111111-1111-1111-1111-111111111111",
+                    "label": "Weld metal",
+                    "uri": "http://data.europa.eu/esco/skill/11111111-1111-1111-1111-111111111111",
+                    "relation_type": "essential",
+                    "signalling_label": "high",
+                    "signalling_value": "0.9",
+                },
+                {
+                    "skill_id": "22222222-2222-2222-2222-222222222222",
+                    "label": "Paint surfaces",
+                    "uri": "http://data.europa.eu/esco/skill/22222222-2222-2222-2222-222222222222",
+                    "relation_type": "optional",
+                    "signalling_label": "low",
+                    "signalling_value": "0.1",
+                },
+            ],
+        }
+    ]
+
+
+class TestLlm3MenuFoldedIntoLlm1:
+    """While ``FOLD_LLM3_MENU_INTO_LLM1`` is on, the LLM3 menu feeds LLM1 and LLM3 is not called."""
+
+    @pytest.fixture
+    def llm1_seen(self, stubbed_pipeline):
+        seen: list[list[str]] = []
+
+        def _recording_llm1(*args, **kwargs):
+            seen.append([c.label for c in kwargs.get("esco_candidates") or []])
+            return _stub_run_skill_ranker_for_job(*args, **kwargs)
+
+        stubbed_pipeline.setattr(pipeline_module, "run_skill_ranker_for_job", _recording_llm1)
+        stubbed_pipeline.setattr(
+            pipeline_module,
+            "resolve_occupation_taxonomy_for_classified_job",
+            lambda *a, **kw: ([], None, _occupation_menu()),
+        )
+        return seen
+
+    def test_capped_menu_is_added_to_llm1_candidates(self, make_settings, llm1_seen):
+        s = make_settings(
+            GEMINI_API_KEY="dummy",
+            TARGET_COUNTRY="kenya",
+            RERANKER_ENABLE_LLM3="1",
+            RERANKER_LLM3_MAX_MENU_SKILLS="1",
+        )
+        result = process_single_job(_classified_doc(), load_taxonomy_context(s), settings=s)
+
+        # Classifier skill + the single strongest menu skill; LLM3 stub (raises) never ran.
+        assert llm1_seen == [["Python", "Weld metal"]]
+        assert result.ran_llm3 is False
+        llm_skills = result.ranked_document["llm_classified_skills"]
+        assert [r["label"] for r in llm_skills["essential"]] == ["Python", "Weld metal"]
+        assert llm_skills["discarded"] == []
+
+    def test_menu_not_added_when_llm3_disabled(self, make_settings, llm1_seen):
+        s = make_settings(GEMINI_API_KEY="dummy", TARGET_COUNTRY="kenya", RERANKER_ENABLE_LLM3="0")
+        result = process_single_job(_classified_doc(), load_taxonomy_context(s), settings=s)
+
+        assert llm1_seen == [["Python"]]
+        assert result.ran_llm3 is False
+
+    def test_llm1_picked_menu_skills_reach_the_job_embedding(
+        self, make_settings, llm1_seen, monkeypatch
+    ):
+        """Batch path (the one that embeds): LLM1-picked menu skills are in the embedded text."""
+        s = make_settings(
+            GEMINI_API_KEY="dummy",
+            TARGET_COUNTRY="kenya",
+            RERANKER_ENABLE_LLM3="1",
+            RERANKER_LLM3_MAX_MENU_SKILLS="1",
+            RERANKER_ENABLE_JOB_EMBEDDING="1",
+            RERANKER_CONCAT_WHITENING_ENABLED="0",
+        )
+        embedded: list[str] = []
+
+        def _embed(texts, **kwargs):
+            embedded.extend(texts)
+            return np.ones((len(texts), s.reranker_job_embedding_dim))
+
+        monkeypatch.setattr("utils.job_embedding.embed_text_list", _embed)
+        monkeypatch.setattr(
+            batch_module,
+            "run_occupation_skills_relevance_for_job",
+            _stub_run_occupation_skills_relevance_for_job,
+        )
+        monkeypatch.setattr(
+            batch_module,
+            "resolve_occupation_taxonomy_for_classified_job",
+            lambda *a, **kw: ([], None, _occupation_menu()),
+        )
+        args = argparse.Namespace(
+            log_llm1_prompt=False, log_llm2_prompt=False, log_llm3_prompt=False, verbose=False
+        )
+        r = batch_module.rank_one_classified_document(
+            _classified_doc(),
+            job_label="1/1",
+            args=args,
+            settings=s,
+            taxonomy=load_taxonomy_context(s),
+            enable_llm3=True,
+        )
+
+        assert llm1_seen == [["Python", "Weld metal"]]
+        assert r.llm3_inc == 0
+        assert r.update_op is not None
+        assert embedded == ["Python | Weld metal"]
 
 
 class ScriptedLlmClient(LlmClient):

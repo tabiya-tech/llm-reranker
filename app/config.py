@@ -1014,6 +1014,11 @@ def reranker_enable_llm3_from_env() -> bool:
     return _bool_env("RERANKER_ENABLE_LLM3", default=True)
 
 
+# Temporary: send the LLM3 menu (same ``RERANKER_LLM3_*`` limits) to LLM1 as extra candidates
+# instead of making the LLM3 call. Still gated by ``RERANKER_ENABLE_LLM3``. ``False`` restores LLM3.
+FOLD_LLM3_MENU_INTO_LLM1 = True
+
+
 def log_ranker_run_configuration(
     log: logging.Logger,
     settings: Settings,

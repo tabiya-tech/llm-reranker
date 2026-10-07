@@ -11,7 +11,7 @@ from typing import Any
 
 from pymongo.operations import UpdateOne
 
-from app.config import Settings
+from app.config import FOLD_LLM3_MENU_INTO_LLM1, Settings
 from app.database import build_job_description_context, llm_pipeline_upsert_update_one
 from app.llm_service import (
     run_occupation_skills_relevance_for_job,
@@ -28,6 +28,7 @@ from app.ranked_job_schema import (
     apply_occupation_skills_listing_relevance,
     build_llm3_occupation_menu,
     filter_occupation_skills_nested_by_signal_include,
+    llm3_menu_skill_candidates,
     occupation_skills_relevance_menu_size,
 )
 from app.schemas import JobAttributesResult
@@ -198,7 +199,18 @@ def rank_one_classified_document(
 
     llm3_s = 0.0
     llm3_inc = 0
-    if enable_llm3 and occupation_to_skills_nested and llm3_prompt_n > 0:
+    llm1_candidates = base_skills
+    if FOLD_LLM3_MENU_INTO_LLM1 and enable_llm3 and llm3_prompt_n > 0:
+        llm3_extra = llm3_menu_skill_candidates(llm3_prompt_nested, base_skills)
+        llm1_candidates = base_skills + llm3_extra
+        if not log_prompt_debug:
+            logger.info(
+                "  step | %s | folded into LLM1 | llm3_prompt_skills=%s added_llm1_candidates=%s",
+                STEP_LLM3_OCC_SKILLS,
+                llm3_prompt_n,
+                len(llm3_extra),
+            )
+    elif enable_llm3 and occupation_to_skills_nested and llm3_prompt_n > 0:
         if not log_prompt_debug:
             if llm3_prompt_n != n_llm3_full:
                 logger.info(
@@ -266,7 +278,7 @@ def rank_one_classified_document(
         doc,
         settings,
         taxonomy,
-        base_skills,
+        llm1_candidates,
         overlap_llm12=settings.reranker_overlap_llm1_llm2,
         log_llm1_prompt=args.log_llm1_prompt,
         log_llm2_prompt=args.log_llm2_prompt,
@@ -280,13 +292,13 @@ def rank_one_classified_document(
                 "  step | %s | %.3fs | menu=%s essential=%s optional=%s",
                 STEP_LLM1_SKILL_RANKER,
                 llm1_s,
-                len(base_skills),
+                len(llm1_candidates),
                 len(essential),
                 len(optional),
             )
         else:
             logger.info(
-                "  step | %s | skipped | no classifier ESCO skills on document",
+                "  step | %s | skipped | no ESCO skill candidates for job",
                 STEP_LLM1_SKILL_RANKER,
             )
 
@@ -334,7 +346,7 @@ def rank_one_classified_document(
                 skills_uuid_tabiya_map=taxonomy.skills_uuid_tabiya_map,
                 occupations_bridge=taxonomy.occ_bridge or None,
                 occupations_all_ids=taxonomy.occ_all_ids or None,
-                ranker_candidates=base_skills,
+                ranker_candidates=llm1_candidates,
                 classifier_skill_candidates=base_skills,
             )
             mongo_s = _elapsed_s(t0)
