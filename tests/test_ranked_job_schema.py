@@ -28,6 +28,7 @@ from app.ranked_job_schema import (
     classifier_metadata_from_context,
     classifier_skill_esco_uuids_lower,
     filter_occupation_skills_nested_by_signal_include,
+    llm3_menu_skill_candidates,
     occupation_skill_signal_tier,
     occupation_skills_relevance_menu_size,
     occupation_to_skills_with_meta,
@@ -328,6 +329,65 @@ class TestBuildLlm3OccupationMenu:
         # Default RERANKER_LLM3_CLASSIFIER_INTERSECT=False → classifier list ignored
         kept = [x["skill_id"] for x in sub[0]["skills"]]
         assert kept == ["s_high", "s_med"]
+
+
+# ---------------------------------------------------------------------------
+# llm3_menu_skill_candidates
+# ---------------------------------------------------------------------------
+
+
+class TestLlm3MenuSkillCandidates:
+    def _items(self):
+        return [
+            {
+                "tabiya_occupation_id": "t1",
+                "skills": [
+                    {
+                        "skill_id": "AAA",
+                        "label": "Welding",
+                        "uri": "http://data.europa.eu/esco/skill/aaa",
+                        "relation_type": "essential",
+                    },
+                    {"skill_id": "bbb", "label": "Painting", "relation_type": "optional"},
+                    {"skill_id": "ccc", "label": "Unspecified", "relation_type": "unspecified"},
+                    {"skill_id": "", "label": "No id", "relation_type": "essential"},
+                ],
+            },
+            {
+                "tabiya_occupation_id": "t2",
+                "skills": [
+                    # Same skill under a second occupation → added once.
+                    {"skill_id": "aaa", "label": "Welding", "relation_type": "optional"},
+                    {"skill_id": "ddd", "label": "Python", "relation_type": "essential"},
+                    {"skill_id": "eee", "label": "  painting ", "relation_type": "essential"},
+                ],
+            },
+            {
+                "tabiya_occupation_id": None,
+                "skills": [{"skill_id": "fff", "label": "Orphan", "relation_type": "essential"}],
+            },
+        ]
+
+    def test_flattens_menu_in_order_and_builds_candidates(self):
+        out = llm3_menu_skill_candidates(self._items(), [])
+        assert [c.label for c in out] == ["Welding", "Painting", "Python"]
+        assert out[0] == EscoSkillCandidate(
+            label="Welding", uri="http://data.europa.eu/esco/skill/aaa", esco_uuid="aaa"
+        )
+        # Missing uri falls back to the canonical ESCO skill URI.
+        assert out[1].uri == "http://data.europa.eu/esco/skill/bbb"
+        assert out[1].similarity_score is None
+
+    def test_skips_skills_already_in_existing_by_uuid_or_label(self):
+        existing = [
+            EscoSkillCandidate(label="Something else", uri="u1", esco_uuid="AAA"),
+            EscoSkillCandidate(label="python", uri="u2", esco_uuid="zzz"),
+        ]
+        out = llm3_menu_skill_candidates(self._items(), existing)
+        assert [c.esco_uuid for c in out] == ["bbb"]
+
+    def test_empty_menu(self):
+        assert llm3_menu_skill_candidates([], []) == []
 
 
 # ---------------------------------------------------------------------------

@@ -18,9 +18,11 @@ from utils.classifier_linked_entities import (
     EscoSkillCandidate,
     LinkedEntityCandidate,
     MappedEscoSkills,
+    _norm_label,
     group_linked_entities_by_type,
 )
 from utils.occupation_to_skills_mapping import (
+    esco_skill_uri_for_uuid,
     occupation_block_skill_counts,
     tabiya_occupation_id_for_candidate,
 )
@@ -454,6 +456,47 @@ def build_llm3_occupation_menu(
         classifier_esco_lower=clf,
         signal_menu_filter=settings.reranker_llm3_menu_signal_filter,
     )
+
+
+def llm3_menu_skill_candidates(
+    menu_items: list[dict[str, Any]],
+    existing: list[EscoSkillCandidate],
+) -> list[EscoSkillCandidate]:
+    """
+    LLM3 menu skills (essential/optional) as extra LLM1 candidates, in menu order.
+
+    Skips skills whose ESCO uuid or normalized label is already in ``existing`` (or was added
+    from an earlier block), so a classifier candidate is never shadowed in label→URI mapping.
+    """
+    seen_uuids = {(c.esco_uuid or "").strip().lower() for c in existing if c.esco_uuid}
+    seen_labels = {_norm_label(c.label) for c in existing}
+    out: list[EscoSkillCandidate] = []
+    for block in menu_items:
+        tid = block.get("tabiya_occupation_id")
+        if tid is None or str(tid).strip() == "":
+            continue
+        for sk in block.get("skills") or []:
+            if not isinstance(sk, dict):
+                continue
+            rt = (sk.get("relation_type") or "").strip().lower()
+            if rt not in ("essential", "optional"):
+                continue
+            sid = str(sk.get("skill_id") or "").strip().lower()
+            label = (sk.get("label") or "").strip()
+            if not sid or not label:
+                continue
+            if sid in seen_uuids or _norm_label(label) in seen_labels:
+                continue
+            seen_uuids.add(sid)
+            seen_labels.add(_norm_label(label))
+            out.append(
+                EscoSkillCandidate(
+                    label=label,
+                    uri=(sk.get("uri") or "").strip() or esco_skill_uri_for_uuid(sid),
+                    esco_uuid=sid,
+                )
+            )
+    return out
 
 
 def apply_occupation_skills_listing_relevance(

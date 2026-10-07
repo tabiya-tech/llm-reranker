@@ -9,7 +9,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.config import Settings, get_settings, reranker_enable_llm3_from_env
+from app.config import (
+    FOLD_LLM3_MENU_INTO_LLM1,
+    Settings,
+    get_settings,
+    reranker_enable_llm3_from_env,
+)
 from app.database import build_job_description_context
 from app.job_context import JobDescriptionContext
 from app.llm_service import (
@@ -23,6 +28,7 @@ from app.ranked_job_schema import (
     build_llm3_occupation_menu,
     build_ranked_job_document,
     filter_occupation_skills_nested_by_signal_include,
+    llm3_menu_skill_candidates,
     occupation_skills_relevance_menu_size,
 )
 from app.schemas import JobAttributesResult
@@ -270,7 +276,10 @@ def process_single_job(
         llm3_prompt_nested, _, llm3_prompt_n = build_llm3_occupation_menu(
             occupation_to_skills_nested, base_skills, settings
         )
-    if enable_llm3 and occupation_to_skills_nested and llm3_prompt_n > 0:
+    llm1_candidates = base_skills
+    if FOLD_LLM3_MENU_INTO_LLM1 and enable_llm3 and llm3_prompt_n > 0:
+        llm1_candidates = base_skills + llm3_menu_skill_candidates(llm3_prompt_nested, base_skills)
+    elif enable_llm3 and occupation_to_skills_nested and llm3_prompt_n > 0:
         t0 = time.perf_counter()
         rel_result = run_occupation_skills_relevance_for_job(
             ctx,
@@ -299,7 +308,7 @@ def process_single_job(
         classified_doc,
         settings,
         taxonomy,
-        base_skills,
+        llm1_candidates,
         overlap_llm12=settings.reranker_overlap_llm1_llm2,
     )
     if ran_skill:
@@ -321,7 +330,7 @@ def process_single_job(
         skills_uuid_tabiya_map=taxonomy.skills_uuid_tabiya_map,
         occupations_bridge=taxonomy.occ_bridge or None,
         occupations_all_ids=taxonomy.occ_all_ids or None,
-        ranker_candidates=base_skills,
+        ranker_candidates=llm1_candidates,
         classifier_skill_candidates=base_skills,
     )
     result.ranked_document = ranked
