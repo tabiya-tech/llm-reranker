@@ -1,0 +1,6 @@
+{
+  "include": ["app", "utils", "tests", "api.py", "main.py", "scripts"],
+  "exclude": ["**/venv", "**/.venv", "iac/**"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic"
+}
