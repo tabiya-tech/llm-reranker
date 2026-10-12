@@ -25,17 +25,27 @@ extend-exclude = [
 ]
 
 [lint]
-# Start from Ruff's default rules (pyflakes `F` + a pragmatic subset of
-# pycodestyle `E`). These catch real defects: undefined names, unused
-# imports/variables, bare excepts, etc.
-select = ["E4", "E7", "E9", "F"]
+# F (pyflakes): undefined names, unused imports/variables.
+# E4/E7/E9 (pycodestyle): import placement, syntax errors, and similar.
+# I (isort): consistent import ordering.
+# B (flake8-bugbear): likely bugs the rules above miss, e.g. mutable default
+#   arguments, loop variables captured by a closure, missing exception context.
+# ANN401: disallows `Any` as a function parameter or return type (does not
+#   apply to `dict[str, Any]` used as a variable/field type).
+select = ["E4", "E7", "E9", "F", "I", "B", "ANN401"]
 
-# Deliberate, pervasive patterns in this codebase:
-#   E402 — modules manipulate sys.path / load .env before importing config,
-#          so imports intentionally appear after top-of-file statements.
-#   E701 — compact one-line `if cond: return X` mappings (e.g. cell parsers,
-#          short helper tables) are intentional and readable here.
+# E402 — `app/config.py` calls `load_dotenv()` at module level, which ruff
+# treats as code preceding an import.
+# E701 — compact one-line `if cond: return X` mappings (e.g. cell parsers,
+# short helper tables) are intentional and readable here.
 ignore = ["E402", "E701"]
+
+[lint.flake8-annotations]
+# Exempts `*args: Any` / `**kwargs: Any` from ANN401. A passthrough `**kwargs`
+# forwarded to another function has no narrower correct type, so without this
+# ANN401 would flag normal, correct code. A regular parameter typed `Any`
+# is still flagged.
+allow-star-arg-any = true
 
 [lint.per-file-ignores]
 # Test modules may keep unused imports for fixtures/parametrization clarity.

@@ -3,8 +3,6 @@ name: CI
 on:
   push:
     branches: ["**"]
-  pull_request:
-    branches: [main]
 
 # One deploy at a time; never cancel a deploy that is already running.
 concurrency:
