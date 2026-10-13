@@ -232,9 +232,13 @@ def _load_wa_taxonomy(
             code = str(w.get("WA_code") or "").strip()
             if not code:
                 continue
+            raw_imp = w.get("WA_Importance")
+            raw_lvl = w.get("WA_Level")
+            if raw_imp is None or raw_lvl is None:
+                continue
             try:
-                imp = float(w.get("WA_Importance"))
-                lvl = float(w.get("WA_Level"))
+                imp = float(raw_imp)
+                lvl = float(raw_lvl)
             except (TypeError, ValueError):
                 continue
             wa_map[code] = {"importance": imp, "level": lvl}

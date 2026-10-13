@@ -64,9 +64,9 @@ Required Pulumi config:
   tabiya-horizon-reranker-infra:serviceStartupProbeTimeoutSeconds     — default: 240
 """
 
-import pulumi
-
 from secrets import get_secret_references
+
+import pulumi
 from cloud_run_job import create_reranker_job
 from cloud_run_service import create_reranker_service
 

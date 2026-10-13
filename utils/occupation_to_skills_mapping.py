@@ -21,8 +21,8 @@ import csv
 import logging
 import re
 from collections.abc import Mapping
-from functools import lru_cache
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -432,7 +432,7 @@ def _classified_occupation_dicts_for_taxonomy(
     occ = group_linked_entities_by_type(classified_doc, settings).get("occupation", [])
     out: list[dict[str, Any]] = []
     for c in occ:
-        le = {
+        le: dict[str, Any] = {
             "uri": c.uri,
             "label": c.label,
             "taxonomy": "esco",
@@ -796,7 +796,7 @@ def build_occupation_to_skills_nested(
     sig_root = occupation_skill_signalling or {}
     out: list[dict[str, Any]] = []
     for c in group_linked_entities_by_type(classified_doc, settings).get("occupation", []):
-        le = {
+        le: dict[str, Any] = {
             "uri": c.uri,
             "label": c.label,
             "taxonomy": "esco",

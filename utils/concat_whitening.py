@@ -29,9 +29,16 @@ CONCAT_WHITENING_ARTIFACT_SHA256 = (
     "5d96cbdd69bc3e920976ed0273036e859e13cb7140887f8367156249a8683f18"
 )
 
+
+class _Uncomputed:
+    """Sentinel type: the SHA-256 has not been computed yet, distinct from a real "no artifact" ``None``."""
+
+
+_UNCOMPUTED = _Uncomputed()
+
 _concat_white_lock = threading.Lock()
 _concat_white: dict[str, Any] | None = None  # None = not loaded; {} = missing/disabled
-_artifact_sha256: str | None | bool = None  # False = not computed yet
+_artifact_sha256: str | None | _Uncomputed = _UNCOMPUTED
 
 
 def _resolve_whitening_path(settings: Settings) -> Path:
@@ -59,7 +66,7 @@ def reset_concat_whitening_cache() -> None:
     global _concat_white, _artifact_sha256
     with _concat_white_lock:
         _concat_white = None
-        _artifact_sha256 = False
+        _artifact_sha256 = _UNCOMPUTED
 
 
 def _get_concat_whitening(settings: Settings | None = None) -> dict[str, Any] | None:
@@ -132,13 +139,13 @@ def concat_whitening_artifact_sha256(*, settings: Settings | None = None) -> str
     """SHA-256 hex digest of the artifact file, computed once per process."""
     global _artifact_sha256
     settings = settings or get_settings()
-    if _artifact_sha256 is False:
+    if isinstance(_artifact_sha256, _Uncomputed):
         path = _resolve_whitening_path(settings)
         if path.is_file():
             _artifact_sha256 = _compute_file_sha256(path)
         else:
             _artifact_sha256 = None
-    return _artifact_sha256 if _artifact_sha256 else None
+    return _artifact_sha256
 
 
 def assert_concat_whitening_artifact_sha256(

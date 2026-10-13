@@ -14,6 +14,7 @@ pin; tests must be updated together with the version.
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
 
 import pytest
 
@@ -45,7 +46,7 @@ from utils.classifier_linked_entities import EscoSkillCandidate, MappedEscoSkill
 
 
 def _ctx(**overrides):
-    base = dict(
+    base: dict[str, Any] = dict(
         job_id="J-1",
         job_fingerprint="fp-1",
         title="Engineer",

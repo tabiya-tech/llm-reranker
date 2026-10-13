@@ -10,13 +10,13 @@ import certifi
 from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo import MongoClient
-from pymongo.operations import UpdateOne
 from pymongo.collection import Collection
 from pymongo.database import Database
+from pymongo.operations import UpdateOne
 
 from app.config import Settings, get_settings
-from app.languages import language_setting
 from app.job_context import JobDescriptionContext
+from app.languages import language_setting
 from app.logging_config import sanitize_mongodb_uri
 from app.schemas import JobAttributesResult
 
@@ -134,7 +134,6 @@ def _llm_pipeline_set_document(
 ) -> dict[str, Any] | None:
     """``$set`` body for target upsert (see ``app.ranked_job_schema``); ``None`` when nothing to write."""
     from app.ranked_job_schema import build_ranked_job_document
-
     from utils.job_embedding import attach_job_embedding_to_payload
 
     payload = build_ranked_job_document(
@@ -430,7 +429,7 @@ def _metadata(doc: dict[str, Any]) -> dict[str, Any]:
     return m if isinstance(m, dict) else {}
 
 
-def _scalar_to_str(value: Any) -> str | None:
+def _scalar_to_str(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -540,7 +539,8 @@ def _overlay_translation_listing_fields(
     tr = classified_doc.get("translation")
     if not isinstance(tr, dict) or not tr:
         return title, raw_jd, req_text
-    fe = tr.get("fields_en") if isinstance(tr.get("fields_en"), dict) else {}
+    fields_en_raw = tr.get("fields_en")
+    fe: dict[str, Any] = fields_en_raw if isinstance(fields_en_raw, dict) else {}
     text_en = (tr.get("text_en") or "").strip()
     if text_en:
         return (

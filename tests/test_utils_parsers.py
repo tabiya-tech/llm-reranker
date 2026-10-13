@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, cast
 
 import pytest
+from pymongo.collection import Collection
 
 from utils.occupation_to_skills_mapping import (
     cell_to_taxonomy_id,
@@ -32,7 +33,6 @@ from utils.uuid_to_tabiya_id import (
     load_skills_uuid_tabiya_map,
     parse_uuid_history_cell,
 )
-
 
 # ---------------------------------------------------------------------------
 # uuid_to_tabiya_id helpers
@@ -245,7 +245,7 @@ class TestSyncIsActiveFromClosingDate:
                 },
             ]
         )
-        stats = sync_is_active_from_closing_date(coll, today=today, dry_run=False)
+        stats = sync_is_active_from_closing_date(cast(Collection, coll), today=today, dry_run=False)
         assert stats["total"] == 3
         assert stats["parsed"] == 3
         assert stats["will_set_true"] == 1
@@ -269,7 +269,7 @@ class TestSyncIsActiveFromClosingDate:
                 }
             ]
         )
-        stats = sync_is_active_from_closing_date(coll, today=today, dry_run=True)
+        stats = sync_is_active_from_closing_date(cast(Collection, coll), today=today, dry_run=True)
         assert stats["will_set_true"] == 1
         assert stats["modified"] == 0
         assert coll.bulk_write_calls == []
@@ -281,7 +281,7 @@ class TestSyncIsActiveFromClosingDate:
         today = date(2026, 6, 12)
         coll = FakeCollection([{"_id": "x", "is_active": True, "classifier_metadata": {}}])
         stats = sync_is_active_from_closing_date(
-            coll, today=today, missing_policy="keep", dry_run=False
+            cast(Collection, coll), today=today, missing_policy="keep", dry_run=False
         )
         assert stats["missing_or_bad"] == 1
         assert stats["unchanged"] == 1
@@ -291,7 +291,7 @@ class TestSyncIsActiveFromClosingDate:
         today = date(2026, 6, 12)
         coll = FakeCollection([{"_id": "x", "is_active": True, "classifier_metadata": {}}])
         stats = sync_is_active_from_closing_date(
-            coll, today=today, missing_policy="inactive", dry_run=False
+            cast(Collection, coll), today=today, missing_policy="inactive", dry_run=False
         )
         assert stats["missing_or_bad"] == 1
         assert stats["will_set_false"] == 1

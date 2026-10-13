@@ -26,9 +26,9 @@ from utils.occupation_to_skills_mapping import (
     occupation_block_skill_counts,
     tabiya_occupation_id_for_candidate,
 )
-from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap, cell_to_esco_uuid
 from utils.scraper_enrichment_fields import copy_scraper_enrichment_fields
 from utils.skill_groups import derive_skill_groups_origin_uuids
+from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap, cell_to_esco_uuid
 
 PIPELINE_SCHEMA_VERSION = "32"
 
@@ -90,7 +90,7 @@ def _work_activity_payload(
 ) -> dict[str, Any]:
     names = work_activity_names_for_ids(wa_ids, settings=settings)
     return {
-        "items": [{"id": wid, "name": name} for wid, name in zip(list(wa_ids), names)],
+        "items": [{"id": wid, "name": name} for wid, name in zip(list(wa_ids), names, strict=True)],
     }
 
 
@@ -141,7 +141,7 @@ def _llm_classified_skills_payload(
 
     def rows(uris: list[str], uuids: list[str]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
-        for uri, uid in zip(uris, uuids):
+        for uri, uid in zip(uris, uuids, strict=True):
             cand = by_uri.get(uri)
             label = cand.label if cand else ""
             esco_raw = (uid or "").strip()
@@ -196,7 +196,7 @@ def work_activity_names_for_ids(
     return [by_id.get(wid, "") for wid in ids]
 
 
-def _metadata_scalar_location(val: Any) -> str | None:
+def _metadata_scalar_location(val: object) -> str | None:
     """Normalize city/province enrichment (may be ``str`` or ``list[str]`` on classified docs)."""
     if val is None:
         return None

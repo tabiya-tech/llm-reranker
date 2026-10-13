@@ -42,7 +42,7 @@ def job_trace(
     *,
     settings: Settings,
     invocation: str,
-    session_id: Any = None,
+    session_id: object = None,
     job_label: str = "",
 ) -> Iterator[Any]:
     """Trace one job: every LLM generation and embedding below nests under it.

@@ -13,6 +13,7 @@ No network: the Gemini SDK client and every HTTP transport are stubbed.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -63,7 +64,7 @@ class AbstractLlmClient(LlmClient):
 
 
 def _config(**overrides) -> LlmConfig:
-    base = dict(
+    base: dict[str, Any] = dict(
         provider="custom",
         client_class="tests.test_llm_provider:RecordingLlmClient",
         model="test-model",
@@ -154,7 +155,9 @@ class TestConfigResolution:
         assert s.llm.client_class == PROVIDER_CLASS_PATHS["ollama"]
         assert s.llm.api_key == ""
         assert s.llm.base_url == ""
-        assert build_llm_client(s.llm).base_url == "http://localhost:11434"
+        client = build_llm_client(s.llm)
+        assert isinstance(client, OllamaLlmClient)
+        assert client.base_url == "http://localhost:11434"
 
     def test_ollama_host_env_supplies_the_endpoint_and_gains_a_scheme(self, make_settings):
         """OLLAMA_HOST is the variable the Ollama CLI itself reads, and is scheme-less."""

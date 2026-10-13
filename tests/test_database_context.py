@@ -16,6 +16,7 @@ out of scope here — they need a Mongo replica or an extensive fake.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 from bson import ObjectId
@@ -31,7 +32,6 @@ from app.database import (
     build_job_description_context,
 )
 from app.job_context import JobDescriptionContext
-
 
 # ---------------------------------------------------------------------------
 # _scalar_to_str
@@ -212,7 +212,7 @@ class TestBuildJobDescriptionContext:
 
 
 def _ctx(**overrides):
-    base = dict(
+    base: dict[str, Any] = dict(
         job_id=None,
         job_fingerprint=None,
         title=None,

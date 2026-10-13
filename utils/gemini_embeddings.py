@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Optional, Sequence
+from typing import TYPE_CHECKING, Optional, Sequence, cast
 
 import numpy as np
 
 from app.observability import report_usage, traced_observation, update_observation
+
+if TYPE_CHECKING:
+    from google.genai import Client
+    from google.genai.types import ContentListUnion, EmbedContentResponse
 
 MODEL_NAME = "gemini-embedding-001"
 EMBEDDING_DIM = 3072
@@ -19,7 +23,7 @@ MAX_RETRIES = 5
 
 
 def _embed_chunk(
-    client: Any,
+    client: Client,
     texts: Sequence[str],
     *,
     model: str,
@@ -47,12 +51,14 @@ def _embed_chunk(
             try:
                 result = client.models.embed_content(
                     model=model,
-                    contents=payload,
+                    contents=cast("ContentListUnion", payload),
                     config=genai_types.EmbedContentConfig(
                         task_type=task_type,
                         output_dimensionality=embedding_dim,
                     ),
                 )
+                if not result.embeddings:
+                    raise RuntimeError("Gemini embed_content returned no embeddings")
                 rows = []
                 for emb in result.embeddings:
                     rows.append(np.asarray(emb.values, dtype=np.float32))
@@ -80,7 +86,7 @@ def _embed_chunk(
     raise RuntimeError(f"Gemini embed_content failed after {MAX_RETRIES} attempts: {last_err}")
 
 
-def _embedding_usage(result: Any) -> dict[str, int] | None:
+def _embedding_usage(result: EmbedContentResponse) -> dict[str, int] | None:
     """Input tokens, when the API reports them.
 
     Vertex AI returns a per-vector ``statistics.token_count``; the Gemini Developer API

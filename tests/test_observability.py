@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from typing import cast
 
 import httpx
 import numpy as np
 import pytest
 
+from app.job_context import JobDescriptionContext
 from app.llm import LlmClient, LlmConfig
 from app.llm.providers.anthropic import AnthropicLlmClient
 from app.llm.providers.gemini import GeminiLlmClient
@@ -188,6 +190,7 @@ def test_failed_llm_call_marks_generation_as_error(make_settings):
             call_job_attributes_model("prompt", settings=settings)
 
     gen = spans.by_name(PURPOSE_JOB_ATTRIBUTES)
+    assert gen is not None
     assert gen.attributes[LEVEL] == "ERROR"
 
 
@@ -330,6 +333,7 @@ def test_job_embedding_step_nests_under_the_job_trace(make_settings, monkeypatch
 
     (emb,) = _spans_by_type(spans, "embedding")
     root = spans.by_name("rank_job")
+    assert root is not None
     assert emb.context.trace_id == root.context.trace_id
     assert emb.parent.span_id == root.context.span_id
     assert len(payload["job_embedding"]) == 4
@@ -343,6 +347,8 @@ def test_job_embedding_step_nests_under_the_job_trace(make_settings, monkeypatch
 def test_overlapped_llm1_llm2_nest_under_the_job_trace(make_settings, monkeypatch):
     """LLM1 and LLM2 run on a thread pool; their generations must not become orphan traces."""
     from app import pipeline
+    from app.pipeline import TaxonomyContext
+    from utils.classifier_linked_entities import EscoSkillCandidate
 
     settings = make_settings(
         RERANKER_LLM_CLIENT_CLASS="tests.test_observability:UsageReportingLlmClient",
@@ -362,26 +368,35 @@ def test_overlapped_llm1_llm2_nest_under_the_job_trace(make_settings, monkeypatc
     monkeypatch.setattr(pipeline, "run_skill_ranker_for_job", _fake_llm1)
     monkeypatch.setattr(pipeline, "run_job_attributes_for_job", _fake_llm2)
     monkeypatch.setattr(pipeline, "build_occupation_prompt_enrichment", lambda *a, **k: None)
-    taxonomy = SimpleNamespace(
-        skill_desc_by_esco={},
-        occ_bridge={},
-        occ_all_ids=frozenset(),
-        occ_label_by_esco={},
-        occ_desc_by_esco={},
+    # Doubles: run_llm1_llm2_phase only reads these specific attributes once llm1/llm2
+    # and the occupation-enrichment call are monkeypatched above, so a full
+    # TaxonomyContext / JobDescriptionContext is unneeded ceremony here.
+    taxonomy = cast(
+        TaxonomyContext,
+        SimpleNamespace(
+            skill_desc_by_esco={},
+            occ_bridge={},
+            occ_all_ids=frozenset(),
+            occ_label_by_esco={},
+            occ_desc_by_esco={},
+        ),
     )
-    ctx = SimpleNamespace(title="Welder")
+    ctx = cast(JobDescriptionContext, SimpleNamespace(title="Welder"))
+    base_skills = cast(list[EscoSkillCandidate], [object()])
 
     with in_memory_tracing() as spans:
         with job_trace(
             {"job_id": "job-7"}, settings=settings, invocation="batch", session_id="run-1"
         ):
             pipeline.run_llm1_llm2_phase(
-                ctx, {}, settings, taxonomy, [object()], overlap_llm12=True
+                ctx, {}, settings, taxonomy, base_skills, overlap_llm12=True
             )
 
     root = spans.by_name("rank_job")
+    assert root is not None
     for name in ("skill_ranker", "job_attributes"):
         span = spans.by_name(name)
+        assert span is not None
         assert span.context.trace_id == root.context.trace_id, name
         assert span.parent.span_id == root.context.span_id, name
     assert root.attributes["session.id"] == "run-1"
@@ -422,7 +437,10 @@ def test_unsampled_job_records_nothing_beneath_it():
 
 def test_masking_redacts_contacts_and_truncates():
     text = "Apply to jobs@acme.co.ke or call +254 712 345 678 by 2026. " + "x" * 50
-    masked = mask_value({"prompt": text}, redact_pii=True, max_chars=80)["prompt"]
+    result = mask_value({"prompt": text}, redact_pii=True, max_chars=80)
+    assert isinstance(result, dict)
+    masked = result["prompt"]
+    assert isinstance(masked, str)
     assert REDACTED_EMAIL in masked and REDACTED_PHONE in masked
     assert "2026" in masked
     assert masked.endswith("...[TRUNCATED]")
@@ -436,13 +454,16 @@ def test_exported_generation_input_is_masked(make_settings):
         call_skill_ranker_model("Contact hr@example.com for details", settings=settings)
 
     exported = RecordedSpans.json_attribute(spans.by_name(PURPOSE_SKILL_RANKER), INPUT)
+    assert isinstance(exported, str)
     assert "hr@example.com" not in exported and REDACTED_EMAIL in exported
 
 
 def test_embedding_vectors_are_float_arrays():
     """Guard: the embedding observation must not change what the caller gets back."""
+    from google.genai import Client
+
     from utils.gemini_embeddings import _embed_chunk
 
-    client = SimpleNamespace(models=_FakeEmbedModels(dim=3))
+    client = cast(Client, SimpleNamespace(models=_FakeEmbedModels(dim=3)))
     mat = _embed_chunk(client, ["a"], model="m", embedding_dim=3, task_type="T")
     assert mat.dtype == np.float32 and mat.shape == (1, 3)
