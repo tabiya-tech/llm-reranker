@@ -23,6 +23,7 @@ from app.llm.base import (
     DEFAULT_TEMPERATURE,
     PROVIDER_API_KEY_ENV_VARS,
     PROVIDER_BASE_URL_ENV_VARS,
+    PROVIDER_DEFAULT_MODELS,
     LlmConfig,
     normalise_provider,
     resolve_provider_class_path,
@@ -48,9 +49,6 @@ _logger = logging.getLogger(__name__)
 # ``GEMINI_TRANSIENT_MAX_ATTEMPTS`` to 1..12; that clamp is preserved for every provider.
 _LLM_MAX_ATTEMPTS_DEFAULT = 5
 _LLM_MAX_ATTEMPTS_CEILING = 12
-
-# Gemini model used when nothing is configured — the reranker's historical default.
-_GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
 
 LLM3_MODE_FOLD = "fold"
 LLM3_MODE_CALL = "call"
@@ -777,9 +775,13 @@ class Settings(BaseSettings):
         if explicit_model:
             llm_model = explicit_model
         elif provider == "gemini":
-            llm_model = self.gemini_model
+            llm_model = (
+                self.gemini_model_raw.strip()
+                or self.vertex_model_legacy.strip()
+                or PROVIDER_DEFAULT_MODELS[provider]
+            )
         else:
-            llm_model = ""
+            llm_model = PROVIDER_DEFAULT_MODELS.get(provider, "")
 
         if self.reranker_llm_max_attempts is not None:
             max_attempts = self.reranker_llm_max_attempts
@@ -814,14 +816,6 @@ class Settings(BaseSettings):
     @cached_property
     def gemini_api_key(self) -> str:
         return self.gemini_api_key_raw.strip() or self.api_key_legacy.strip()
-
-    @cached_property
-    def gemini_model(self) -> str:
-        return (
-            self.gemini_model_raw.strip()
-            or self.vertex_model_legacy.strip()
-            or _GEMINI_DEFAULT_MODEL
-        )
 
     @cached_property
     def reranker_llm3_mode(self) -> str:

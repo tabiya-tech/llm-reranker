@@ -60,6 +60,14 @@ PROVIDER_BASE_URL_ENV_VARS: dict[str, tuple[str, ...]] = {
     "ollama": ("OLLAMA_BASE_URL", "OLLAMA_HOST"),
 }
 
+# Provider alias → model used when neither ``RERANKER_LLM_MODEL`` nor the provider's own
+# variable (Gemini: ``GEMINI_MODEL`` / ``VERTEX_MODEL``) names one. The single place a default
+# model lives. Only Gemini, the historical backend, has one: for any other provider a
+# missing model id is a configuration error, not a silent fallback.
+PROVIDER_DEFAULT_MODELS: dict[str, str] = {
+    "gemini": "gemini-2.5-flash",
+}
+
 # Provider name recorded for a selection made purely by class path.
 CUSTOM_PROVIDER = "custom"
 

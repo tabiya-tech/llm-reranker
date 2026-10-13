@@ -86,7 +86,7 @@ read `settings.llm.provider` / `.model` rather than the raw fields below.
 |---|---|---|---|
 | `GEMINI_API_KEY` | `gemini_api_key` | str | `""` |
 | `API_KEY` | — | str | legacy alias for `GEMINI_API_KEY` — see [Legacy aliases](#legacy-aliases) |
-| `GEMINI_MODEL` | `gemini_model` | str | `gemini-2.5-flash` |
+| `GEMINI_MODEL` | — | str | used for `llm.model` when the provider is Gemini; default `PROVIDER_DEFAULT_MODELS["gemini"]` |
 | `VERTEX_MODEL` | — | str | legacy alias for `GEMINI_MODEL` — see [Legacy aliases](#legacy-aliases) |
 
 `gemini_api_key` is read directly by the job-embedding step, which always uses Gemini
