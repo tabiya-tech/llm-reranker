@@ -1,26 +1,51 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from typing import Any
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 
 from app.llm.base import LlmClient, LlmConfig
 from app.llm.errors import LlmConfigurationError, LlmInvocationError
-from app.llm.retry import call_with_transient_retry, is_transient_network_error
+from app.llm.retry import (
+    RETRYABLE_STATUSES,
+    call_with_transient_retry,
+    is_transient_network_error,
+)
 from app.observability import report_usage
 
 logger = logging.getLogger(__name__)
 
 
 def _is_transient(exc: BaseException) -> bool:
-    """Network-level transients plus the SDK's own 503/overload wording."""
+    """Network-level transients, retryable API statuses (429, 5xx), and 503/overload wording."""
     if is_transient_network_error(exc):
+        return True
+    if isinstance(exc, genai_errors.APIError) and exc.code in RETRYABLE_STATUSES:
         return True
     msg = str(exc).lower()
     return "503" in msg and ("unavailable" in msg or "overloaded" in msg)
+
+
+_RETRY_DELAY = re.compile(r"^\s*(\d+(?:\.\d+)?)s\s*$")
+
+
+def _retry_after_s(exc: BaseException) -> float | None:
+    """The ``RetryInfo.retryDelay`` a 429 carries (``"17s"``), in seconds, if any."""
+    if not isinstance(exc, genai_errors.APIError) or not isinstance(exc.details, dict):
+        return None
+    error = exc.details.get("error")
+    details = error.get("details") if isinstance(error, dict) else None
+    for d in details if isinstance(details, list) else ():
+        if isinstance(d, dict) and str(d.get("@type", "")).endswith("RetryInfo"):
+            m = _RETRY_DELAY.match(str(d.get("retryDelay") or ""))
+            if m:
+                return float(m.group(1))
+    return None
 
 
 class GeminiLlmClient(LlmClient):
@@ -129,6 +154,7 @@ class GeminiLlmClient(LlmClient):
                 label=label,
                 is_transient=_is_transient,
                 on_retry=self._reset_client,
+                retry_after_s=_retry_after_s,
             )
         except LlmConfigurationError:
             raise

@@ -658,6 +658,62 @@ class TestGeminiClient:
         with pytest.raises(LlmInvocationError, match="Gemini API error"):
             client.generate_json("p")
 
+    @staticmethod
+    def _api_error(code: int, retry_delay: str | None = None):
+        from google.genai import errors as genai_errors
+
+        details = (
+            [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": retry_delay}]
+            if retry_delay
+            else []
+        )
+        body = {"error": {"code": code, "message": "m", "status": "S", "details": details}}
+        cls = genai_errors.ClientError if code < 500 else genai_errors.ServerError
+        return cls(code, body)
+
+    def _retrying_client(self) -> GeminiLlmClient:
+        return GeminiLlmClient(
+            LlmConfig(
+                provider="gemini",
+                client_class=PROVIDER_CLASS_PATHS["gemini"],
+                model="gemini-2.5-flash",
+                api_key="k",
+                max_attempts=3,
+            )
+        )
+
+    @pytest.mark.parametrize("code", [429, 500, 503, 504])
+    def test_rate_limits_and_server_errors_are_retried(self, monkeypatch, code):
+        client = self._retrying_client()
+        models = _stub_gemini(monkeypatch, client, [self._api_error(code), '{"ok": true}'])
+        assert client.generate_json("p") == '{"ok": true}'
+        assert len(models.calls) == 2
+
+    def test_a_bad_request_is_not_retried(self, monkeypatch):
+        client = self._retrying_client()
+        models = _stub_gemini(monkeypatch, client, [self._api_error(400)])
+        with pytest.raises(LlmInvocationError, match="Gemini API error"):
+            client.generate_json("p")
+        assert len(models.calls) == 1
+
+    def test_rate_limit_waits_at_least_the_server_retry_delay(self, monkeypatch):
+        client = self._retrying_client()
+        _stub_gemini(monkeypatch, client, [self._api_error(429, "17s"), '{"ok": true}'])
+        slept: list[float] = []
+        monkeypatch.setattr("app.llm.retry.time.sleep", slept.append)
+        client.generate_json("p")
+        assert slept == [17.0]
+
+    def test_server_retry_delay_is_capped(self, monkeypatch):
+        from app.llm.retry import MAX_BACKOFF_S
+
+        client = self._retrying_client()
+        _stub_gemini(monkeypatch, client, [self._api_error(429, "3600s"), '{"ok": true}'])
+        slept: list[float] = []
+        monkeypatch.setattr("app.llm.retry.time.sleep", slept.append)
+        client.generate_json("p")
+        assert slept == [MAX_BACKOFF_S]
+
     def test_unknown_model_is_a_configuration_error_not_a_retry(self, monkeypatch):
         client = GeminiLlmClient(
             LlmConfig(
