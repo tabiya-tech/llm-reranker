@@ -163,13 +163,48 @@ class GeminiLlmClient(LlmClient):
 
         text = _response_text(response)
         report_usage(_usage_details(response))
+        problem = _stop_problem(response)
+        if problem is not None:
+            raise LlmInvocationError(f"Gemini[{purpose or 'json'}] {problem}")
         if not text.strip():
             raise LlmInvocationError("Empty response from Gemini")
         return text
 
 
+def _enum_name(value: object) -> str:
+    """``FinishReason.MAX_TOKENS`` / ``"MAX_TOKENS"`` → ``"MAX_TOKENS"``."""
+    return str(getattr(value, "name", value) or "")
+
+
+def _stop_problem(response: object) -> str | None:
+    """Why the reply cannot be used as-is, or ``None`` when generation ended normally.
+
+    A ``MAX_TOKENS`` stop means the JSON is cut off — with a thinking model the
+    thinking tokens count against the same limit — so it is reported here rather than
+    surfacing later as an unexplained parse error. A blocked prompt or a safety /
+    recitation stop is reported with its reason for the same reason.
+    """
+    feedback = getattr(response, "prompt_feedback", None)
+    block = _enum_name(getattr(feedback, "block_reason", None))
+    if block and block != "BLOCKED_REASON_UNSPECIFIED":
+        return f"prompt was blocked ({block})."
+    cands = getattr(response, "candidates", None) or []
+    if not cands:
+        return None
+    reason = _enum_name(getattr(cands[0], "finish_reason", None))
+    if reason in ("", "STOP", "FINISH_REASON_UNSPECIFIED"):
+        return None
+    if reason == "MAX_TOKENS":
+        return (
+            "reply was truncated at the output token limit (finish_reason=MAX_TOKENS). "
+            "Raise RERANKER_LLM_MAX_OUTPUT_TOKENS, or lower the thinking level — "
+            "thinking tokens count against the same limit."
+        )
+    return f"reply stopped early (finish_reason={reason})."
+
+
 def _response_text(response: object) -> str:
-    """Pull text out of a GenAI response, falling back to the first candidate part."""
+    """Pull text out of a GenAI response, falling back to the first non-thought text part."""
     t = getattr(response, "text", None)
     if isinstance(t, str) and t.strip():
         return t
@@ -177,10 +212,10 @@ def _response_text(response: object) -> str:
     if not cands:
         return ""
     parts = getattr(cands[0].content, "parts", None) or []
-    if not parts:
-        return ""
-    p0 = parts[0]
-    return getattr(p0, "text", "") or ""
+    for part in parts:
+        if not getattr(part, "thought", False) and getattr(part, "text", None):
+            return part.text
+    return ""
 
 
 def _usage_details(response: object) -> dict[str, int] | None:
