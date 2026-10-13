@@ -20,14 +20,16 @@ from app.languages import (
 )
 from app.llm.base import (
     CUSTOM_PROVIDER,
-    DEFAULT_TEMPERATURE,
     PROVIDER_API_KEY_ENV_VARS,
     PROVIDER_BASE_URL_ENV_VARS,
     PROVIDER_DEFAULT_MODELS,
+    THINKING_LEVELS,
     LlmConfig,
+    default_temperature,
     normalise_provider,
     resolve_provider_class_path,
 )
+from app.llm.errors import LlmConfigurationError
 
 
 def _repo_root() -> Path:
@@ -498,7 +500,8 @@ class Settings(BaseSettings):
     reranker_llm_model: str = ""
     reranker_llm_api_key: str = ""
     reranker_llm_base_url: str = ""
-    reranker_llm_temperature: float = Field(default=DEFAULT_TEMPERATURE, ge=0.0, le=2.0)
+    # Unset → app.llm.base.default_temperature for the resolved provider and model.
+    reranker_llm_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     reranker_llm_max_output_tokens: int = Field(default=0, ge=0, le=1_000_000)
     reranker_llm_timeout_s: float = Field(default=0.0, ge=0.0, le=3600.0)
     # Clamped to 1..12 by the `llm` property, not rejected here — degrades, doesn't crash.
@@ -506,6 +509,8 @@ class Settings(BaseSettings):
     # Historical alias consulted when ``RERANKER_LLM_MAX_ATTEMPTS`` is unset.
     gemini_transient_max_attempts: int | None = None
     reranker_llm_options: str = ""
+    # minimal|low|medium|high (case-insensitive); validated by the `llm` property.
+    reranker_llm_thinking_level: str = ""
     # Send each pass's JSON Schema to clients that support structured output.
     reranker_llm_response_schema: bool = True
 
@@ -791,6 +796,14 @@ class Settings(BaseSettings):
             max_attempts = _LLM_MAX_ATTEMPTS_DEFAULT
         max_attempts = max(1, min(max_attempts, _LLM_MAX_ATTEMPTS_CEILING))
 
+        thinking_raw = self.reranker_llm_thinking_level.strip()
+        thinking_level = thinking_raw.lower()
+        if thinking_level and thinking_level not in THINKING_LEVELS:
+            raise LlmConfigurationError(
+                f"Unknown RERANKER_LLM_THINKING_LEVEL={thinking_raw!r}. "
+                f"Known levels: {', '.join(THINKING_LEVELS)} (or leave it unset)."
+            )
+
         explicit_api_key = self.reranker_llm_api_key.strip()
         if explicit_api_key:
             api_key = explicit_api_key
@@ -805,11 +818,16 @@ class Settings(BaseSettings):
             model=llm_model,
             api_key=api_key,
             base_url=_llm_base_url_from_env(provider, self.reranker_llm_base_url.strip()),
-            temperature=self.reranker_llm_temperature,
+            temperature=(
+                self.reranker_llm_temperature
+                if self.reranker_llm_temperature is not None
+                else default_temperature(provider, llm_model)
+            ),
             max_output_tokens=self.reranker_llm_max_output_tokens,
             timeout_s=self.reranker_llm_timeout_s,
             max_attempts=max_attempts,
             options_json=self.reranker_llm_options.strip(),
+            thinking_level=thinking_level,
             response_schema=self.reranker_llm_response_schema,
         )
 

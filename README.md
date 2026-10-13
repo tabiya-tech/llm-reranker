@@ -119,7 +119,7 @@ Every variable is validated by `app.config.Settings` (a [pydantic-settings](http
 
 The LLM passes talk to a model only through `LlmClient` (`app/llm/base.py`), and configuration decides which implementation answers. Nothing in the grading or enrichment code — the prompts, parsers and steps in `app/job_ranking/` — knows which provider is in use: the services receive one `TracedLlmClient` built by the module's `get_*` provider, so swapping models is an env change.
 
-**Default (unchanged).** Set nothing and the reranker runs on Gemini from `GEMINI_API_KEY` / `GEMINI_MODEL`, with the same temperature, JSON mode, and retry policy it always had.
+**Default (unchanged).** Set nothing and the reranker runs on Gemini from `GEMINI_API_KEY` / `GEMINI_MODEL`, with the same temperature, JSON mode, and retry policy it always had. Gemini 3+ models (`gemini-3*`, `gemini-3.5-*`, …) are the one exception: unless `RERANKER_LLM_TEMPERATURE` is set they run at 1.0, the temperature Google tunes them for.
 
 **Pick a shipped provider** with `RERANKER_LLM_PROVIDER`:
 
@@ -154,7 +154,7 @@ RERANKER_LLM_BASE_URL=http://localhost:8000/v1
 RERANKER_LLM_MODEL=Qwen/Qwen3-32B
 ```
 
-Every provider except Gemini needs no extra dependency — they use the documented REST APIs over `httpx`, which is already installed. See `.env.example` for the tuning knobs (`RERANKER_LLM_TEMPERATURE`, `RERANKER_LLM_MAX_OUTPUT_TOKENS`, `RERANKER_LLM_TIMEOUT_S`, `RERANKER_LLM_MAX_ATTEMPTS`) and `RERANKER_LLM_OPTIONS`, a JSON object merged into the provider's request body for anything not covered by those.
+Every provider except Gemini needs no extra dependency — they use the documented REST APIs over `httpx`, which is already installed. See `.env.example` for the tuning knobs (`RERANKER_LLM_TEMPERATURE`, `RERANKER_LLM_THINKING_LEVEL`, `RERANKER_LLM_MAX_OUTPUT_TOKENS`, `RERANKER_LLM_TIMEOUT_S`, `RERANKER_LLM_MAX_ATTEMPTS`) and `RERANKER_LLM_OPTIONS`, a JSON object merged into the provider's request body for anything not covered by those.
 
 Two provider-specific behaviours are worth knowing. **Ollama** is addressed by its native API, so `RERANKER_LLM_OPTIONS` carries Ollama's runtime options (`{"num_ctx": 8192, "top_p": 0.9}`) into the request's `options` block, `{"format": {…}}` swaps free-form JSON for a constrained schema decode, and the default timeout is 600 s because a cold local model spends the first minutes loading weights; a `/v1` suffix on the base URL is stripped, so pasting the OpenAI-compat URL still works. **Qwen** on DashScope sends `enable_thinking=false`: Qwen3 hybrid models think by default and DashScope serves thinking only over streaming, which this non-streaming call is not — override with `RERANKER_LLM_OPTIONS={"enable_thinking": true}`.
 

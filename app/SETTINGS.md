@@ -70,12 +70,14 @@ read `settings.llm.provider` / `.model` rather than the raw fields below.
 | `RERANKER_LLM_MODEL` | `reranker_llm_model` | str | unset |
 | `RERANKER_LLM_API_KEY` | `reranker_llm_api_key` | str | unset (falls back per-provider) |
 | `RERANKER_LLM_BASE_URL` | `reranker_llm_base_url` | str | unset (falls back per-provider) |
-| `RERANKER_LLM_TEMPERATURE` | `reranker_llm_temperature` | float, range `[0, 2]` | `0.2` |
+| `RERANKER_LLM_TEMPERATURE` | `reranker_llm_temperature` | float, range `[0, 2]` | unset (→ `1.0` for Gemini 3+ models, else `0.2`) |
 | `RERANKER_LLM_MAX_OUTPUT_TOKENS` | `reranker_llm_max_output_tokens` | int, range `[0, 1000000]` | `0` (provider default) |
 | `RERANKER_LLM_TIMEOUT_S` | `reranker_llm_timeout_s` | float, range `[0, 3600]` | `0.0` (provider default) |
 | `RERANKER_LLM_MAX_ATTEMPTS` | `reranker_llm_max_attempts` | int, clamped to `[1, 12]` | unset (→ `GEMINI_TRANSIENT_MAX_ATTEMPTS` → `5`) |
 | `GEMINI_TRANSIENT_MAX_ATTEMPTS` | `gemini_transient_max_attempts` | int, clamped to `[1, 12]` | historical alias for `RERANKER_LLM_MAX_ATTEMPTS` |
 | `RERANKER_LLM_OPTIONS` | `reranker_llm_options` | JSON object string | `""` (no extras) |
+| `RERANKER_LLM_THINKING_LEVEL` | `reranker_llm_thinking_level` | `minimal`/`low`/`medium`/`high`, case-insensitive | unset (model default) |
+| `RERANKER_LLM_RESPONSE_SCHEMA` | `reranker_llm_response_schema` | bool | `true` |
 
 `max_attempts` is the one field that's **clamped** rather than rejected when out of range
 (`0`/negative → `1`, `99` → `12`), to match pre-refactor behaviour.

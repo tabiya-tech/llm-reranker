@@ -74,6 +74,11 @@ class GeminiLlmClient(LlmClient):
         }
         if config.max_output_tokens > 0:
             kwargs["max_output_tokens"] = config.max_output_tokens
+        if config.thinking_level:
+            # Gemini 3+ only; 2.5 models take thinking_budget (via RERANKER_LLM_OPTIONS).
+            kwargs["thinking_config"] = genai_types.ThinkingConfig(
+                thinking_level=config.thinking_level.upper()  # type: ignore[arg-type]
+            )
         kwargs.update(config.options())
         return genai_types.GenerateContentConfig(**kwargs)  # type: ignore[arg-type]
 

@@ -103,6 +103,38 @@ class TestConfigResolution:
         s = make_settings(RERANKER_LLM_PROVIDER="anthropic", GEMINI_MODEL="gemini-3-pro-preview")
         assert s.llm.model == ""
 
+    @pytest.mark.parametrize(
+        "model, expected",
+        [
+            ("gemini-2.5-flash", 0.2),
+            ("gemini-3-pro-preview", 1.0),
+            ("gemini-3.5-flash", 1.0),
+            ("gemini-3.8-pro-preview", 1.0),
+            ("models/gemini-3.5-flash", 1.0),
+            ("gemini-flash-latest", 0.2),
+        ],
+    )
+    def test_gemini_temperature_default_follows_the_model(self, make_settings, model, expected):
+        assert make_settings(GEMINI_MODEL=model).llm.temperature == expected
+
+    def test_an_explicit_temperature_wins_over_the_model_default(self, make_settings):
+        s = make_settings(GEMINI_MODEL="gemini-3.5-flash", RERANKER_LLM_TEMPERATURE="0.2")
+        assert s.llm.temperature == 0.2
+
+    def test_other_providers_keep_the_historical_temperature(self, make_settings):
+        s = make_settings(RERANKER_LLM_PROVIDER="openai", RERANKER_LLM_MODEL="gemini-3-lookalike")
+        assert s.llm.temperature == 0.2
+
+    def test_thinking_level_is_unset_by_default(self, make_settings):
+        assert make_settings().llm.thinking_level == ""
+
+    def test_thinking_level_is_normalised(self, make_settings):
+        assert make_settings(RERANKER_LLM_THINKING_LEVEL=" High ").llm.thinking_level == "high"
+
+    def test_an_unknown_thinking_level_fails_at_config_time(self, make_settings):
+        with pytest.raises(LlmConfigurationError, match="RERANKER_LLM_THINKING_LEVEL"):
+            make_settings(RERANKER_LLM_THINKING_LEVEL="extreme")
+
     def test_gemini_api_key_env_feeds_the_generic_config(self, make_settings):
         s = make_settings(GEMINI_API_KEY="abc123")
         assert s.llm.api_key == "abc123"
@@ -606,6 +638,48 @@ class TestGeminiClient:
         assert with_schema["config"].temperature == 0.2
         assert without["config"].response_json_schema is None
         assert client._generate_config.response_json_schema is None
+
+    def test_thinking_level_reaches_the_generate_config(self):
+        client = GeminiLlmClient(
+            LlmConfig(
+                provider="gemini",
+                client_class=PROVIDER_CLASS_PATHS["gemini"],
+                model="gemini-3.5-flash",
+                api_key="k",
+                thinking_level="low",
+            )
+        )
+        thinking = client._generate_config.thinking_config
+        assert thinking is not None
+        assert thinking.thinking_level is not None
+        assert thinking.thinking_level.name == "LOW"
+
+    def test_no_thinking_level_leaves_thinking_to_the_model(self):
+        client = GeminiLlmClient(
+            LlmConfig(
+                provider="gemini",
+                client_class=PROVIDER_CLASS_PATHS["gemini"],
+                model="gemini-3.5-flash",
+                api_key="k",
+            )
+        )
+        assert client._generate_config.thinking_config is None
+
+    def test_options_thinking_config_overrides_the_level(self):
+        client = GeminiLlmClient(
+            LlmConfig(
+                provider="gemini",
+                client_class=PROVIDER_CLASS_PATHS["gemini"],
+                model="gemini-2.5-flash",
+                api_key="k",
+                thinking_level="high",
+                options_json='{"thinking_config": {"thinking_budget": 0}}',
+            )
+        )
+        thinking = client._generate_config.thinking_config
+        assert thinking is not None
+        assert thinking.thinking_budget == 0
+        assert thinking.thinking_level is None
 
     def test_options_and_token_cap_reach_the_generate_config(self):
         client = GeminiLlmClient(
