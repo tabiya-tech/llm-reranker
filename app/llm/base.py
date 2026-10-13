@@ -18,6 +18,7 @@ implementations that ship with the repo.
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -72,8 +73,34 @@ PROVIDER_DEFAULT_MODELS: dict[str, str] = {
 CUSTOM_PROVIDER = "custom"
 
 # Matches the temperature the Gemini call used before this abstraction existed;
-# changing it would change model output, so it stays the default for every provider.
+# changing it would change model output, so it stays the default for every provider
+# and model except those listed in :func:`default_temperature`.
 DEFAULT_TEMPERATURE = 0.2
+
+# Gemini 3 and later are tuned for their default temperature of 1.0; Google's guidance
+# is that lowering it can cause looping or degraded reasoning.
+GEMINI_3_TEMPERATURE = 1.0
+
+_GEMINI_MAJOR_VERSION = re.compile(r"^(?:models/)?gemini-(\d+)")
+
+# Values ``RERANKER_LLM_THINKING_LEVEL`` accepts (Gemini 3+ ``thinking_level``).
+THINKING_LEVELS = ("minimal", "low", "medium", "high")
+
+
+def default_temperature(provider: str, model: str) -> float:
+    """Temperature used when ``RERANKER_LLM_TEMPERATURE`` is unset.
+
+    :data:`GEMINI_3_TEMPERATURE` for Gemini models of major version 3 or later
+    (``gemini-3-pro-preview``, ``gemini-3.5-flash``, …), :data:`DEFAULT_TEMPERATURE`
+    for everything else. Aliases without a version (``gemini-flash-latest``) get the
+    historical default; set the variable explicitly for those.
+    see: https://ai.google.dev/gemini-api/docs/gemini-3
+    """
+    if normalise_provider(provider) == "gemini":
+        m = _GEMINI_MAJOR_VERSION.match((model or "").strip().lower())
+        if m and int(m.group(1)) >= 3:
+            return GEMINI_3_TEMPERATURE
+    return DEFAULT_TEMPERATURE
 
 
 def normalise_provider(raw: str | None) -> str:
@@ -134,6 +161,9 @@ class LlmConfig:
     max_attempts: int = 5
     # Provider-specific extras as a JSON object string (e.g. ``{"top_p": 0.9}``).
     options_json: str = ""
+    # Reasoning depth for models that take a level (``THINKING_LEVELS``); ``""`` = the
+    # model's own default. Only the Gemini client reads it.
+    thinking_level: str = ""
     # Send each pass's JSON Schema to clients that support structured output
     # (``LlmClient.supports_response_schema``). Off = prose contract + JSON mode only.
     response_schema: bool = True
