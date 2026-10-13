@@ -535,7 +535,7 @@ class _FakeGeminiModels:
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
-        return _FakeGeminiResponse(outcome)
+        return _FakeGeminiResponse(outcome) if isinstance(outcome, str) else outcome
 
 
 def _stub_gemini(monkeypatch, client: GeminiLlmClient, outcomes: list) -> _FakeGeminiModels:
@@ -729,6 +729,76 @@ class TestGeminiClient:
             client.generate_json("p")
         assert "gemini-9-ultra" in str(exc.value)
         assert len(models.calls) == 1  # not retried
+
+    @staticmethod
+    def _sdk_response(text: str, finish_reason: str, **extra):
+        from google.genai import types as genai_types
+
+        return genai_types.GenerateContentResponse(
+            candidates=[
+                genai_types.Candidate(
+                    content=genai_types.Content(role="model", parts=[genai_types.Part(text=text)]),
+                    finish_reason=genai_types.FinishReason(finish_reason),
+                )
+            ],
+            **extra,
+        )
+
+    def test_a_normal_stop_returns_the_text(self, monkeypatch):
+        client = self._retrying_client()
+        _stub_gemini(monkeypatch, client, [self._sdk_response('{"ok": 1}', "STOP")])
+        assert client.generate_json("p") == '{"ok": 1}'
+
+    def test_truncation_at_the_token_limit_is_reported_and_not_retried(self, monkeypatch):
+        client = self._retrying_client()
+        models = _stub_gemini(
+            monkeypatch, client, [self._sdk_response('{"essential_skills": ["Py', "MAX_TOKENS")]
+        )
+        with pytest.raises(LlmInvocationError, match="MAX_TOKENS") as exc:
+            client.generate_json("p", purpose="skill_ranker")
+        assert "RERANKER_LLM_MAX_OUTPUT_TOKENS" in str(exc.value)
+        assert "skill_ranker" in str(exc.value)
+        assert len(models.calls) == 1
+
+    def test_a_safety_stop_names_its_reason(self, monkeypatch):
+        client = self._retrying_client()
+        _stub_gemini(monkeypatch, client, [self._sdk_response("", "SAFETY")])
+        with pytest.raises(LlmInvocationError, match="finish_reason=SAFETY"):
+            client.generate_json("p")
+
+    def test_a_blocked_prompt_names_its_reason(self, monkeypatch):
+        from google.genai import types as genai_types
+
+        client = self._retrying_client()
+        blocked = genai_types.GenerateContentResponse(
+            prompt_feedback=genai_types.GenerateContentResponsePromptFeedback(
+                block_reason=genai_types.BlockedReason.PROHIBITED_CONTENT
+            )
+        )
+        _stub_gemini(monkeypatch, client, [blocked])
+        with pytest.raises(LlmInvocationError, match="blocked .PROHIBITED_CONTENT."):
+            client.generate_json("p")
+
+    def test_thought_parts_are_never_returned_as_the_answer(self):
+        from google.genai import types as genai_types
+
+        from app.llm.providers.gemini import _response_text
+
+        response = genai_types.GenerateContentResponse(
+            candidates=[
+                genai_types.Candidate(
+                    content=genai_types.Content(
+                        role="model",
+                        parts=[
+                            genai_types.Part(text="let me think", thought=True),
+                            genai_types.Part(text='{"ok": 1}'),
+                        ],
+                    ),
+                    finish_reason=genai_types.FinishReason.STOP,
+                )
+            ]
+        )
+        assert _response_text(response) == '{"ok": 1}'
 
     def test_empty_completion_is_an_error_not_an_empty_string(self, monkeypatch):
         client = GeminiLlmClient(
