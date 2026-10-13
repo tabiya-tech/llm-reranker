@@ -14,6 +14,9 @@ T = TypeVar("T")
 # Cap on the exponential backoff sleep, in seconds.
 MAX_BACKOFF_S = 60.0
 
+# HTTP statuses worth retrying: rate limits and transient server-side failures.
+RETRYABLE_STATUSES = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
+
 # Substrings that identify a reset/aborted connection in a message we cannot type-match.
 _TRANSIENT_MESSAGE_NEEDLES = (
     "connection reset",
@@ -67,14 +70,19 @@ def call_with_transient_retry(
     label: str,
     is_transient: Callable[[BaseException], bool] = is_transient_network_error,
     on_retry: Callable[[], None] | None = None,
-    sleep: Callable[[float], None] = time.sleep,
+    retry_after_s: Callable[[BaseException], float | None] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ) -> T:
     """Run ``call``, retrying transient failures with backoff.
 
     ``on_retry`` runs before each retry — providers use it to drop a stale HTTP
-    client so the next attempt opens a fresh pool. Non-transient exceptions, and
-    the failure on the final attempt, propagate untouched so the provider can
-    translate them into its own error type.
+    client so the next attempt opens a fresh pool. ``retry_after_s`` reads a
+    server-requested delay off the exception (e.g. a rate limit's retry hint); the
+    sleep is then the longer of that and the backoff, still capped at
+    :data:`MAX_BACKOFF_S`. Non-transient exceptions, and the failure on the final
+    attempt, propagate untouched so the provider can translate them into its own
+    error type. ``sleep`` defaults to :func:`time.sleep`, looked up per call so a
+    test can patch it.
     """
     attempts = max(1, int(max_attempts))
     for attempt in range(attempts):
@@ -84,16 +92,18 @@ def call_with_transient_retry(
             if attempt + 1 >= attempts or not is_transient(e):
                 raise
             delay = backoff_delay_s(attempt)
+            hint = retry_after_s(e) if retry_after_s is not None else None
+            if hint is not None and hint > delay:
+                delay = min(MAX_BACKOFF_S, hint)
             logger.warning(
-                "%s transient network error (attempt %s/%s): %s — retry in %.1fs; "
-                "recreating API client",
+                "%s transient error (attempt %s/%s): %s — retry in %.1fs; recreating API client",
                 label,
                 attempt + 1,
                 attempts,
                 e,
                 delay,
             )
-            sleep(delay)
+            (sleep or time.sleep)(delay)
             if on_retry is not None:
                 on_retry()
     # Unreachable: the loop either returns or raises on its final attempt.

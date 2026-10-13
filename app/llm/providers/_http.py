@@ -9,15 +9,16 @@ import httpx
 
 from app.llm.base import LlmClient, LlmConfig
 from app.llm.errors import LlmConfigurationError, LlmInvocationError
-from app.llm.retry import call_with_transient_retry, is_transient_network_error
+from app.llm.retry import (
+    RETRYABLE_STATUSES,
+    call_with_transient_retry,
+    is_transient_network_error,
+)
 from app.observability import report_usage
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 120.0
-
-# HTTP statuses worth retrying: rate limits and transient server-side failures.
-RETRYABLE_STATUSES = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
 
 # Statuses that no retry can fix and that mean the deployment is wired wrong.
 CONFIG_ERROR_STATUSES = frozenset({401, 403, 404})
