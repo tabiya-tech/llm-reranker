@@ -286,7 +286,7 @@ class TestSettingsFromEnv:
         assert s.mongodb_source_collection == "classified_jobs"
         assert s.mongodb_target_collection == "ranked_jobs"
         assert s.gemini_api_key == ""
-        assert s.gemini_model.startswith("gemini-")
+        assert s.llm.model.startswith("gemini-")
         assert s.target_country == "zambia"
         assert s.country_name == "Zambia"
         assert s.classified_linked_entity_types == ("skill", "occupation")

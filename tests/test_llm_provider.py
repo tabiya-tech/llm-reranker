@@ -21,6 +21,7 @@ import pytest
 from app.config import Settings
 from app.llm import (
     PROVIDER_CLASS_PATHS,
+    PROVIDER_DEFAULT_MODELS,
     LlmClient,
     LlmConfig,
     LlmConfigurationError,
@@ -83,8 +84,7 @@ class TestConfigResolution:
         s = make_settings()
         assert s.llm.provider == "gemini"
         assert s.llm.client_class == PROVIDER_CLASS_PATHS["gemini"]
-        assert s.llm.model == "gemini-2.5-flash"
-        assert s.llm.model == s.gemini_model
+        assert s.llm.model == PROVIDER_DEFAULT_MODELS["gemini"] == "gemini-2.5-flash"
         assert s.llm.temperature == 0.2
 
     def test_gemini_model_env_still_selects_the_model(self, make_settings):
@@ -94,6 +94,14 @@ class TestConfigResolution:
     def test_vertex_model_is_the_second_gemini_fallback(self, make_settings):
         s = make_settings(VERTEX_MODEL="gemini-2.0-flash")
         assert s.llm.model == "gemini-2.0-flash"
+
+    def test_gemini_model_wins_over_vertex_model(self, make_settings):
+        s = make_settings(GEMINI_MODEL="gemini-3-pro-preview", VERTEX_MODEL="gemini-2.0-flash")
+        assert s.llm.model == "gemini-3-pro-preview"
+
+    def test_providers_without_a_default_get_no_model(self, make_settings):
+        s = make_settings(RERANKER_LLM_PROVIDER="anthropic", GEMINI_MODEL="gemini-3-pro-preview")
+        assert s.llm.model == ""
 
     def test_gemini_api_key_env_feeds_the_generic_config(self, make_settings):
         s = make_settings(GEMINI_API_KEY="abc123")
