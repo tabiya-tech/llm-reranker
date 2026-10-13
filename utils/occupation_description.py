@@ -76,6 +76,14 @@ def load_occupation_labels_and_descriptions_by_esco(
             )
             return {}, {}
 
+        def add_for_key(k: str | None, label: str, raw_desc: str) -> None:
+            if not k:
+                return
+            kl = k.lower()
+            label_out[kl] = label
+            if raw_desc and desc_hdr:
+                desc_out[kl] = raw_desc
+
         for row in reader:
             n_rows += 1
             label = (row.get(lbl_hdr) or "").strip()
@@ -83,23 +91,15 @@ def load_occupation_labels_and_descriptions_by_esco(
                 continue
             raw_desc = (row.get(desc_hdr) or "").strip() if desc_hdr else ""
 
-            def add_for_key(k: str | None) -> None:
-                if not k:
-                    return
-                kl = k.lower()
-                label_out[kl] = label
-                if raw_desc and desc_hdr:
-                    desc_out[kl] = raw_desc
-
             raw_id = (row.get(id_col) or "").strip()
             if raw_id:
-                add_for_key(raw_id)
+                add_for_key(raw_id, label, raw_desc)
             if origin_col:
                 ou = cell_to_esco_uuid(row.get(origin_col) or "")
-                add_for_key(ou)
+                add_for_key(ou, label, raw_desc)
             if hist_col:
                 for esco_u in parse_uuid_history_cell(row.get(hist_col)):
-                    add_for_key(esco_u)
+                    add_for_key(esco_u, label, raw_desc)
 
     logger.info(
         "Loaded occupation labels/descriptions from %s label_col=%s desc=%s rows=%s label_keys=%s desc_keys=%s",

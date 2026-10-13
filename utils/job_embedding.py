@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.config import Settings
-
 from utils.concat_embedding_text import ranked_job_concat_embedding_text
 from utils.concat_whitening import (
     concat_whitening_artifact_sha256,

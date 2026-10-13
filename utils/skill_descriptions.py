@@ -59,22 +59,22 @@ def load_skill_description_by_esco(
             logger.warning("skills.csv needs ID column for skill descriptions")
             return out
 
+        def add_for_uuid(u: str | None, desc: str) -> None:
+            if u:
+                out[u.lower()] = desc
+
         for row in reader:
             n_rows += 1
             desc = (row.get(desc_col) or "").strip()
             if not desc:
                 continue
 
-            def add_for_uuid(u: str | None) -> None:
-                if u:
-                    out[u.lower()] = desc
-
             if origin_col:
                 ou = cell_to_esco_uuid(row.get(origin_col) or "")
-                add_for_uuid(ou)
+                add_for_uuid(ou, desc)
             if hist_col:
                 for esco_u in parse_uuid_history_cell(row.get(hist_col)):
-                    add_for_uuid(esco_u)
+                    add_for_uuid(esco_u, desc)
 
     logger.info(
         "Loaded skill descriptions from %s column=%s rows=%s esco_keys=%s",

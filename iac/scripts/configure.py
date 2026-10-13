@@ -26,8 +26,8 @@ import subprocess
 import sys
 import tempfile
 
-from google.cloud import secretmanager
 from google.api_core.exceptions import AlreadyExists, NotFound
+from google.cloud import secretmanager
 
 IAC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TEMPLATES_DIR = os.path.join(IAC_DIR, "templates")

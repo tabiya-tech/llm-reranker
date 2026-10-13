@@ -24,10 +24,10 @@ from app.prompts import (
     build_job_attributes_metadata_block,
     build_job_attributes_prompt,
     build_occupation_skills_relevance_prompt,
-    llm2_opening_line_from_context,
-    resolve_llm2_single_county_user_fields,
     build_skill_ranker_prompt,
     format_skill_ranker_skills_text,
+    llm2_opening_line_from_context,
+    resolve_llm2_single_county_user_fields,
 )
 from app.schemas import (
     JobAttributesResult,

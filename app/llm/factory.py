@@ -7,9 +7,9 @@ import threading
 
 from app.llm.base import (
     CUSTOM_PROVIDER,
+    PROVIDER_CLASS_PATHS,
     LlmClient,
     LlmConfig,
-    PROVIDER_CLASS_PATHS,
 )
 from app.llm.errors import LlmConfigurationError
 

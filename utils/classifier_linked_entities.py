@@ -321,7 +321,7 @@ def parse_skill_ranker_json(raw_text: str) -> tuple[list[str], list[str]]:
         try:
             data = json.loads(repaired)
         except json.JSONDecodeError:
-            raise e
+            raise e from None
     if not isinstance(data, dict):
         raise ValueError("Skill ranker JSON must be an object")
     ess = data.get("essential_skills")

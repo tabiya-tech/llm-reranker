@@ -199,7 +199,7 @@ class HttpJsonLlmClient(LlmClient):
 
 
 def _usage_details(
-    input_tokens: Any, output_tokens: Any, total: Any = None
+    input_tokens: object, output_tokens: object, total: object = None
 ) -> dict[str, int] | None:
     """Langfuse ``usage_details`` from whichever counts a provider returned."""
     out: dict[str, int] = {}

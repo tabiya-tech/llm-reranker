@@ -165,12 +165,11 @@ def resolve_llm2_single_county_user_fields(
     """
     x = extras
     alts: list[str] | None = None
+    classifier_label = (occupation.classifier_label or "").strip()
     if x is not None and x.alt_labels is not None:
         alts = [str(a).strip() for a in x.alt_labels if str(a).strip()][:3] or None
-    elif (occupation.classifier_label or "").strip() and (
-        occupation.classifier_label.strip() != (occupation.occupation_label or "").strip()
-    ):
-        alts = [occupation.classifier_label.strip()]
+    elif classifier_label and classifier_label != (occupation.occupation_label or "").strip():
+        alts = [classifier_label]
 
     description: str | None = occupation.csv_definition
     if x is not None and x.description is not None:

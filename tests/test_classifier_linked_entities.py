@@ -13,12 +13,15 @@ Tests pin the existing behavior; the implementation is the source of truth.
 
 from __future__ import annotations
 
+import dataclasses
+from typing import Any
+
 import pytest
 
 from app.job_context import JobDescriptionContext
 from utils.classifier_linked_entities import (
-    EscoSkillCandidate,
     FUZZY_LABEL_MIN_RATIO,
+    EscoSkillCandidate,
     LinkedEntityCandidate,
     _esco_concept_uuid_from_uri,
     _norm_label,
@@ -34,7 +37,6 @@ from utils.classifier_linked_entities import (
     skills_to_prompt_dicts,
     strip_json_fence,
 )
-
 
 # ---------------------------------------------------------------------------
 # Small helpers / pure utilities
@@ -503,7 +505,7 @@ class TestMapSkillLabelsToEscoUris:
 
 
 def _ctx(**overrides):
-    base = dict(
+    base: dict[str, Any] = dict(
         job_id=None,
         job_fingerprint=None,
         title=None,
@@ -615,7 +617,7 @@ class TestFullDetailsFromContext:
 class TestLinkedEntityCandidateDataclass:
     def test_is_frozen(self):
         c = LinkedEntityCandidate(entity_type="skill", label="Python", uri=ESCO_URI)
-        with pytest.raises(Exception):  # FrozenInstanceError or AttributeError
+        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
             c.label = "Other"  # type: ignore[misc]
 
     def test_default_score_and_uuid_are_none(self):

@@ -265,6 +265,7 @@ class TestLlm3MenuFoldedIntoLlm1:
         # Classifier skill + the single strongest menu skill; LLM3 stub (raises) never ran.
         assert llm1_seen == [["Python", "Weld metal"]]
         assert result.ran_llm3 is False
+        assert result.ranked_document is not None
         llm_skills = result.ranked_document["llm_classified_skills"]
         assert [r["label"] for r in llm_skills["essential"]] == ["Python", "Weld metal"]
         assert llm_skills["discarded"] == []

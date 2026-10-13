@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Union
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -23,8 +23,10 @@ from app.pipeline import JobResult, TaxonomyContext, load_taxonomy_context, proc
 
 logger = logging.getLogger(__name__)
 
+JsonValue = Union[str, int, float, bool, None, dict[str, "JsonValue"], list["JsonValue"]]
 
-def _normalize_mongo_extended_json(obj: Any) -> Any:
+
+def _normalize_mongo_extended_json(obj: JsonValue) -> JsonValue:
     """Convert MongoDB Extended JSON (``$oid``, ``$date``) to plain Python types.
 
     Accepts documents copy-pasted from MongoDB Compass / Atlas / mongoexport.
@@ -36,11 +38,11 @@ def _normalize_mongo_extended_json(obj: Any) -> Any:
             if "$date" in obj:
                 return str(obj["$date"])
             if "$numberInt" in obj:
-                return int(obj["$numberInt"])
+                return int(str(obj["$numberInt"]))
             if "$numberLong" in obj:
-                return int(obj["$numberLong"])
+                return int(str(obj["$numberLong"]))
             if "$numberDouble" in obj:
-                return float(obj["$numberDouble"])
+                return float(str(obj["$numberDouble"]))
         return {k: _normalize_mongo_extended_json(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_normalize_mongo_extended_json(item) for item in obj]
@@ -141,7 +143,9 @@ async def rank_job(body: dict[str, Any], language: str | None = None) -> RankRes
     service default applies, so existing callers are unaffected.
     """
     doc = _normalize_mongo_extended_json(body)
-    requested = language or (doc.get("language") if isinstance(doc, dict) else None)
+    assert isinstance(doc, dict)  # body is a dict, so normalizing it returns one
+    doc_language = doc.get("language")
+    requested = language or (doc_language if isinstance(doc_language, str) else None)
     lang = normalise_language(requested) if requested else get_settings().language
     taxonomy = get_taxonomy(lang)
     settings = get_settings_for_language(lang)
@@ -172,7 +176,7 @@ async def rank_job(body: dict[str, Any], language: str | None = None) -> RankRes
             )
     except Exception as exc:
         logger.exception("Error processing job: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return RankResponse(
         ranked_document=result.ranked_document,
         timings=result.timings,

@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from app.config import (
+    Settings,
     _bool_env,
     _classified_linked_entity_label_dedupe_types_from_env,
     _classified_linked_entity_min_similarity_from_env,
@@ -24,10 +25,8 @@ from app.config import (
     _occupation_skills_signal_include_from_env,
     _target_country_slug_from_env,
     _unique_key_order,
-    Settings,
     reranker_enable_llm3_from_env,
 )
-
 
 # ---------------------------------------------------------------------------
 # Small parsers

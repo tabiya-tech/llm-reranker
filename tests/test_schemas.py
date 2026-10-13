@@ -32,7 +32,6 @@ from app.schemas import (
     parse_requires_post_secondary,
 )
 
-
 # ---------------------------------------------------------------------------
 # Resource paths and loaders (use the real, committed resources)
 # ---------------------------------------------------------------------------

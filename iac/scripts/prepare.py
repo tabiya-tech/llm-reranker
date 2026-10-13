@@ -24,8 +24,8 @@ import re
 import sys
 
 import yaml
-from google.cloud import secretmanager
 from google.api_core.exceptions import NotFound
+from google.cloud import secretmanager
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 IAC_DIR = os.path.join(REPO_ROOT, "iac")

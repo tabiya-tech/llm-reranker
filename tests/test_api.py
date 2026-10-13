@@ -14,8 +14,7 @@ the LLM service is monkeypatched.
 from __future__ import annotations
 
 import api
-from api import _normalize_mongo_extended_json
-
+from api import JsonValue, _normalize_mongo_extended_json
 
 # ---------------------------------------------------------------------------
 # _normalize_mongo_extended_json
@@ -68,7 +67,7 @@ class TestNormalizeMongoExtendedJson:
         assert _normalize_mongo_extended_json(True) is True
 
     def test_nested_inside_lists_inside_dicts(self):
-        body = {"items": [{"id": {"$oid": "x"}, "n": {"$numberInt": "3"}}]}
+        body: dict[str, JsonValue] = {"items": [{"id": {"$oid": "x"}, "n": {"$numberInt": "3"}}]}
         out = _normalize_mongo_extended_json(body)
         assert out == {"items": [{"id": "x", "n": 3}]}
 

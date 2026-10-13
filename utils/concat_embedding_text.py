@@ -37,8 +37,10 @@ def ranked_job_skill_labels_for_concat(ranked_doc: dict[str, Any]) -> list[str]:
     if not isinstance(lcs, dict):
         return out
 
-    def _take(items: Any) -> None:
-        for s in items or []:
+    def _take(items: object) -> None:
+        if not isinstance(items, list):
+            return
+        for s in items:
             if isinstance(s, dict):
                 lab = s.get("label")
                 if lab:

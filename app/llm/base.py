@@ -211,7 +211,7 @@ class LlmClient(ABC):
         implementations use it only for logs and error messages.
         """
 
-    def close(self) -> None:
+    def close(self) -> None:  # noqa: B027 — intentional no-op default, not required to override
         """Release sockets / clients. Default is a no-op; override when needed."""
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
