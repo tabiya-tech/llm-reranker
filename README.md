@@ -4,18 +4,25 @@ Batch pipeline and HTTP API that processes classified job documents from MongoDB
 
 ## Pipeline
 
-1. **Skill ranker (LLM 1)** — Classifier ESCO skills ranked as essential, optional, or discarded.
-2. **Job attributes (LLM 2)** — Structured attribute estimates and ONET work activities.
-3. **Occupation–skills relevance (LLM 3)** — Taxonomy skills scored for relevance to the specific job ad.
+One per-job pipeline, `app.pipeline.process_single_job`, used by both the API and the batch CLI:
+
+1. **Taxonomy** — The classifier's ESCO skill links become skill candidates. Its occupation links are looked up in the occupation-to-skill relations, which gives `occupation_to_skills` and an **occupation-skill menu**.
+2. **LLM 3: occupation–skill menu** — Controlled by `RERANKER_ENABLE_LLM3` and `RERANKER_LLM3_MODE`. In `fold` mode (the default) the menu skills are added to LLM 1's candidates and no LLM 3 call is made. In `call` mode a standalone LLM 3 call judges each menu skill's relevance to the job ad.
+3. **Skill ranker (LLM 1)** — Ranks the candidates as essential, optional or discarded.
+4. **Job attributes (LLM 2)** — Structured attribute estimates and ONET work activities.
+
+In the default configuration, each job makes two LLM calls: LLM 1 and LLM 2.
 
 
 ## Repository layout
 
 | Path | Purpose |
 |------|---------|
-| `api.py` | FastAPI service — single-job HTTP endpoint (Cloud Run Service) |
+| `api.py` | FastAPI service — single-job HTTP endpoint (Cloud Run Service); see [docs/API.md](docs/API.md) |
+| `app/api_models.py` | `/rank` request and response models (the OpenAPI spec) |
 | `main.py` | Batch CLI — process full collection (Cloud Run Job) |
-| `app/pipeline.py` | Shared per-job processing core |
+| `app/batch_rank_one.py` | Batch per-job step: runs the pipeline, logs it, builds the upsert |
+| `app/pipeline.py` | The per-job pipeline both of the above run |
 | `app/llm/` | The backing LLM: `LlmClient` interface, provider factory, provider implementations |
 | `app/observability/` | LLM tracing to Langfuse — generations and embeddings, per job |
 | `app/` | Config, MongoDB, prompts, schemas, logging |
@@ -42,7 +49,7 @@ Edit `.env` with: `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_SOURCE_COLLECTION`
 
 ## Choosing the model
 
-The three LLM passes talk to a model only through `LlmClient` (`app/llm/base.py`), and configuration decides which implementation answers. Nothing in the grading or enrichment code — prompts, parsing, `pipeline.py`, `ranked_job_schema.py` — knows which provider is in use, so swapping models is an env change.
+The LLM passes talk to a model only through `LlmClient` (`app/llm/base.py`), and configuration decides which implementation answers. Nothing in the grading or enrichment code — prompts, parsing, `pipeline.py`, `ranked_job_schema.py` — knows which provider is in use, so swapping models is an env change.
 
 **Default (unchanged).** Set nothing and the reranker runs on Gemini from `GEMINI_API_KEY` / `GEMINI_MODEL`, with the same temperature, JSON mode, and retry policy it always had.
 
@@ -119,25 +126,24 @@ The model that actually ran is recorded per document in `classifier_metadata` (`
 uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
-**POST `/rank`** — send a classified job document directly as the JSON body:
+**POST `/rank`** — send a classified job document directly as the JSON body. MongoDB
+Extended JSON (`$oid`, `$date`) is accepted, so documents can be pasted from Compass or
+Atlas. The response is the ranked job document, together with `ran_llm1`, `ran_llm2`,
+`ran_llm3` and `llm3_outcome`, which report the steps that actually ran:
 
 ```bash
-curl -X POST http://localhost:8000/rank \
+curl -X POST 'http://localhost:8000/rank?language=es' \
   -H "Content-Type: application/json" \
   -d '{ "_id": "...", "title": "...", "classification": { ... } }'
 ```
 
-The endpoint accepts MongoDB Extended JSON (`$oid`, `$date`) so documents can be pasted directly from Compass or Atlas.
+**GET `/health`** — readiness check. It also reports the default, supported and
+currently loaded languages.
 
-`?language=es` (or a `language` field on the document) ranks the job against that
-language's pack — taxonomy labels, prompts, job attributes. Each language's taxonomy is
-loaded on the first request that needs it, so that request is slower. Omitted, the service
-default applies.
-
-**GET `/health`** — readiness check; also reports the default, supported, and
-currently-loaded languages.
-
-Interactive docs at `http://localhost:8000/docs`.
+**[docs/API.md](docs/API.md)** covers the request and response fields, the errors, and
+how the API relates to the batch CLI. In short, the batch runs the same per-job pipeline
+and adds logging, the job embedding and the MongoDB upsert. The interactive OpenAPI docs
+are at `http://localhost:8000/docs`.
 
 ## Batch CLI — full collection
 
@@ -151,7 +157,7 @@ python main.py
 | `--verbose` | Extra per-job detail on stderr |
 | `--log-llm1-prompt` | Log skill ranker prompt |
 | `--log-llm2-prompt` | Log job attributes prompt |
-| `--log-llm3-prompt` | Log occupation–skills relevance prompt |
+| `--log-llm3-prompt` | Log occupation–skills relevance prompt (only `RERANKER_LLM3_MODE=call` makes that call) |
 | `--bulk-batch-size N` | Flush MongoDB writes every N upserts |
 | `--language LANG` | Language pack to rank against (`en`, `es`, or a locale like `AR-es`). Default: from `TARGET_COUNTRY`. |
 
@@ -267,7 +273,7 @@ What is recorded, per ranked job:
 | Observation | Type | Carries |
 |---|---|---|
 | `rank_job` | trace | job id, title, employer, platform; tags `invocation:`, `country:`, `language:`, `llm_provider:` |
-| `skill_ranker`, `job_attributes`, `occupation_skills_relevance` | generation | prompt, raw JSON output, model, temperature, token usage |
+| `skill_ranker`, `job_attributes`, `occupation_skills_relevance` (`RERANKER_LLM3_MODE=call` only) | generation | prompt, raw JSON output, model, temperature, token usage |
 | `embed_content` | embedding | the text embedded, model, `task_type`, `output_dimensionality`, vector count/dim, token usage when reported |
 
 Batch jobs from one run share a Langfuse **session**, named by the `reranker_logs` run `_id`.

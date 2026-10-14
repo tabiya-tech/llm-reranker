@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Batch CLI: ``classified_jobs`` → LLM 1, 3, 2 → upsert ranked job schema (e.g. ``ranked_jobs``).
+"""Batch CLI: ``classified_jobs`` → per-job pipeline → upsert ranked job schema (e.g. ``ranked_jobs``).
 
-For single-job HTTP processing, see ``api.py`` (FastAPI).
+Each job runs :func:`app.pipeline.process_single_job`, the same pipeline as ``POST /rank`` in
+``api.py``; the batch adds per-step logging, the job embedding, and the MongoDB upsert.
 """
 
 from __future__ import annotations
@@ -20,12 +21,7 @@ from typing import Any
 from pymongo.operations import UpdateOne
 
 from app.batch_rank_one import RankOneJobResult, rank_one_classified_document
-from app.config import (
-    Settings,
-    get_settings,
-    log_ranker_run_configuration,
-    reranker_enable_llm3_from_env,
-)
+from app.config import Settings, get_settings, log_ranker_run_configuration
 from app.database import (
     bulk_write_llm_upserts,
     complete_ranking_run_log,
@@ -64,7 +60,7 @@ def _elapsed_s(start: float) -> float:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="classified_jobs batch: Mongo → LLM 1, 3, 2 → upsert target collection"
+        description="classified_jobs batch: Mongo → per-job pipeline (as POST /rank) → upsert target collection"
     )
     p.add_argument(
         "--limit",
@@ -92,7 +88,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--log-llm3-prompt",
         action="store_true",
-        help="Per job: log LLM3 occupation-skills relevance full prompt; skip other per-job INFO logs",
+        help="Per job: log LLM3 occupation-skills relevance full prompt (only RERANKER_LLM3_MODE=call "
+        "makes that call); skip other per-job INFO logs",
     )
     p.add_argument(
         "--bulk-batch-size",
@@ -246,7 +243,6 @@ def run() -> None:
         list(settings.classified_linked_entity_types),
     )
 
-    enable_llm3 = reranker_enable_llm3_from_env()
     log_ranker_run_configuration(
         logger,
         settings,
@@ -380,7 +376,6 @@ def run() -> None:
                     args=args,
                     settings=settings,
                     taxonomy=taxonomy,
-                    enable_llm3=enable_llm3,
                 )
                 update_observation(
                     trace,

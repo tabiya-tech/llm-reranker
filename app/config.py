@@ -267,6 +267,31 @@ def _llm3_menu_signal_filter_from_env() -> str:
     return "off"
 
 
+LLM3_MODE_FOLD = "fold"
+LLM3_MODE_CALL = "call"
+LLM3_MODES = (LLM3_MODE_FOLD, LLM3_MODE_CALL)
+
+
+def _llm3_mode_from_env() -> str:
+    """
+    ``RERANKER_LLM3_MODE``: how the occupation-skills menu is used when LLM3 is enabled.
+
+    ``fold`` (default): the menu (same ``RERANKER_LLM3_*`` limits) goes to LLM1 as extra
+    skill candidates and no LLM3 call is made. ``call``: the standalone LLM3 relevance call
+    judges the menu and tags ``occupation_to_skills`` with ``llm_is_relevant``.
+    """
+    raw = (os.environ.get("RERANKER_LLM3_MODE") or LLM3_MODE_FOLD).strip().lower()
+    if raw in LLM3_MODES:
+        return raw
+    _logger.warning(
+        "RERANKER_LLM3_MODE=%r is not one of %s; using %r",
+        raw,
+        ", ".join(LLM3_MODES),
+        LLM3_MODE_FOLD,
+    )
+    return LLM3_MODE_FOLD
+
+
 def _occupation_skills_signal_include_from_env() -> frozenset[str] | None:
     """
     ``RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE``: comma-separated subset of
@@ -714,6 +739,10 @@ class Settings:
     # Target collection: flush Mongo bulk_write after this many upserts (see ``BULK_WRITE_BATCH_SIZE``).
     bulk_write_batch_size: int
 
+    # LLM3 on/off (``RERANKER_ENABLE_LLM3``) and what it does with the occupation-skills menu
+    # (``RERANKER_LLM3_MODE``: ``fold`` into LLM1's candidates, or a standalone ``call``).
+    reranker_enable_llm3: bool
+    reranker_llm3_mode: str
     # LLM3 occupation-skills menu size / latency (``RERANKER_LLM3_MAX_MENU_SKILLS``,
     # ``RERANKER_LLM3_CLASSIFIER_INTERSECT``, ``RERANKER_LLM3_MENU_SIGNAL_FILTER``).
     # When capped, CSV signalling columns prioritize rows; signal filter keeps tiered labels only.
@@ -919,6 +948,8 @@ class Settings:
             vertex_model=os.environ.get("VERTEX_MODEL", "gemini-2.5-flash"),
             google_application_credentials_resolved=creds_resolved,
             bulk_write_batch_size=_int_env("BULK_WRITE_BATCH_SIZE", 100),
+            reranker_enable_llm3=reranker_enable_llm3_from_env(),
+            reranker_llm3_mode=_llm3_mode_from_env(),
             reranker_llm3_max_menu_skills=_int_env_min0("RERANKER_LLM3_MAX_MENU_SKILLS", 0),
             reranker_llm3_classifier_intersect=_bool_env(
                 "RERANKER_LLM3_CLASSIFIER_INTERSECT", default=False
@@ -1010,13 +1041,11 @@ def vertex_project_unset_message() -> str:
 
 
 def reranker_enable_llm3_from_env() -> bool:
-    """``RERANKER_ENABLE_LLM3`` (default on): run LLM3 occupation–skills relevance when the menu is non-empty."""
+    """``RERANKER_ENABLE_LLM3`` (default on): use the occupation-skills menu when it is non-empty.
+
+    What "use" means is ``RERANKER_LLM3_MODE`` (see :func:`_llm3_mode_from_env`).
+    """
     return _bool_env("RERANKER_ENABLE_LLM3", default=True)
-
-
-# Temporary: send the LLM3 menu (same ``RERANKER_LLM3_*`` limits) to LLM1 as extra candidates
-# instead of making the LLM3 call. Still gated by ``RERANKER_ENABLE_LLM3``. ``False`` restores LLM3.
-FOLD_LLM3_MENU_INTO_LLM1 = True
 
 
 def log_ranker_run_configuration(
@@ -1031,7 +1060,6 @@ def log_ranker_run_configuration(
     """
     Log effective ranking-related env / settings (taxonomy filtering, LLM3 toggles, batch parallelism).
     """
-    enable_llm3 = reranker_enable_llm3_from_env()
     occ_types = (
         "all"
         if settings.occupation_skill_relation_occupation_types is None
@@ -1064,7 +1092,7 @@ def log_ranker_run_configuration(
         "RERANKER_LLM_PROVIDER=%s | RERANKER_LLM_MODEL=%s | RERANKER_LLM_CLIENT_CLASS=%s | "
         "llm_api_key=...%s | "
         "MONGODB_SOURCE_COLLECTION=%s | MONGODB_TARGET_COLLECTION=%s | "
-        "RERANKER_ENABLE_LLM3=%s | RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE=%s | "
+        "RERANKER_ENABLE_LLM3=%s | RERANKER_LLM3_MODE=%s | RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE=%s | "
         "RERANKER_LLM3_MAX_MENU_SKILLS=%s | RERANKER_LLM3_MENU_SIGNAL_FILTER=%s | "
         "RERANKER_LLM3_CLASSIFIER_INTERSECT=%s | OCCUPATION_SKILL_RELATION_OCCUPATION_TYPES=%s | "
         "OCCUPATION_RELATION_LOOKUP=%s | OCCUPATION_RELATION_ESCO_FALLBACK=%s | "
@@ -1086,7 +1114,8 @@ def log_ranker_run_configuration(
         key_tail,
         settings.mongodb_source_collection,
         settings.mongodb_target_collection,
-        int(enable_llm3),
+        int(settings.reranker_enable_llm3),
+        settings.reranker_llm3_mode,
         sig_inc,
         settings.reranker_llm3_max_menu_skills,
         settings.reranker_llm3_menu_signal_filter,

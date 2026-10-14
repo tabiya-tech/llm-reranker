@@ -1,4 +1,4 @@
-"""Shared per-job processing core — used by both the batch CLI and the FastAPI endpoint."""
+"""The per-job pipeline — the one both the batch CLI and the FastAPI endpoint run."""
 
 from __future__ import annotations
 
@@ -7,14 +7,10 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
-from app.config import (
-    FOLD_LLM3_MENU_INTO_LLM1,
-    Settings,
-    get_settings,
-    reranker_enable_llm3_from_env,
-)
+from app.config import LLM3_MODE_FOLD, Settings, get_settings
 from app.database import build_job_description_context
 from app.job_context import JobDescriptionContext
 from app.llm_service import (
@@ -36,6 +32,7 @@ from utils.classifier_linked_entities import (
     EscoSkillCandidate,
     MappedEscoSkills,
     extract_esco_skill_candidates,
+    job_identifier,
 )
 from utils.occupation_to_skills_mapping import resolve_occupation_taxonomy_for_classified_job
 
@@ -58,15 +55,53 @@ class TaxonomyContext:
     occ_desc_by_esco: dict[str, str]
 
 
+class Llm3Outcome(StrEnum):
+    """What the LLM3 step did for one job (see ``RERANKER_ENABLE_LLM3`` / ``RERANKER_LLM3_MODE``)."""
+
+    DISABLED = "disabled"
+    """``RERANKER_ENABLE_LLM3=0``: the occupation-skills menu was not used."""
+    NO_MENU = "no_menu"
+    """No essential/optional occupation skills to put on a menu."""
+    MENU_FILTERED_OUT = "menu_filtered_out"
+    """The ``RERANKER_LLM3_*`` filters left the menu empty."""
+    FOLDED = "folded"
+    """``fold`` mode: the menu went to LLM1 as extra candidates; no LLM3 call."""
+    CALLED = "called"
+    """``call`` mode: the standalone LLM3 relevance call ran."""
+
+
+@dataclass
+class JobStats:
+    """Per-step counts for one job — what the batch CLI logs; the API leaves them out."""
+
+    classifier_skill_candidates: int = 0
+    occupation_blocks: int = 0
+    taxonomy_menu_skills: int = 0
+    llm3_prompt_skills: int = 0
+    llm3_added_llm1_candidates: int = 0
+    llm3_decisions: int = 0
+    llm1_menu: int = 0
+    llm1_essential: int = 0
+    llm1_optional: int = 0
+    # (essential, optional, unranked) occupation-relation skills, when LLM1 ran and there were any.
+    occupation_ranker_counts: tuple[int, int, int] | None = None
+    attribute_estimates: int = 0
+    work_activity_ids: int = 0
+    taxonomy_detail: list[str] = field(default_factory=list)
+
+
 @dataclass
 class JobResult:
     """Output of processing a single classified job document."""
 
     ranked_document: dict[str, Any] | None
+    ctx: JobDescriptionContext
     timings: dict[str, float] = field(default_factory=dict)
     ran_llm1: bool = False
     ran_llm2: bool = False
     ran_llm3: bool = False
+    llm3_outcome: Llm3Outcome = Llm3Outcome.DISABLED
+    stats: JobStats = field(default_factory=JobStats)
 
 
 def run_llm1_llm2_phase(
@@ -228,23 +263,48 @@ def load_taxonomy_context(settings: Settings | None = None) -> TaxonomyContext:
     )
 
 
+def _occupation_ranker_counts(
+    occ_uuids: list[str],
+    mapped: MappedEscoSkills | None,
+) -> tuple[int, int, int]:
+    """How many occupation-relation skill uuids LLM1 ranked essential / optional / not at all."""
+    if not occ_uuids or mapped is None:
+        return 0, 0, len(occ_uuids)
+    oset = {u.strip().lower() for u in occ_uuids if u}
+    ess = {u.strip().lower() for u in mapped.essential_skills_uuids if u}
+    opt = {u.strip().lower() for u in mapped.optional_skills_uuids if u}
+    return len(oset & ess), len(oset & opt), len(oset - ess - opt)
+
+
 def process_single_job(
     classified_doc: dict[str, Any],
     taxonomy: TaxonomyContext,
     settings: Settings | None = None,
+    *,
+    log_llm1_prompt: bool = False,
+    log_llm2_prompt: bool = False,
+    log_llm3_prompt: bool = False,
 ) -> JobResult:
     """
-    Run the full LLM pipeline (1 → 3 → 2) on one classified job document.
+    Run the per-job pipeline on one classified job document: taxonomy → LLM3 → LLM1 + LLM2.
 
-    Returns a ``JobResult`` with the ranked payload (ready for MongoDB ``$set`` or API response)
-    and step timings. Does NOT write to MongoDB — the caller decides what to do with the result.
+    LLM3 depends on ``RERANKER_ENABLE_LLM3`` and ``RERANKER_LLM3_MODE``: in ``fold`` mode the
+    occupation-skills menu becomes extra LLM1 candidates and no LLM3 call is made; in ``call``
+    mode the standalone relevance call tags ``occupation_to_skills``. ``JobResult.llm3_outcome``
+    says which happened.
+
+    Returns a ``JobResult`` with the ranked payload (ready for MongoDB ``$set`` or API response),
+    step timings, and per-step counts. Does NOT write to MongoDB or embed the job — the caller
+    decides what to do with the result. The ``log_*_prompt`` flags log each assembled prompt,
+    labelled with the job's fingerprint / id.
     """
     settings = settings or get_settings()
     t_total = time.perf_counter()
-    result = JobResult(ranked_document=None)
-    enable_llm3 = reranker_enable_llm3_from_env()
 
     ctx = build_job_description_context(classified_doc, settings=settings)
+    result = JobResult(ranked_document=None, ctx=ctx)
+    stats = result.stats
+    label = job_identifier(ctx, classified_doc)
 
     t0 = time.perf_counter()
     base_skills: list[EscoSkillCandidate] = extract_esco_skill_candidates(classified_doc)
@@ -262,36 +322,52 @@ def process_single_job(
         occupation_skill_signalling=taxonomy.occ_skill_signalling,
         settings=settings,
     )
-    result.timings["taxonomy_s"] = time.perf_counter() - t0
-
     occupation_to_skills_nested = filter_occupation_skills_nested_by_signal_include(
         occupation_to_skills_nested,
         include_tiers=settings.reranker_occupation_skills_signal_include,
     )
+    result.timings["taxonomy_s"] = time.perf_counter() - t0
+    stats.classifier_skill_candidates = len(base_skills)
+    stats.occupation_blocks = len(occupation_to_skills_nested)
+    stats.taxonomy_menu_skills = occupation_skills_relevance_menu_size(occupation_to_skills_nested)
+    if occ_stats is not None:
+        stats.taxonomy_detail = occ_stats.format_log_lines()
 
     llm3_prompt_nested: list[dict[str, Any]] = []
-    llm3_prompt_n = 0
-    n_llm3_menu = occupation_skills_relevance_menu_size(occupation_to_skills_nested)
-    if enable_llm3 and n_llm3_menu > 0:
-        llm3_prompt_nested, _, llm3_prompt_n = build_llm3_occupation_menu(
+    if settings.reranker_enable_llm3 and stats.taxonomy_menu_skills > 0:
+        llm3_prompt_nested, _, stats.llm3_prompt_skills = build_llm3_occupation_menu(
             occupation_to_skills_nested, base_skills, settings
         )
+
     llm1_candidates = base_skills
-    if FOLD_LLM3_MENU_INTO_LLM1 and enable_llm3 and llm3_prompt_n > 0:
-        llm1_candidates = base_skills + llm3_menu_skill_candidates(llm3_prompt_nested, base_skills)
-    elif enable_llm3 and occupation_to_skills_nested and llm3_prompt_n > 0:
+    if not settings.reranker_enable_llm3:
+        result.llm3_outcome = Llm3Outcome.DISABLED
+    elif stats.taxonomy_menu_skills == 0:
+        result.llm3_outcome = Llm3Outcome.NO_MENU
+    elif stats.llm3_prompt_skills == 0:
+        result.llm3_outcome = Llm3Outcome.MENU_FILTERED_OUT
+    elif settings.reranker_llm3_mode == LLM3_MODE_FOLD:
+        llm3_extra = llm3_menu_skill_candidates(llm3_prompt_nested, base_skills)
+        llm1_candidates = base_skills + llm3_extra
+        stats.llm3_added_llm1_candidates = len(llm3_extra)
+        result.llm3_outcome = Llm3Outcome.FOLDED
+    else:
         t0 = time.perf_counter()
         rel_result = run_occupation_skills_relevance_for_job(
             ctx,
             llm3_prompt_nested,
             settings=settings,
+            log_llm3_prompt=log_llm3_prompt,
+            log_llm3_job_label=label,
         )
         occupation_to_skills_nested = apply_occupation_skills_listing_relevance(
             occupation_to_skills_nested,
             rel_result,
         )
         result.timings["llm3_s"] = time.perf_counter() - t0
+        stats.llm3_decisions = len(rel_result.decisions)
         result.ran_llm3 = True
+        result.llm3_outcome = Llm3Outcome.CALLED
 
     (
         essential,
@@ -310,13 +386,26 @@ def process_single_job(
         taxonomy,
         llm1_candidates,
         overlap_llm12=settings.reranker_overlap_llm1_llm2,
+        log_llm1_prompt=log_llm1_prompt,
+        log_llm2_prompt=log_llm2_prompt,
+        log_llm1_job_label=label,
+        log_llm2_job_label=label,
     )
+    stats.llm1_menu = len(llm1_candidates)
     if ran_skill:
         result.timings["llm1_s"] = llm1_s
         result.ran_llm1 = True
+        stats.llm1_essential = len(essential)
+        stats.llm1_optional = len(optional)
+        if skill_mapped is not None and occupation_relation_skill_uuids:
+            stats.occupation_ranker_counts = _occupation_ranker_counts(
+                occupation_relation_skill_uuids, skill_mapped
+            )
     if ran_ja:
         result.timings["llm2_s"] = llm2_s
         result.ran_llm2 = True
+        stats.attribute_estimates = len(ja.attribute_estimates)
+        stats.work_activity_ids = len(ja.work_activity_ids)
 
     ranked = build_ranked_job_document(
         classified_doc,
