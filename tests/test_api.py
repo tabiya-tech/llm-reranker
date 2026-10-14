@@ -7,14 +7,14 @@ We cover the two safest behaviours that don't require Gemini or Mongo:
 2. ``GET /health`` — a smoke test that the FastAPI ``app`` boots and responds
    when the dependent taxonomy + Gemini key are stubbed.
 
-The ``/rank`` endpoint is exercised in ``test_pipeline_integration.py`` where
-the LLM service is monkeypatched.
+``POST /rank`` is exercised in ``test_api_rank.py`` with the LLM calls stubbed.
 """
 
 from __future__ import annotations
 
 import api
-from api import JsonValue, _normalize_mongo_extended_json
+from app.api_models import JsonValue
+from app.api_models import normalize_mongo_extended_json as _normalize_mongo_extended_json
 
 # ---------------------------------------------------------------------------
 # _normalize_mongo_extended_json

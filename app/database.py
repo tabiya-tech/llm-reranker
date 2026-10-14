@@ -4,7 +4,7 @@ import itertools
 import logging
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import Any, Iterator
 
 import certifi
 from bson import ObjectId
@@ -18,11 +18,6 @@ from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
 from app.languages import language_setting
 from app.logging_config import sanitize_mongodb_uri
-from app.schemas import JobAttributesResult
-
-if TYPE_CHECKING:
-    from utils.classifier_linked_entities import EscoSkillCandidate, MappedEscoSkills
-    from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap
 
 logger = logging.getLogger(__name__)
 _mongo_client_connection_logged = False
@@ -119,80 +114,26 @@ def _upsert_filter_for_llm_results(
     )
 
 
-def _llm_pipeline_set_document(
+def ranked_job_upsert_update_one(
     classified_doc: dict[str, Any],
     ctx: JobDescriptionContext,
-    settings: Settings,
-    ja: JobAttributesResult | None,
-    skill_ranker: tuple[list[str], list[str], "MappedEscoSkills", str] | None,
-    occupation_to_skills: list[dict[str, Any]] | None = None,
-    skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
-    occupations_bridge: dict[str, str] | None = None,
-    occupations_all_ids: frozenset[str] | None = None,
-    ranker_candidates: list["EscoSkillCandidate"] | None = None,
-    classifier_skill_candidates: list["EscoSkillCandidate"] | None = None,
-) -> dict[str, Any] | None:
-    """``$set`` body for target upsert (see ``app.ranked_job_schema``); ``None`` when nothing to write."""
-    from app.ranked_job_schema import build_ranked_job_document
-    from utils.job_embedding import attach_job_embedding_to_payload
-
-    payload = build_ranked_job_document(
-        classified_doc,
-        ctx,
-        settings=settings,
-        ja=ja,
-        skill_ranker=skill_ranker,
-        occupation_to_skills=occupation_to_skills,
-        skills_uuid_tabiya_map=skills_uuid_tabiya_map,
-        occupations_bridge=occupations_bridge,
-        occupations_all_ids=occupations_all_ids,
-        ranker_candidates=ranker_candidates,
-        classifier_skill_candidates=classifier_skill_candidates,
-    )
-    if payload is None:
-        return None
-    return attach_job_embedding_to_payload(payload, settings=settings)
-
-
-def llm_pipeline_upsert_update_one(
-    classified_doc: dict[str, Any],
-    ctx: JobDescriptionContext,
+    ranked_document: dict[str, Any],
     *,
     settings: Settings | None = None,
-    ja: JobAttributesResult | None = None,
-    skill_ranker: tuple[list[str], list[str], "MappedEscoSkills", str] | None = None,
-    occupation_to_skills: list[dict[str, Any]] | None = None,
-    skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
-    occupations_bridge: dict[str, str] | None = None,
-    occupations_all_ids: frozenset[str] | None = None,
-    ranker_candidates: list["EscoSkillCandidate"] | None = None,
-    classifier_skill_candidates: list["EscoSkillCandidate"] | None = None,
-) -> UpdateOne | None:
+) -> UpdateOne:
     """
-    Build one ``UpdateOne`` for the target collection, or ``None`` if there is nothing to write.
+    Build one target-collection ``UpdateOne`` from a ranked document (``JobResult.ranked_document``).
+
+    Attaches the job embedding first (``RERANKER_ENABLE_JOB_EMBEDDING``); the API never embeds,
+    so this is the one step the batch adds to the shared pipeline's output.
 
     May raise ``ValueError`` if the classified document cannot be matched (see ``_upsert_filter_for_llm_results``).
     """
+    from utils.job_embedding import attach_job_embedding_to_payload
+
     settings = settings or get_settings()
-    payload = _llm_pipeline_set_document(
-        classified_doc,
-        ctx,
-        settings,
-        ja,
-        skill_ranker,
-        occupation_to_skills=occupation_to_skills,
-        skills_uuid_tabiya_map=skills_uuid_tabiya_map,
-        occupations_bridge=occupations_bridge,
-        occupations_all_ids=occupations_all_ids,
-        ranker_candidates=ranker_candidates,
-        classifier_skill_candidates=classifier_skill_candidates,
-    )
-    if payload is None:
-        logger.warning(
-            "MongoDB upsert skipped: ranked job payload is empty (job attributes / LLM2 result missing)."
-        )
-        return None
     flt = _upsert_filter_for_llm_results(classified_doc, ctx, settings)
+    payload = attach_job_embedding_to_payload(ranked_document, settings=settings)
     # Drop legacy nested raw-response blobs (schema v2+).
     return UpdateOne(
         flt,

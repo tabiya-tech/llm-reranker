@@ -19,6 +19,7 @@ from app.config import (
     _int_env,
     _int_env_min0,
     _llm3_menu_signal_filter_from_env,
+    _llm3_mode_from_env,
     _normalize_classifier_entity_type_token,
     _occupation_relation_lookup_from_env,
     _occupation_skill_relation_occupation_types_from_env,
@@ -278,6 +279,28 @@ class TestRerankerEnableLlm3FromEnv:
     def test_off(self, isolated_env):
         isolated_env.setenv("RERANKER_ENABLE_LLM3", "0")
         assert reranker_enable_llm3_from_env() is False
+
+    def test_settings_carry_the_flag(self, make_settings):
+        assert make_settings().reranker_enable_llm3 is True
+        assert make_settings(RERANKER_ENABLE_LLM3="0").reranker_enable_llm3 is False
+
+
+class TestLlm3ModeFromEnv:
+    def test_default_folds_into_llm1(self, isolated_env):
+        assert _llm3_mode_from_env() == "fold"
+
+    def test_call_is_accepted_case_insensitively(self, isolated_env):
+        isolated_env.setenv("RERANKER_LLM3_MODE", " Call ")
+        assert _llm3_mode_from_env() == "call"
+
+    def test_unknown_value_falls_back_to_fold(self, isolated_env, caplog):
+        isolated_env.setenv("RERANKER_LLM3_MODE", "standalone")
+        assert _llm3_mode_from_env() == "fold"
+        assert "RERANKER_LLM3_MODE" in caplog.text
+
+    def test_settings_carry_the_mode(self, make_settings):
+        assert make_settings().reranker_llm3_mode == "fold"
+        assert make_settings(RERANKER_LLM3_MODE="call").reranker_llm3_mode == "call"
 
 
 # ---------------------------------------------------------------------------
