@@ -179,27 +179,27 @@ class TestPrompts:
 
 class TestTranslationPreference:
     def test_english_prefers_the_translation_overlay(self, make_settings):
-        from app.database import _reranker_prefer_translation
+        from app.translation import reranker_prefer_translation
 
         s = make_settings()
-        assert _reranker_prefer_translation(s) is True
+        assert reranker_prefer_translation(s) is True
 
     def test_spanish_reads_the_original_text(self, make_settings):
         # With Spanish prompts and a Spanish taxonomy there is no reason to prompt over
         # machine-translated English.
-        from app.database import _reranker_prefer_translation
+        from app.translation import reranker_prefer_translation
 
         s = make_settings(RERANKER_LANGUAGE="es")
-        assert _reranker_prefer_translation(s) is False
+        assert reranker_prefer_translation(s) is False
 
     def test_env_override_wins_for_any_language(self, make_settings):
-        from app.database import _reranker_prefer_translation
+        from app.translation import reranker_prefer_translation
 
         s = make_settings(RERANKER_LANGUAGE="es", RERANKER_PREFER_TRANSLATION="1")
-        assert _reranker_prefer_translation(s) is True
+        assert reranker_prefer_translation(s) is True
 
     def test_spanish_listing_text_is_not_replaced_by_the_english_translation(self, make_settings):
-        from app.database import build_job_description_context
+        from app.job_context import build_job_description_context
 
         s = make_settings(RERANKER_LANGUAGE="es")
         doc = {
@@ -215,7 +215,7 @@ class TestTranslationPreference:
         assert ctx.raw_job_description == "Se busca cocinero con experiencia en cocina."
 
     def test_english_run_still_uses_the_translation(self, make_settings):
-        from app.database import build_job_description_context
+        from app.job_context import build_job_description_context
 
         s = make_settings()
         doc = {

@@ -1,4 +1,4 @@
-"""Tests for ``app.database`` pure helpers (no Mongo required).
+"""Tests for the pure job-document helpers (no Mongo required).
 
 We focus on:
 
@@ -7,10 +7,8 @@ We focus on:
 - ``_scalar_to_str`` value coercion.
 - ``_upsert_filter_for_llm_results`` selector logic (covers all three
   fall-back paths and the error case).
-- ``_parse_object_id`` happy + error path.
 
-Mongo connectivity, bulk_write and the cursor iterators are intentionally
-out of scope here — they need a Mongo replica or an extensive fake.
+The repositories are tested against a fake collection in ``test_repositories.py``.
 """
 
 from __future__ import annotations
@@ -21,17 +19,16 @@ from typing import Any
 import pytest
 from bson import ObjectId
 
-from app.database import (
+from app.job_context import (
+    JobDescriptionContext,
     _field_or_metadata,
     _first_str,
     _get_dotted,
     _multi_key_top_or_metadata,
-    _parse_object_id,
     _scalar_to_str,
-    _upsert_filter_for_llm_results,
     build_job_description_context,
 )
-from app.job_context import JobDescriptionContext
+from app.ranked_jobs.upsert import _upsert_filter_for_llm_results
 
 # ---------------------------------------------------------------------------
 # _scalar_to_str
@@ -258,22 +255,3 @@ class TestUpsertFilterForLlmResults:
         ctx = _ctx()
         with pytest.raises(ValueError, match="no job id, fingerprint, or source _id"):
             _upsert_filter_for_llm_results({}, ctx, s)
-
-
-# ---------------------------------------------------------------------------
-# _parse_object_id
-# ---------------------------------------------------------------------------
-
-
-class TestParseObjectId:
-    def test_passes_through_existing_oid(self):
-        oid = ObjectId()
-        assert _parse_object_id(oid) is oid
-
-    def test_parses_hex_string(self):
-        oid = ObjectId()
-        assert _parse_object_id(str(oid)) == oid
-
-    def test_invalid_raises_value_error(self):
-        with pytest.raises(ValueError, match="Invalid ObjectId"):
-            _parse_object_id("not-an-oid")

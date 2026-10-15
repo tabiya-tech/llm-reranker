@@ -22,17 +22,8 @@ from pydantic import ValidationError
 from pymongo.operations import UpdateOne
 
 from app.batch_rank_one import RankOneJobResult, rank_one_classified_document
+from app.classified_jobs.mongo_repository import MongoClassifiedJobsRepository
 from app.config import Settings, get_settings, log_ranker_run_configuration
-from app.database import (
-    bulk_write_llm_upserts,
-    complete_ranking_run_log,
-    distinct_ranked_job_ids,
-    get_database,
-    insert_ranking_run_log,
-    iter_classified_jobs,
-    iter_classified_jobs_chunks,
-    update_ranking_run_progress,
-)
 from app.languages import LANGUAGE_REGISTRY
 from app.llm import (
     LlmClient,
@@ -50,7 +41,12 @@ from app.observability import (
     update_observation,
 )
 from app.pipeline import load_taxonomy_context
-from utils.update_is_active_from_closing_date import sync_is_active_from_closing_date
+from app.ranked_jobs.mongo_repository import MongoRankedJobsRepository
+from app.run_logs.mongo_repository import MongoRunLogsRepository
+from app.run_logs.repository import RunStats
+from app.run_state.mongo_repository import MongoRunStateRepository
+from app.run_state.repository import IRunStateRepository
+from app.server_dependencies.db_dependencies import RerankerDBProvider
 from utils.work_activities_enrichment import run as run_work_activities_enrichment
 
 logger = logging.getLogger(__name__)
@@ -148,7 +144,7 @@ def _settings_and_llm_or_exit() -> tuple[Settings, LlmClient]:
         raise SystemExit(1) from e
 
 
-def _resolve_reranker_cutoff(*, country: str, db, settings: Settings) -> str | None:
+def _resolve_reranker_cutoff(*, country: str, run_state: IRunStateRepository) -> str | None:
     """Resolve YYYY-MM-DD lower bound for incremental classified_jobs fetch.
 
     Order: per-country env (e.g. ``KENYA_RERANKER_CUTOFF_DATE``) or ``RERANKER_CUTOFF_DATE`` (used as-is);
@@ -162,16 +158,8 @@ def _resolve_reranker_cutoff(*, country: str, db, settings: Settings) -> str | N
         )
         return env_override
 
-    state_doc = db[settings.reranker_state_collection].find_one({"country": country}) or {}
-    last_cutoff = state_doc.get("last_cutoff_date")
-    if last_cutoff:
-        if isinstance(last_cutoff, datetime):
-            dt = last_cutoff if last_cutoff.tzinfo else last_cutoff.replace(tzinfo=timezone.utc)
-            cutoff_str = dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
-        else:
-            cutoff_str = datetime.fromisoformat(
-                str(last_cutoff).strip().replace("Z", "+00:00")
-            ).strftime("%Y-%m-%d")
+    cutoff_str = run_state.get_last_cutoff_date(country)
+    if cutoff_str:
         logger.info(
             "[%s] Cutoff: incremental from state last_cutoff_date=%s (exact)",
             country.upper(),
@@ -181,22 +169,6 @@ def _resolve_reranker_cutoff(*, country: str, db, settings: Settings) -> str | N
 
     logger.info("[%s] Cutoff: no previous state (full scan)", country.upper())
     return None
-
-
-def _set_reranker_state(*, country: str, db, jobs_processed: int, settings: Settings) -> None:
-    db[settings.reranker_state_collection].update_one(
-        {"country": country},
-        {
-            "$set": {
-                "country": country,
-                "last_cutoff_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                "last_run_at": datetime.now(timezone.utc),
-                "jobs_processed": int(jobs_processed),
-            }
-        },
-        upsert=True,
-    )
-    logger.info("[%s] Reranker state saved (jobs=%s)", country.upper(), jobs_processed)
 
 
 def run() -> None:
@@ -251,8 +223,13 @@ def run() -> None:
     )
 
     country = settings.target_country
-    db = get_database(settings=settings)
-    cutoff_date = _resolve_reranker_cutoff(country=country, db=db, settings=settings)
+    # The run's one MongoDB client: closed in ``main()`` when the run ends.
+    db = RerankerDBProvider.get_db(settings)
+    classified_jobs = MongoClassifiedJobsRepository(db, settings)
+    ranked_jobs = MongoRankedJobsRepository(db, settings)
+    run_logs = MongoRunLogsRepository(db, settings)
+    run_state = MongoRunStateRepository(db, settings)
+    cutoff_date = _resolve_reranker_cutoff(country=country, run_state=run_state)
     query: dict[str, Any] = {}
     if cutoff_date:
         try:
@@ -269,7 +246,7 @@ def run() -> None:
 
     skip_ranked = args.skip_already_ranked or settings.reranker_skip_already_ranked
     if skip_ranked:
-        ranked_ids = distinct_ranked_job_ids(db=db, settings=settings)
+        ranked_ids = ranked_jobs.distinct_job_ids()
         jid = settings.mongo_field_job_id
         if ranked_ids:
             nin_clause = {jid: {"$nin": ranked_ids}}
@@ -282,8 +259,7 @@ def run() -> None:
             settings.mongodb_target_collection,
         )
 
-    run_id = insert_ranking_run_log(
-        settings=settings,
+    run_id = run_logs.insert_run(
         limit=args.limit,
         model=llm.model,
         source_collection=settings.mongodb_source_collection,
@@ -298,6 +274,16 @@ def run() -> None:
     llm3_calls = 0
     job_errors = 0
     _run_error: str | None = None
+
+    def _run_stats() -> RunStats:
+        return RunStats(
+            jobs_processed=n,
+            upserts_queued=upsert_ops,
+            llm1_calls=llm1_calls,
+            llm2_calls=llm2_calls,
+            llm3_calls=llm3_calls,
+        )
+
     enrichment_enabled = settings.reranker_run_wa_enrichment
     enrichment_fail_hard = settings.reranker_fail_on_wa_enrichment_error
     is_active_sync_enabled = settings.reranker_sync_is_active_from_closing_date
@@ -333,19 +319,11 @@ def run() -> None:
             if r.update_op is not None:
                 pending.append(r.update_op)
                 if len(pending) >= batch_size:
-                    bulk_write_llm_upserts(pending, settings=settings)
+                    ranked_jobs.bulk_upsert(pending)
                     pending.clear()
             n += 1
             if n % 10 == 0:
-                update_ranking_run_progress(
-                    run_id,
-                    jobs_processed=n,
-                    upserts_queued=upsert_ops,
-                    llm1_calls=llm1_calls,
-                    llm2_calls=llm2_calls,
-                    llm3_calls=llm3_calls,
-                    settings=settings,
-                )
+                run_logs.update_progress(run_id, _run_stats())
 
         job_seq = 0
         job_seq_lock = threading.Lock()
@@ -389,11 +367,10 @@ def run() -> None:
         if use_parallel:
             chunk_sz = max(1, workers)
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                for chunk in iter_classified_jobs_chunks(
+                for chunk in classified_jobs.iter_jobs_chunks(
                     chunk_sz,
                     limit=args.limit,
                     query=query,
-                    settings=settings,
                 ):
                     futures = [executor.submit(_run_one, d, _next_job_label()) for d in chunk]
                     for fut in as_completed(futures):
@@ -409,7 +386,7 @@ def run() -> None:
                                 exc,
                             )
         else:
-            for doc in iter_classified_jobs(limit=args.limit, query=query, settings=settings):
+            for doc in classified_jobs.iter_jobs(limit=args.limit, query=query):
                 if args.limit > 0:
                     job_label = f"{n + 1}/{args.limit}"
                 else:
@@ -422,7 +399,7 @@ def run() -> None:
                     logger.exception("Sequential job failed (continuing): %s", exc)
 
         if pending:
-            bulk_write_llm_upserts(pending, settings=settings)
+            ranked_jobs.bulk_upsert(pending)
             pending.clear()
 
         if n > 0 and upsert_ops == 0:
@@ -439,7 +416,7 @@ def run() -> None:
         if pending:
             n_pending = len(pending)
             try:
-                bulk_write_llm_upserts(pending, settings=settings)
+                ranked_jobs.bulk_upsert(pending)
                 logger.info(
                     "MongoDB flush on exit | wrote %s pending upsert(s) "
                     "(interrupt or early exit before in-loop flush)",
@@ -466,17 +443,12 @@ def run() -> None:
                 "%s job(s) failed (see stack traces above); Mongo writes from successful jobs are kept.",
                 job_errors,
             )
-        complete_ranking_run_log(
+        run_logs.complete_run(
             run_id,
+            _run_stats(),
             success=_run_error is None,
-            jobs_processed=n,
-            upserts_queued=upsert_ops,
-            llm1_calls=llm1_calls,
-            llm2_calls=llm2_calls,
-            llm3_calls=llm3_calls,
             elapsed_s=batch_s,
             error_message=_run_error,
-            settings=settings,
         )
         if enrichment_enabled and n > 0:
             try:
@@ -492,7 +464,7 @@ def run() -> None:
                     "Post-step | work_activities_enrichment | start | target=%s",
                     settings.mongodb_target_collection,
                 )
-                code = run_work_activities_enrichment()
+                code = run_work_activities_enrichment(db.client)
                 elapsed = _elapsed_s(t0)
                 if code != 0:
                     msg = (
@@ -518,12 +490,13 @@ def run() -> None:
         if is_active_sync_enabled and _run_error is None:
             try:
                 t0 = time.perf_counter()
-                coll = db[settings.mongodb_target_collection]
                 logger.info(
                     "Post-step | is_active from closing_date | start | target=%s",
                     settings.mongodb_target_collection,
                 )
-                stats = sync_is_active_from_closing_date(coll, missing_policy="keep", dry_run=False)
+                stats = ranked_jobs.sync_is_active_from_closing_date(
+                    missing_policy="keep", dry_run=False
+                )
                 elapsed = _elapsed_s(t0)
                 logger.info(
                     "Post-step | is_active from closing_date | done | total=%s parsed=%s "
@@ -541,7 +514,8 @@ def run() -> None:
                 logger.warning("Post-step | is_active from closing_date | failed | %s", e)
         if _run_error is None:
             try:
-                _set_reranker_state(country=country, db=db, jobs_processed=n, settings=settings)
+                run_state.save(country, jobs_processed=n)
+                logger.info("[%s] Reranker state saved (jobs=%s)", country.upper(), n)
             except Exception as e:
                 logger.warning("[%s] Could not persist reranker state: %s", country.upper(), e)
         if _run_error is not None:
@@ -552,6 +526,7 @@ def main() -> None:
     try:
         run()
     finally:
+        RerankerDBProvider.close()
         # The container goes away with the process: flush the last jobs' traces first.
         shutdown_tracing()
 

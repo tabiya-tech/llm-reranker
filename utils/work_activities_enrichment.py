@@ -9,6 +9,9 @@ Primary behavior:
         occupation's WA values.
       * Else fallback to cross-occupation WA-code averages from taxonomy.
       * Else use configurable defaults.
+
+The MongoDB client is injected: the batch passes its run's client, and the CLI entry point opens
+one through ``standalone_db()``. See ``app/server_dependencies/README.md``.
 """
 
 from __future__ import annotations
@@ -19,7 +22,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import certifi
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.operations import UpdateOne
@@ -31,9 +33,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Config:
-    """Thin view of the ``enrich_wa_*`` / Mongo fields on ``Settings`` this script needs."""
+    """Thin view of the ``enrich_wa_*`` fields on ``Settings`` this script needs."""
 
-    mongodb_uri: str
     db_name: str
     target_collection: str
     occupation_db_path: Path
@@ -48,7 +49,6 @@ class Config:
 def _load_config(settings: Settings | None = None) -> Config:
     settings = settings or get_settings()
     return Config(
-        mongodb_uri=settings.mongodb_uri.strip().strip("\"'"),
         db_name=settings.enrich_wa_database,
         target_collection=settings.enrich_wa_target_collection,
         occupation_db_path=settings.enrich_wa_occupation_db_path,
@@ -59,13 +59,6 @@ def _load_config(settings: Settings | None = None) -> Config:
         default_importance=settings.enrich_wa_default_importance,
         default_level=settings.enrich_wa_default_level,
     )
-
-
-def _mongo_client(cfg: Config) -> MongoClient:
-    kwargs: dict[str, Any] = {}
-    if "mongodb+srv://" in cfg.mongodb_uri or "tls=true" in cfg.mongodb_uri.lower():
-        kwargs["tlsCAFile"] = certifi.where()
-    return MongoClient(cfg.mongodb_uri, **kwargs)
 
 
 def _iter_docs(coll: Collection, *, filt: dict[str, Any], limit: int):
@@ -217,7 +210,12 @@ def _load_wa_taxonomy(
     return occ_lookup, wa_avg
 
 
-def run() -> int:
+def run(client: MongoClient[dict[str, Any]]) -> int:
+    """Enrich the target collection. ``client`` is the caller's; it is not closed here.
+
+    The database is resolved from the env (``ENRICH_WA_DATABASE`` may name another database on the
+    same cluster), so this takes the client rather than the run's database.
+    """
     cfg = _load_config()
     msg = (
         f"work_activities_enrichment | db={cfg.db_name} | target={cfg.target_collection} | "
@@ -235,9 +233,7 @@ def run() -> int:
     logger.info(tax_msg)
     print(tax_msg)
 
-    client = _mongo_client(cfg)
-    db = client[cfg.db_name]
-    target = db[cfg.target_collection]
+    target = client[cfg.db_name][cfg.target_collection]
 
     scanned = 0
     with_occ_match = 0
@@ -248,68 +244,72 @@ def run() -> int:
     applied = 0
     ops: list[UpdateOne] = []
 
-    try:
-        for doc in _iter_docs(target, filt=_target_filter(cfg), limit=cfg.limit):
-            scanned += 1
-            wa_items, used_occ_match = _build_wa_rows_from_work_activity(
-                doc,
-                occ_lookup=occ_lookup,
-                wa_averages=wa_averages,
-                default_importance=cfg.default_importance,
-                default_level=cfg.default_level,
-            )
-            if not wa_items:
-                no_data += 1
-                continue
+    for doc in _iter_docs(target, filt=_target_filter(cfg), limit=cfg.limit):
+        scanned += 1
+        wa_items, used_occ_match = _build_wa_rows_from_work_activity(
+            doc,
+            occ_lookup=occ_lookup,
+            wa_averages=wa_averages,
+            default_importance=cfg.default_importance,
+            default_level=cfg.default_level,
+        )
+        if not wa_items:
+            no_data += 1
+            continue
 
-            if used_occ_match:
-                with_occ_match += 1
-            elif any(
-                (str(x.get("WA_code") or "").strip() in wa_averages)
-                for x in wa_items
-                if isinstance(x, dict)
-            ):
-                with_avg_match += 1
-            else:
-                with_default += 1
+        if used_occ_match:
+            with_occ_match += 1
+        elif any(
+            (str(x.get("WA_code") or "").strip() in wa_averages)
+            for x in wa_items
+            if isinstance(x, dict)
+        ):
+            with_avg_match += 1
+        else:
+            with_default += 1
 
-            payload = {
-                "onet_work_activities": wa_items,
-            }
-            ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": payload}, upsert=False))
-            queued += 1
+        payload = {
+            "onet_work_activities": wa_items,
+        }
+        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": payload}, upsert=False))
+        queued += 1
 
-            if len(ops) >= cfg.batch_size:
-                if not cfg.dry_run:
-                    res = target.bulk_write(ops, ordered=False)
-                    applied += int(res.modified_count)
-                ops.clear()
-
-        if ops:
+        if len(ops) >= cfg.batch_size:
             if not cfg.dry_run:
                 res = target.bulk_write(ops, ordered=False)
                 applied += int(res.modified_count)
             ops.clear()
 
-        done_msg = (
-            "work_activities_enrichment | done | scanned={scanned} with_occ_match={with_occ_match} "
-            "with_avg_match={with_avg_match} with_default={with_default} no_data={no_data} "
-            "updates_queued={queued} updates_applied={applied}".format(
-                scanned=scanned,
-                with_occ_match=with_occ_match,
-                with_avg_match=with_avg_match,
-                with_default=with_default,
-                no_data=no_data,
-                queued=queued,
-                applied=applied,
-            )
+    if ops:
+        if not cfg.dry_run:
+            res = target.bulk_write(ops, ordered=False)
+            applied += int(res.modified_count)
+        ops.clear()
+
+    done_msg = (
+        "work_activities_enrichment | done | scanned={scanned} with_occ_match={with_occ_match} "
+        "with_avg_match={with_avg_match} with_default={with_default} no_data={no_data} "
+        "updates_queued={queued} updates_applied={applied}".format(
+            scanned=scanned,
+            with_occ_match=with_occ_match,
+            with_avg_match=with_avg_match,
+            with_default=with_default,
+            no_data=no_data,
+            queued=queued,
+            applied=applied,
         )
-        logger.info(done_msg)
-        print(done_msg)
-        return 0
-    finally:
-        client.close()
+    )
+    logger.info(done_msg)
+    print(done_msg)
+    return 0
+
+
+def main() -> int:
+    from app.server_dependencies.db_dependencies import standalone_db
+
+    with standalone_db() as db:
+        return run(db.client)
 
 
 if __name__ == "__main__":
-    raise SystemExit(run())
+    raise SystemExit(main())
