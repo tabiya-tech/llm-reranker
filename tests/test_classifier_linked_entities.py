@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from app.job_context import JobDescriptionContext
+from app.llm.errors import LlmParseError
 from utils.classifier_linked_entities import (
     FUZZY_LABEL_MIN_RATIO,
     EscoSkillCandidate,
@@ -130,11 +131,11 @@ class TestParseSkillRankerJson:
         assert opt == []
 
     def test_top_level_must_be_object(self):
-        with pytest.raises(ValueError, match="must be an object"):
+        with pytest.raises(LlmParseError, match="must be an object"):
             parse_skill_ranker_json('["a", "b"]')
 
     def test_lists_required(self):
-        with pytest.raises(ValueError, match="must be lists"):
+        with pytest.raises(LlmParseError, match="must be lists"):
             parse_skill_ranker_json('{"essential_skills": "a", "optional_skills": []}')
 
 

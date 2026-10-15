@@ -16,6 +16,7 @@ from pydantic import BaseModel
 import api
 from app import pipeline as pipeline_module
 from app.api_models import RankedJobDocument, RankRequest
+from app.llm.errors import LlmConfigurationError, LlmInvocationError, LlmParseError
 from app.pipeline import load_taxonomy_context, process_single_job
 from tests.test_pipeline_integration import (
     _classified_doc,
@@ -86,12 +87,25 @@ class TestRank:
         resp = client.post("/rank", json=doc)
 
         assert resp.status_code == 422
-        assert resp.json()["detail"][0]["loc"][:3] == ["body", "classification", "entities"]
+        detail = resp.json()["detail"]
+        assert isinstance(detail, str)
+        assert "body.classification.entities" in detail
 
     def test_rejects_a_non_object_body(self, client):
-        assert client.post("/rank", json=["not", "a", "document"]).status_code == 422
+        resp = client.post("/rank", json=["not", "a", "document"])
+        assert resp.status_code == 422
+        assert isinstance(resp.json()["detail"], str)
 
-    def test_pipeline_failure_is_a_500_with_detail(self, client, monkeypatch):
+    def test_validation_error_detail_never_echoes_the_rejected_input(self, client):
+        doc = _classified_doc()
+        doc["classification"] = {"entities": "secret job text should not leak"}
+
+        resp = client.post("/rank", json=doc)
+
+        assert resp.status_code == 422
+        assert "secret job text should not leak" not in resp.text
+
+    def test_generic_pipeline_failure_is_a_500_with_class_name_only(self, client, monkeypatch):
         def _boom(*a, **kw):
             raise RuntimeError("model unavailable")
 
@@ -100,7 +114,44 @@ class TestRank:
         resp = client.post("/rank", json=_classified_doc())
 
         assert resp.status_code == 500
-        assert resp.json() == {"detail": "model unavailable"}
+        assert resp.json() == {"detail": "Internal server error: RuntimeError"}
+        assert "model unavailable" not in resp.text
+
+    def test_llm_configuration_error_is_a_500_with_distinct_detail(self, client, monkeypatch):
+        def _boom(*a, **kw):
+            raise LlmConfigurationError("missing RERANKER_LLM_API_KEY")
+
+        monkeypatch.setattr(pipeline_module, "run_job_attributes_for_job", _boom)
+
+        resp = client.post("/rank", json=_classified_doc())
+
+        assert resp.status_code == 500
+        assert resp.json() == {"detail": "LLM configuration error: LlmConfigurationError"}
+        assert "missing RERANKER_LLM_API_KEY" not in resp.text
+
+    def test_llm_invocation_error_is_a_500_with_distinct_detail(self, client, monkeypatch):
+        def _boom(*a, **kw):
+            raise LlmInvocationError("Gemini API error (TimeoutError): deadline exceeded")
+
+        monkeypatch.setattr(pipeline_module, "run_job_attributes_for_job", _boom)
+
+        resp = client.post("/rank", json=_classified_doc())
+
+        assert resp.status_code == 500
+        assert resp.json() == {"detail": "LLM invocation error: LlmInvocationError"}
+        assert "deadline exceeded" not in resp.text
+
+    def test_llm_parse_error_is_a_500_with_distinct_detail(self, client, monkeypatch):
+        def _boom(*a, **kw):
+            raise LlmParseError("Job attributes JSON must be an object")
+
+        monkeypatch.setattr(pipeline_module, "run_job_attributes_for_job", _boom)
+
+        resp = client.post("/rank", json=_classified_doc())
+
+        assert resp.status_code == 500
+        assert resp.json() == {"detail": "LLM response parse error: LlmParseError"}
+        assert "Job attributes JSON must be an object" not in resp.text
 
 
 class TestRankRequest:
@@ -186,5 +237,8 @@ class TestOpenApi:
         assert ref.endswith("/RankRequest")
         assert schemas["RankRequest"]["examples"]
         assert set(op["responses"]) >= {"200", "422", "500", "503"}
+        for status in ("422", "500", "503"):
+            ref = op["responses"][status]["content"]["application/json"]["schema"]["$ref"]
+            assert ref.endswith("/ErrorResponse")
         assert op["parameters"][0]["name"] == "language"
         assert op["parameters"][0]["description"]

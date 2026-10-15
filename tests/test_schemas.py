@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from app.llm.errors import LlmParseError
 from app.schemas import (
     AttributeDefinition,
     AttributeLevel,
@@ -321,7 +322,7 @@ class TestParseJobAttributesResponse:
     def test_top_level_must_be_object(self, make_settings):
         s = make_settings()
         schema = _build_minimal_schema()
-        with pytest.raises(ValueError, match="must be an object"):
+        with pytest.raises(LlmParseError, match="must be an object"):
             parse_job_attributes_response("[]", schema, _ONET_FIXTURE, settings=s)
 
     def test_kenya_requires_post_secondary_attached(self, make_settings):
@@ -415,11 +416,11 @@ class TestParseOccupationSkillsRelevanceResponse:
         assert len(result.decisions) == 1
 
     def test_top_level_must_be_object(self):
-        with pytest.raises(ValueError, match="must be an object"):
+        with pytest.raises(LlmParseError, match="must be an object"):
             parse_occupation_skills_relevance_response("[]")
 
     def test_decisions_must_be_array(self):
-        with pytest.raises(ValueError, match="decisions array"):
+        with pytest.raises(LlmParseError, match="decisions array"):
             parse_occupation_skills_relevance_response('{"decisions": {}}')
 
     def test_handles_fenced_response(self):

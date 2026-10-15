@@ -11,3 +11,7 @@ class LlmConfigurationError(LlmError):
 
 class LlmInvocationError(LlmError):
     """A configured provider was called and the call failed."""
+
+
+class LlmParseError(LlmError):
+    """The model responded, but its output could not be parsed into the expected shape."""

@@ -11,6 +11,7 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
+from app.llm.errors import LlmParseError
 
 # Linked entities always use ESCO taxonomy in classifier output.
 LINKED_ENTITY_TAXONOMY_ESCO = "esco"
@@ -321,13 +322,13 @@ def parse_skill_ranker_json(raw_text: str) -> tuple[list[str], list[str]]:
         try:
             data = json.loads(repaired)
         except json.JSONDecodeError:
-            raise e from None
+            raise LlmParseError(f"Skill ranker JSON could not be parsed: {e}") from e
     if not isinstance(data, dict):
-        raise ValueError("Skill ranker JSON must be an object")
+        raise LlmParseError("Skill ranker JSON must be an object")
     ess = data.get("essential_skills")
     opt = data.get("optional_skills")
     if not isinstance(ess, list) or not isinstance(opt, list):
-        raise ValueError("essential_skills and optional_skills must be lists")
+        raise LlmParseError("essential_skills and optional_skills must be lists")
     essential = [str(x) for x in ess if isinstance(x, str) and x.strip()]
     optional = [str(x) for x in opt if isinstance(x, str) and x.strip()]
     return essential, optional
