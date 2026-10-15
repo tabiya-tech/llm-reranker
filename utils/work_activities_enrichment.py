@@ -15,22 +15,24 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import certifi
-from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.operations import UpdateOne
+
+from app.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class Config:
+    """Thin view of the ``enrich_wa_*`` / Mongo fields on ``Settings`` this script needs."""
+
     mongodb_uri: str
     db_name: str
     target_collection: str
@@ -43,64 +45,19 @@ class Config:
     default_level: float
 
 
-def _as_bool(raw: str | None, *, default: bool = False) -> bool:
-    v = (raw or "").strip().lower()
-    if not v:
-        return default
-    return v in ("1", "true", "yes", "on")
-
-
-def _load_config() -> Config:
-    load_dotenv()
-    uri = (os.getenv("MONGODB_URI") or "").strip().strip("\"'")
-    if not uri:
-        raise ValueError("MONGODB_URI is required.")
-
-    # Main pipeline should default to current reranker DB; reference DB is fallback only.
-    db_name = (
-        (os.getenv("ENRICH_WA_DATABASE") or "").strip()
-        or (os.getenv("MONGODB_DATABASE") or "").strip()
-        or (os.getenv("MONGODB_DATABASE_REFERENCE") or "").strip()
-    )
-    if not db_name:
-        raise ValueError("MONGODB_DATABASE_REFERENCE or MONGODB_DATABASE is required.")
-
-    target_collection = (
-        (os.getenv("ENRICH_WA_TARGET_COLLECTION") or "").strip()
-        or (os.getenv("MONGODB_TARGET_COLLECTION") or "").strip()
-        or (os.getenv("MONGODB_TARGET_COLLECTION_New") or "").strip()
-    )
-    if not target_collection:
-        raise ValueError("MONGODB_TARGET_COLLECTION_New or MONGODB_TARGET_COLLECTION is required.")
-
-    occ_db_raw = (os.getenv("ENRICH_WA_OCCUPATION_DB_PATH") or "").strip()
-    if occ_db_raw:
-        p = Path(occ_db_raw)
-        occupation_db_path = p if p.is_absolute() else (Path(__file__).resolve().parents[1] / p)
-    else:
-        # Language pack first, then the English pack, then the flat pre-language layout.
-        # The occupation→work-activity mapping is keyed on ISCO codes and WA_Element_IDs,
-        # so a language that ships no translated copy is served correctly by English.
-        from app.config import get_settings, language_resource_dirs
-
-        settings = get_settings()
-        name = "combined_occupation_database_with_wa.json"
-        candidates = language_resource_dirs(settings.resources_dir, settings.language)
-        occupation_db_path = next(
-            (d / name for d in candidates if (d / name).is_file()), candidates[0] / name
-        )
-
+def _load_config(settings: Settings | None = None) -> Config:
+    settings = settings or get_settings()
     return Config(
-        mongodb_uri=uri,
-        db_name=db_name,
-        target_collection=target_collection,
-        occupation_db_path=occupation_db_path.resolve(),
-        batch_size=max(1, int((os.getenv("ENRICH_WA_BULK_BATCH_SIZE") or "500").strip())),
-        limit=max(0, int((os.getenv("ENRICH_WA_LIMIT") or "0").strip())),
-        dry_run=_as_bool(os.getenv("ENRICH_WA_DRY_RUN"), default=False),
-        only_missing=_as_bool(os.getenv("ENRICH_WA_ONLY_MISSING"), default=True),
-        default_importance=float((os.getenv("ENRICH_WA_DEFAULT_IMPORTANCE") or "3.5").strip()),
-        default_level=float((os.getenv("ENRICH_WA_DEFAULT_LEVEL") or "3.5").strip()),
+        mongodb_uri=settings.mongodb_uri.strip().strip("\"'"),
+        db_name=settings.enrich_wa_database,
+        target_collection=settings.enrich_wa_target_collection,
+        occupation_db_path=settings.enrich_wa_occupation_db_path,
+        batch_size=settings.enrich_wa_bulk_batch_size,
+        limit=settings.enrich_wa_limit,
+        dry_run=settings.enrich_wa_dry_run,
+        only_missing=settings.enrich_wa_only_missing,
+        default_importance=settings.enrich_wa_default_importance,
+        default_level=settings.enrich_wa_default_level,
     )
 
 

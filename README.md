@@ -45,7 +45,9 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` with: `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_SOURCE_COLLECTION`, `MONGODB_TARGET_COLLECTION`, and `GEMINI_API_KEY`. See `.env.example` for all available options.
+Edit `.env` with: `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_SOURCE_COLLECTION`, `MONGODB_TARGET_COLLECTION`, and `GEMINI_API_KEY`. See `.env.example` for all available options, and [`app/SETTINGS.md`](app/SETTINGS.md) for the full settings reference: every field's type and default, and which variables each deployment stack overrides.
+
+Every variable is validated by `app.config.Settings` (a [pydantic-settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) model), built once on the first `get_settings()` call (at the start of `main.py` / `api.py`'s startup) — a bad value (an out-of-range float, an unrecognised enum) fails that call with a `ValidationError` rather than silently misconfiguring a batch run.
 
 ## Choosing the model
 

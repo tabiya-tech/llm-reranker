@@ -7,6 +7,7 @@ google-genai>=1.0.0
 httpx>=0.27.0
 fastapi>=0.115.0
 uvicorn>=0.34.0
+pydantic-settings>=2.6.1,<3
 # LLM tracing (app/observability). v4 is the SDK compass-connect runs; it brings OpenTelemetry.
 langfuse>=4.14.3,<5
 pytest>=8.0.0

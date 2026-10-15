@@ -4,10 +4,10 @@ Goals:
 - Make ``import app.*`` and ``import utils.*`` work regardless of where ``pytest``
   is invoked from (CI runs ``python -m pytest tests/`` at ``llm-reranker/``).
 - Give every test a clean, deterministic environment that does not depend on
-  whatever happens to be in the developer's local ``.env`` file. The repo
-  ``.env`` is loaded with ``override=True`` at import time of ``app.config``;
-  tests that rely on env defaults must therefore wipe the relevant variables
-  and clear the ``Settings`` ``lru_cache``.
+  whatever happens to be in the developer's local ``.env`` file or shell. The repo
+  ``.env`` is loaded (without overriding already-exported variables) at import time of
+  ``app.config``; tests that rely on env defaults must therefore wipe the relevant
+  variables and clear the ``Settings`` ``lru_cache``.
 - Never reach the network: tests must not require MongoDB or Gemini.
 """
 
@@ -85,6 +85,7 @@ _RERANKER_ENV_VARS = (
     "OCCUPATION_SKILL_RELATION_OCCUPATION_TYPES",
     "RERANKER_PARALLEL_WORKERS",
     "RERANKER_OVERLAP_LLM1_LLM2",
+    "RERANKER_SKIP_ALREADY_RANKED",
     "RERANKER_ENABLE_JOB_EMBEDDING",
     "RERANKER_FAIL_ON_JOB_EMBEDDING_ERROR",
     "RERANKER_JOB_EMBEDDING_MODEL",
@@ -142,6 +143,20 @@ _RERANKER_ENV_VARS = (
     "LANGFUSE_HOST",
     "LANGFUSE_BASE_URL",
     "K_REVISION",
+    "LOG_LEVEL",
+    "ENRICH_WA_DATABASE",
+    "ENRICH_WA_TARGET_COLLECTION",
+    "MONGODB_DATABASE_REFERENCE",
+    "MONGODB_TARGET_COLLECTION_New",
+    "ENRICH_WA_OCCUPATION_DB_PATH",
+    "ENRICH_WA_BULK_BATCH_SIZE",
+    "ENRICH_WA_LIMIT",
+    "ENRICH_WA_DRY_RUN",
+    "ENRICH_WA_ONLY_MISSING",
+    "ENRICH_WA_DEFAULT_IMPORTANCE",
+    "ENRICH_WA_DEFAULT_LEVEL",
+    "RERANKER_LOGS_COLLECTION",
+    "RERANKER_STATE_COLLECTION",
 )
 
 
@@ -151,7 +166,6 @@ def _clear_settings_caches() -> None:
 
     app_config.get_settings.cache_clear()
     app_config.get_settings_for_language.cache_clear()
-    app_config._gcp_project_from_default_credentials.cache_clear()
     try:
         from app import languages as app_languages
 

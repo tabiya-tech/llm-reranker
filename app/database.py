@@ -185,17 +185,13 @@ def bulk_write_llm_upserts(
     )
 
 
-RANKING_LOGS_COLLECTION_DEFAULT = "reranker_logs"
-
-
 def _ranking_logs_collection(
     settings: Settings | None = None,
     client: MongoClient | None = None,
 ) -> Collection:
     settings = settings or get_settings()
     db = get_database(client, settings=settings)
-    coll_name = (os.getenv("RERANKER_LOGS_COLLECTION") or RANKING_LOGS_COLLECTION_DEFAULT).strip()
-    return db[coll_name]
+    return db[settings.reranker_logs_collection]
 
 
 def insert_ranking_run_log(
