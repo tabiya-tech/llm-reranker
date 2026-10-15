@@ -11,8 +11,7 @@ from enum import StrEnum
 from typing import Any
 
 from app.config import LLM3_MODE_FOLD, Settings, get_settings
-from app.database import build_job_description_context
-from app.job_context import JobDescriptionContext
+from app.job_context import JobDescriptionContext, build_job_description_context
 from app.llm_service import (
     run_job_attributes_for_job,
     run_occupation_skills_relevance_for_job,

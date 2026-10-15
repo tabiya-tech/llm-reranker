@@ -668,6 +668,9 @@ class Settings:
     mongodb_database: str
     mongodb_source_collection: str
     mongodb_target_collection: str
+    # Batch run log and incremental-cutoff state (see ``app/server_dependencies/README.md``).
+    mongodb_logs_collection: str
+    mongodb_state_collection: str
     mongodb_tls_ca_file: str | None
     mongodb_tls_insecure: bool
     resources_dir: Path
@@ -871,6 +874,12 @@ class Settings:
             mongodb_database=os.environ.get("MONGODB_DATABASE", "ZambiaJobs"),
             mongodb_source_collection=source_coll,
             mongodb_target_collection=target_coll,
+            mongodb_logs_collection=(
+                os.environ.get("RERANKER_LOGS_COLLECTION") or "reranker_logs"
+            ).strip(),
+            mongodb_state_collection=(
+                os.environ.get("RERANKER_STATE_COLLECTION") or "reranker_state"
+            ).strip(),
             mongodb_tls_ca_file=os.environ.get("MONGODB_TLS_CA_FILE") or None,
             mongodb_tls_insecure=os.environ.get("MONGODB_TLS_INSECURE", "").lower()
             in ("1", "true", "yes"),

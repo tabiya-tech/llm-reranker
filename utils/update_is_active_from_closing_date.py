@@ -1,13 +1,19 @@
+"""Set ``is_active`` on ranked jobs from ``classifier_metadata.closing_date``.
+
+The batch runs ``sync_is_active_from_closing_date`` as a post-step through the ranked jobs
+repository. As a CLI (``python utils/update_is_active_from_closing_date.py [--apply]``) it opens the
+connection through ``standalone_db()`` and targets ``MONGODB_DATABASE.MONGODB_TARGET_COLLECTION``.
+"""
+
 from __future__ import annotations
 
 import argparse
-import os
+import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal, Optional, TypedDict
 
-from dotenv import load_dotenv
-from pymongo import MongoClient, UpdateOne
+from pymongo import UpdateOne
 from pymongo.collection import Collection
 
 
@@ -143,35 +149,27 @@ def main() -> int:
     # Default behavior is dry-run unless --apply is explicitly provided.
     do_apply = bool(args.apply)
 
-    _root = Path(__file__).resolve().parents[1]
-    load_dotenv(_root / ".env", override=False)
-    mongo_url = (os.getenv("MONGODB_URI") or os.getenv("MONGO_URL") or "").strip()
-    db_name = (os.getenv("MONGODB_DATABASE") or os.getenv("MONGO_DB_NAME") or "").strip()
-    coll_name = (
-        os.getenv("MONGODB_TARGET_COLLECTION")
-        or os.getenv("MONGO_JOBS_COLLECTION")
-        or "ranked_jobs_enriched"
-    ).strip()
-    if not mongo_url or not db_name:
-        raise SystemExit(
-            "Set MONGODB_URI and MONGODB_DATABASE in llm-reranker/.env "
-            "(or legacy MONGO_URL / MONGO_DB_NAME)."
-        )
+    # Imported here: run as a file, ``app`` is importable only once ``__main__`` has fixed sys.path.
+    from app.config import get_settings
+    from app.server_dependencies.database_collections import Collections
+    from app.server_dependencies.db_dependencies import standalone_db
+
+    settings = get_settings()
+    db_name = settings.mongodb_database
+    coll_name = Collections.from_settings(settings).TARGET
 
     if args.today:
         today = datetime.strptime(args.today, "%Y-%m-%d").date()
     else:
         today = date.today()
 
-    client = MongoClient(mongo_url, serverSelectionTimeoutMS=15000)
-    coll = client[db_name][coll_name]
-
-    stats = sync_is_active_from_closing_date(
-        coll,
-        today=today,
-        missing_policy=args.missing_policy,
-        dry_run=not do_apply,
-    )
+    with standalone_db(settings) as db:
+        stats = sync_is_active_from_closing_date(
+            db[coll_name],
+            today=today,
+            missing_policy=args.missing_policy,
+            dry_run=not do_apply,
+        )
 
     print(f"Collection: {db_name}.{coll_name}")
     print(f"Today: {today.isoformat()}")
@@ -184,7 +182,6 @@ def main() -> int:
 
     if not do_apply:
         print("Dry run complete. Re-run with --apply to persist changes.")
-        client.close()
         return 0
 
     if stats["will_set_true"] + stats["will_set_false"] == 0:
@@ -194,9 +191,12 @@ def main() -> int:
             "Applied updates:",
             f"modified={stats['modified']}",
         )
-    client.close()
     return 0
 
 
 if __name__ == "__main__":
+    # Run as a file (``python utils/...``): make the repo root importable for ``app``.
+    _repo_root = str(Path(__file__).resolve().parents[1])
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
     raise SystemExit(main())

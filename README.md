@@ -25,7 +25,9 @@ In the default configuration, each job makes two LLM calls: LLM 1 and LLM 2.
 | `app/pipeline.py` | The per-job pipeline both of the above run |
 | `app/llm/` | The backing LLM: `LlmClient` interface, provider factory, provider implementations |
 | `app/observability/` | LLM tracing to Langfuse — generations and embeddings, per job |
-| `app/` | Config, MongoDB, prompts, schemas, logging |
+| `app/server_dependencies/` | The MongoDB connection provider; see [Data access](#data-access) |
+| `app/classified_jobs/`, `app/ranked_jobs/`, `app/run_logs/`, `app/run_state/` | One repository per MongoDB collection |
+| `app/` | Config, prompts, schemas, logging |
 | `utils/` | Classifier entities, ESCO–Tabiya mapping, occupation–skill relations |
 | `app/languages/` | Language registry — one config module per language |
 | `resources/<lang>/` | Per-language pack: taxonomy label CSVs, prompts, job-attribute schema |
@@ -160,6 +162,17 @@ python main.py
 | `--log-llm3-prompt` | Log occupation–skills relevance prompt (only `RERANKER_LLM3_MODE=call` makes that call) |
 | `--bulk-batch-size N` | Flush MongoDB writes every N upserts |
 | `--language LANG` | Language pack to rank against (`en`, `es`, or a locale like `AR-es`). Default: from `TARGET_COUNTRY`. |
+
+## Data access
+
+Only the batch and the maintenance CLIs touch MongoDB; the API does not. One `MongoClient` per
+process is owned by `RerankerDBProvider`: the batch opens it at the start of a run and closes it at
+the end, and the CLIs open it with `standalone_db()`. Code reaches the four collections (source,
+target, `reranker_logs`, `reranker_state`) only through the repositories, which receive the database
+by injection.
+
+See [`app/server_dependencies/README.md`](app/server_dependencies/README.md) for the connection
+lifecycle, the collections, and how to add a query.
 
 ## Origin UUIDs, work activities, and job status
 
@@ -345,7 +358,7 @@ Both use the **same** image (`llm-reranker/Dockerfile`); only the process/comman
 
 ## Run logs
 
-Each batch run writes a document to the `ranking-logs` collection (created automatically) tracking status, config, stats, and timing. Progress is updated every 10 jobs. Failed runs include the error message.
+Each batch run writes a document to the `reranker_logs` collection (`RERANKER_LOGS_COLLECTION`, created automatically) tracking status, config, stats, and timing. Progress is updated every 10 jobs. Failed runs include the error message.
 
 ## Type checking and linting
 
