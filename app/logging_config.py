@@ -23,16 +23,28 @@ def sanitize_mongodb_uri(uri: str) -> str:
     return re.sub(r":([^/@?]+)@", r":****@", uri, count=1)
 
 
+_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
 def configure_logging() -> None:
     """
-    Configure root logging once. Call from ``main`` before other app code.
+    Configure root logging once. Call from ``main`` before other app code — in
+    particular, before the first ``get_settings()`` / ``Settings.from_env()`` call:
+    ``main.py`` exports ``RERANKER_LANGUAGE`` from ``--language`` only after this runs,
+    and ``get_settings()`` is cached, so building ``Settings`` here first would freeze
+    the language at whatever the environment said before ``--language`` was parsed.
 
-    ``LOG_LEVEL``: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO).
+    ``LOG_LEVEL`` (``Settings.log_level``'s source) is therefore read directly from the
+    environment rather than through ``Settings``, with the same validation
+    (DEBUG/INFO/WARNING/ERROR/CRITICAL, default INFO, ``WARN`` accepted as the alias
+    Python's own ``logging`` module uses) ``Settings.log_level`` applies.
     """
     if logging.getLogger().handlers:
         return
     raw = (os.environ.get("LOG_LEVEL") or "INFO").strip().upper()
-    if raw not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+    if raw == "WARN":
+        raw = "WARNING"
+    if raw not in _LEVEL_NAMES:
         raw = "INFO"
     level = getattr(logging, raw)
     logging.basicConfig(

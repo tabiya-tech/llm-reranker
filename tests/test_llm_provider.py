@@ -102,6 +102,14 @@ class TestConfigResolution:
         assert s.llm.api_key == "abc123"
         assert s.llm.api_key_tail() == "c123"
 
+    def test_gemini_api_key_property_and_llm_api_key_agree(self, make_settings):
+        """``settings.gemini_api_key`` (read directly by the job-embedding step) and
+        ``settings.llm.api_key`` (read by the LLM client) must resolve to the same value
+        when the provider is Gemini — they used to disagree when ``llm`` fell back to
+        reading ``os.environ`` instead of the already-resolved ``gemini_api_key``."""
+        s = make_settings(GEMINI_API_KEY="abc123")
+        assert s.gemini_api_key == s.llm.api_key == "abc123"
+
     def test_legacy_api_key_alias_still_works(self, make_settings):
         s = make_settings(API_KEY="legacy-key")
         assert s.llm.api_key == "legacy-key"

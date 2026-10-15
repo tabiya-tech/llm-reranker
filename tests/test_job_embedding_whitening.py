@@ -24,13 +24,6 @@ def _reset_whitening_cache():
     reset_concat_whitening_cache()
 
 
-def _settings(**overrides) -> Settings:
-    base = Settings.from_env()
-    fields = {f.name: getattr(base, f.name) for f in base.__dataclass_fields__.values()}
-    fields.update(overrides)
-    return Settings(**fields)
-
-
 def _sample_payload() -> dict:
     return {
         "job_id": "job-123",

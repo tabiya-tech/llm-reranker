@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
+from pydantic import ValidationError
 from pymongo.operations import UpdateOne
 
 from app.batch_rank_one import RankOneJobResult, rank_one_classified_document
@@ -35,6 +36,7 @@ from app.database import (
 from app.languages import LANGUAGE_REGISTRY
 from app.llm import (
     LlmClient,
+    LlmConfig,
     LlmConfigurationError,
     describe_available_providers,
     get_llm_client,
@@ -121,14 +123,16 @@ def _parse_args() -> argparse.Namespace:
 
 def _settings_and_llm_or_exit() -> tuple[Settings, LlmClient]:
     settings: Settings | None = None
+    llm_config: LlmConfig | None = None
     try:
         settings = get_settings()
-        return settings, get_llm_client(settings.llm)
+        llm_config = settings.llm
+        return settings, get_llm_client(llm_config)
     except LlmConfigurationError as e:
         selection = (
-            f"Configured selection: provider={settings.llm.provider} "
-            f"model={settings.llm.model or '(unset)'} class={settings.llm.client_class}\n\n"
-            if settings is not None
+            f"Configured selection: provider={llm_config.provider} "
+            f"model={llm_config.model or '(unset)'} class={llm_config.client_class}\n\n"
+            if llm_config is not None
             else ""
         )
         print(
@@ -139,16 +143,12 @@ def _settings_and_llm_or_exit() -> tuple[Settings, LlmClient]:
             file=sys.stderr,
         )
         raise SystemExit(1) from e
+    except ValidationError as e:
+        print(f"Settings configuration error:\n\n{e}", file=sys.stderr)
+        raise SystemExit(1) from e
 
 
-def _env_bool(name: str, default: bool = True) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return default
-    return raw in ("1", "true", "yes", "on")
-
-
-def _resolve_reranker_cutoff(*, country: str, db) -> str | None:
+def _resolve_reranker_cutoff(*, country: str, db, settings: Settings) -> str | None:
     """Resolve YYYY-MM-DD lower bound for incremental classified_jobs fetch.
 
     Order: per-country env (e.g. ``KENYA_RERANKER_CUTOFF_DATE``) or ``RERANKER_CUTOFF_DATE`` (used as-is);
@@ -162,8 +162,7 @@ def _resolve_reranker_cutoff(*, country: str, db) -> str | None:
         )
         return env_override
 
-    state_coll_name = (os.getenv("RERANKER_STATE_COLLECTION") or "reranker_state").strip()
-    state_doc = db[state_coll_name].find_one({"country": country}) or {}
+    state_doc = db[settings.reranker_state_collection].find_one({"country": country}) or {}
     last_cutoff = state_doc.get("last_cutoff_date")
     if last_cutoff:
         if isinstance(last_cutoff, datetime):
@@ -184,9 +183,8 @@ def _resolve_reranker_cutoff(*, country: str, db) -> str | None:
     return None
 
 
-def _set_reranker_state(*, country: str, db, jobs_processed: int) -> None:
-    state_coll_name = (os.getenv("RERANKER_STATE_COLLECTION") or "reranker_state").strip()
-    db[state_coll_name].update_one(
+def _set_reranker_state(*, country: str, db, jobs_processed: int, settings: Settings) -> None:
+    db[settings.reranker_state_collection].update_one(
         {"country": country},
         {
             "$set": {
@@ -254,7 +252,7 @@ def run() -> None:
 
     country = settings.target_country
     db = get_database(settings=settings)
-    cutoff_date = _resolve_reranker_cutoff(country=country, db=db)
+    cutoff_date = _resolve_reranker_cutoff(country=country, db=db, settings=settings)
     query: dict[str, Any] = {}
     if cutoff_date:
         try:
@@ -269,7 +267,7 @@ def run() -> None:
                 cutoff_date,
             )
 
-    skip_ranked = args.skip_already_ranked or _env_bool("RERANKER_SKIP_ALREADY_RANKED", False)
+    skip_ranked = args.skip_already_ranked or settings.reranker_skip_already_ranked
     if skip_ranked:
         ranked_ids = distinct_ranked_job_ids(db=db, settings=settings)
         jid = settings.mongo_field_job_id
@@ -300,9 +298,9 @@ def run() -> None:
     llm3_calls = 0
     job_errors = 0
     _run_error: str | None = None
-    enrichment_enabled = _env_bool("RERANKER_RUN_WA_ENRICHMENT", True)
-    enrichment_fail_hard = _env_bool("RERANKER_FAIL_ON_WA_ENRICHMENT_ERROR", False)
-    is_active_sync_enabled = _env_bool("RERANKER_SYNC_IS_ACTIVE_FROM_CLOSING_DATE", True)
+    enrichment_enabled = settings.reranker_run_wa_enrichment
+    enrichment_fail_hard = settings.reranker_fail_on_wa_enrichment_error
+    is_active_sync_enabled = settings.reranker_sync_is_active_from_closing_date
 
     try:
         log_prompt_debug = args.log_llm1_prompt or args.log_llm2_prompt or args.log_llm3_prompt
@@ -543,7 +541,7 @@ def run() -> None:
                 logger.warning("Post-step | is_active from closing_date | failed | %s", e)
         if _run_error is None:
             try:
-                _set_reranker_state(country=country, db=db, jobs_processed=n)
+                _set_reranker_state(country=country, db=db, jobs_processed=n, settings=settings)
             except Exception as e:
                 logger.warning("[%s] Could not persist reranker state: %s", country.upper(), e)
         if _run_error is not None:
