@@ -7,6 +7,9 @@ For each doc with a raw L2-normalized ``job_embedding`` and no whitening provena
 
 Does NOT call Gemini. Idempotent: skips docs already migrated.
 
+``--mongodb-uri`` / ``--db`` override ``MONGODB_URI`` / ``MONGODB_DATABASE``; the connection is
+opened through ``standalone_db()`` (see ``app/server_dependencies/README.md``).
+
 Usage (from llm-reranker repo root):
 
   # Dry run — count candidates only:
@@ -36,13 +39,15 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from pymongo import MongoClient, UpdateOne
+from pymongo import UpdateOne
+from pymongo.collection import Collection
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.config import Settings  # noqa: E402
+from app.server_dependencies.db_dependencies import standalone_db  # noqa: E402
 from utils.concat_whitening import (  # noqa: E402
     CONCAT_WHITENING_ARTIFACT_SHA256,
     assert_concat_whitening_artifact_sha256,
@@ -126,9 +131,7 @@ def _process_doc(
 
 def run_backfill(
     *,
-    mongodb_uri: str,
-    db_name: str,
-    collection: str,
+    coll: Collection[dict[str, Any]],
     settings: Settings,
     limit: int | None,
     batch_size: int,
@@ -142,8 +145,6 @@ def run_backfill(
         assert_concat_whitening_artifact_sha256(CONCAT_WHITENING_ARTIFACT_SHA256, settings=settings)
 
     stats = BackfillStats()
-    client = MongoClient(mongodb_uri)
-    coll = client[db_name][collection]
     expected_dim = settings.reranker_job_embedding_dim
 
     cursor = coll.find(_candidate_filter(), projection={"job_embedding": 1, "raw_embedding": 1, "llm_reranker_meta": 1})
@@ -180,7 +181,6 @@ def run_backfill(
         result = coll.bulk_write(ops, ordered=False)
         stats.written += result.modified_count
 
-    client.close()
     return stats
 
 
@@ -210,6 +210,9 @@ def main() -> int:
         log.error("--mongodb-uri or MONGODB_URI is required")
         return 2
 
+    # After app.config has loaded .env, so the CLI values win over it.
+    os.environ["MONGODB_URI"] = args.mongodb_uri.strip()
+    os.environ["MONGODB_DATABASE"] = args.db
     os.environ["RERANKER_CONCAT_WHITENING_ENABLED"] = "1"
     os.environ["RERANKER_CONCAT_WHITENING_PATH"] = args.concat_whitening_path
     os.environ["RERANKER_CONCAT_WHITENING_REQUIRED"] = "1"
@@ -217,16 +220,15 @@ def main() -> int:
     settings = Settings.from_env()
 
     t0 = time.time()
-    stats = run_backfill(
-        mongodb_uri=args.mongodb_uri.strip(),
-        db_name=args.db,
-        collection=args.collection,
-        settings=settings,
-        limit=args.limit,
-        batch_size=max(1, args.batch_size),
-        dry_run=args.dry_run,
-        expected_artifact_sha256=(args.expected_artifact_sha256 or "").strip() or None,
-    )
+    with standalone_db(settings) as db:
+        stats = run_backfill(
+            coll=db[args.collection],
+            settings=settings,
+            limit=args.limit,
+            batch_size=max(1, args.batch_size),
+            dry_run=args.dry_run,
+            expected_artifact_sha256=(args.expected_artifact_sha256 or "").strip() or None,
+        )
     elapsed = time.time() - t0
 
     log.info(

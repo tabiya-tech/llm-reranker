@@ -16,7 +16,7 @@ from typing import Any
 from pymongo.operations import UpdateOne
 
 from app.config import Settings
-from app.database import build_job_description_context, ranked_job_upsert_update_one
+from app.job_context import build_job_description_context
 from app.logging_config import (
     STEP_LLM1_SKILL_RANKER,
     STEP_LLM2_JOB_ATTRIBUTES,
@@ -25,6 +25,7 @@ from app.logging_config import (
     STEP_OCCUPATION_TAXONOMY,
 )
 from app.pipeline import JobResult, Llm3Outcome, TaxonomyContext, process_single_job
+from app.ranked_jobs.upsert import ranked_job_upsert_update_one
 from utils.classifier_linked_entities import group_linked_entities_by_type, job_identifier
 
 logger = logging.getLogger(__name__)
