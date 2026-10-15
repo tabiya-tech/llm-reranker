@@ -123,10 +123,17 @@ Optional keys the pipeline did not write are left out of the response rather tha
 
 ### Errors
 
+Every error body is `{"detail": "..."}` (`ErrorResponse`, see the main
+[README § Errors and logging](../README.md#errors-and-logging)). `detail` is always a string; it
+never contains the rejected request body or a raw exception message.
+
 | Status | When | Body |
 |---|---|---|
-| `422` | The body is not a JSON object, or a typed field has the wrong shape (for example `classification.entities` is not a list) | FastAPI's validation error: `detail[]` with `loc`, `msg`, `type` |
-| `500` | The pipeline failed, usually because an LLM call kept failing after its retries (`RERANKER_LLM_MAX_ATTEMPTS`) | `{"detail": "<error message>"}` |
+| `422` | The body is not a JSON object, or a typed field has the wrong shape (for example `classification.entities` is not a list) | `{"detail": "body.classification.entities: Input should be a valid list"}` — one `loc: msg` per validation error, joined with `; ` |
+| `500` | The configured model/provider is unusable (`LlmConfigurationError`) | `{"detail": "LLM configuration error: LlmConfigurationError"}` |
+| `500` | A configured provider was called and the call failed, e.g. retries exhausted (`RERANKER_LLM_MAX_ATTEMPTS`) (`LlmInvocationError`) | `{"detail": "LLM invocation error: LlmInvocationError"}` |
+| `500` | The model responded, but its JSON didn't parse or match the expected shape (`LlmParseError`) | `{"detail": "LLM response parse error: LlmParseError"}` |
+| `500` | Any other unexpected error | `{"detail": "Internal server error: RuntimeError"}` |
 | `503` | The service is still starting up and the taxonomy is not loaded | `{"detail": "Service not ready — taxonomy not loaded."}` |
 
 A misconfigured model (unknown provider, missing key or model id) fails at **startup**,

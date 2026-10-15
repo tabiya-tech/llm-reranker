@@ -401,10 +401,6 @@ class RankResponse(BaseModel):
     )
 
 
-class ErrorResponse(BaseModel):
-    detail: str = Field(description="What went wrong.")
-
-
 class HealthResponse(BaseModel):
     status: str = Field(description="Always `ok` once the process answers.", examples=["ok"])
     taxonomy_loaded: bool = Field(description="The default language's taxonomy is loaded.")

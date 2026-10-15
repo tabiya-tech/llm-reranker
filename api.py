@@ -5,19 +5,22 @@ import threading
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from app.api_models import (
-    ErrorResponse,
     HealthResponse,
     RankedJobDocument,
     RankRequest,
     RankResponse,
 )
 from app.config import get_settings, get_settings_for_language, log_ranker_run_configuration
+from app.constants.errors import ErrorResponse, error_response_doc
 from app.languages import LANGUAGE_REGISTRY, normalise_language
 from app.llm import get_llm_client
-from app.logging_config import configure_logging
+from app.llm.errors import LlmConfigurationError, LlmInvocationError, LlmParseError
+from app.logging_config import configure_logging, reconfigure_uvicorn_logging
 from app.observability import (
     init_tracing,
     job_trace,
@@ -27,7 +30,13 @@ from app.observability import (
 )
 from app.pipeline import TaxonomyContext, load_taxonomy_context, process_single_job
 
+configure_logging()
 logger = logging.getLogger(__name__)
+
+
+def _error_response(status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content=ErrorResponse(detail=detail).model_dump())
+
 
 _taxonomy: TaxonomyContext | None = None
 # One taxonomy context per language: the CSV label packs differ per language, so a
@@ -65,7 +74,8 @@ def get_taxonomy(language: str) -> TaxonomyContext:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    configure_logging()
+    # uvicorn installs its own log handlers at startup — reroute them too.
+    reconfigure_uvicorn_logging()
     global _taxonomy
     settings = get_settings()
     # Build the configured model up front: a misconfigured selection must fail the
@@ -103,6 +113,21 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 as ``ErrorResponse``: FastAPI's error list flattened to one ``detail`` string.
+
+    Never includes the rejected ``input``, which can carry job text.
+    """
+    errors = exc.errors()
+    detail = "; ".join(
+        f"{'.'.join(str(part) for part in err.get('loc', ()))}: {err.get('msg', '')}"
+        for err in errors
+    )
+    logger.warning("Request validation failed: %s", detail)
+    return _error_response(422, detail or "Request validation failed.")
+
+
 @app.post(
     "/rank",
     response_model=RankResponse,
@@ -110,9 +135,16 @@ app = FastAPI(
     # ``call`` mode) stay absent instead of appearing as null.
     response_model_exclude_unset=True,
     responses={
-        422: {"description": "The body is not a classified job document (see `detail`)."},
-        500: {"model": ErrorResponse, "description": "The pipeline failed, e.g. an LLM call."},
-        503: {"model": ErrorResponse, "description": "The service is still starting up."},
+        422: error_response_doc(
+            "The body is not a classified job document (see `detail`).",
+            "body.classification.entities: Input should be a valid list",
+        ),
+        500: error_response_doc(
+            "The pipeline failed, e.g. an LLM call.", "LLM invocation error: LlmInvocationError"
+        ),
+        503: error_response_doc(
+            "The service is still starting up.", "Service not ready — taxonomy not loaded."
+        ),
     },
 )
 async def rank_job(
@@ -160,9 +192,28 @@ async def rank_job(
                     "timings": result.timings,
                 },
             )
+    except LlmConfigurationError as exc:
+        logger.exception("LLM configuration error: %s", exc)
+        raise HTTPException(
+            status_code=500, detail=f"LLM configuration error: {exc.__class__.__name__}"
+        ) from exc
+    except LlmInvocationError as exc:
+        logger.exception("LLM invocation error: %s", exc)
+        raise HTTPException(
+            status_code=500, detail=f"LLM invocation error: {exc.__class__.__name__}"
+        ) from exc
+    except LlmParseError as exc:
+        logger.exception("LLM response parse error: %s", exc)
+        raise HTTPException(
+            status_code=500, detail=f"LLM response parse error: {exc.__class__.__name__}"
+        ) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("Error processing job: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("Unhandled error processing job: %s", exc)
+        raise HTTPException(
+            status_code=500, detail=f"Internal server error: {exc.__class__.__name__}"
+        ) from exc
     return RankResponse(
         ranked_document=(
             RankedJobDocument.model_validate(result.ranked_document)

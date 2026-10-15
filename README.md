@@ -116,7 +116,7 @@ RERANKER_LLM_MODEL=my-model-v1
 RERANKER_LLM_API_KEY=...
 ```
 
-The contract is in `app/llm/base.py`: return raw text (fenced ```json is tolerated — every parser strips fences), never return an empty string, raise `LlmConfigurationError` for anything a retry cannot fix and `LlmInvocationError` for a failed call. Clients are built once per process and shared across `RERANKER_PARALLEL_WORKERS` threads, so they must be thread-safe. `app/llm/retry.py` provides the transient-failure retry the shipped providers use.
+The contract is in `app/llm/base.py`: return raw text (fenced ```json is tolerated — every parser strips fences), never return an empty string, raise `LlmConfigurationError` for anything a retry cannot fix and `LlmInvocationError` for a failed call. Clients are built once per process and shared across `RERANKER_PARALLEL_WORKERS` threads, so they must be thread-safe. `app/llm/retry.py` provides the transient-failure retry the shipped providers use. A third exception, `LlmParseError` (`app/llm/errors.py`), is raised by the reranker itself — not by providers — when a model responds but its JSON does not parse or match the expected shape; see [Errors and logging](#errors-and-logging).
 
 **Misconfiguration fails at startup**, not one job at a time: both `main.py` and the API build the client before reading MongoDB, so an unknown provider, an unimportable class, a class that is not an `LlmClient`, a missing model id, or a missing key stops the run with a message naming the variable to fix.
 
@@ -361,6 +361,84 @@ Both use the **same** image (`llm-reranker/Dockerfile`); only the process/comman
 ## Run logs
 
 Each batch run writes a document to the `reranker_logs` collection (`RERANKER_LOGS_COLLECTION`, created automatically) tracking status, config, stats, and timing. Progress is updated every 10 jobs. Failed runs include the error message.
+
+## Errors and logging
+
+### Error responses
+
+Every error `/rank` returns has one body: `ErrorResponse` (`app/constants/errors.py`), `{"detail": "..."}`.
+Routes declare their error statuses with this model, so it shows up in `/docs` and `/openapi.json`.
+A global handler in `api.py` flattens FastAPI's request-validation errors (422) to one string;
+`/rank`'s own `except` ladder maps the three LLM failure categories to distinct `detail` prefixes.
+In every case, `detail` carries a category label and the exception's **class name**, never the raw
+exception message — the full message is logged server-side via `logger.exception`, not returned to
+the caller.
+
+| Status | When | Example `detail` |
+|---|---|---|
+| 422 | The body is not a classified job document, or a query parameter is invalid | `"body.classification.entities: Input should be a valid list"` |
+| 500 | `LlmConfigurationError` — the configured model/provider is unusable | `"LLM configuration error: LlmConfigurationError"` |
+| 500 | `LlmInvocationError` — a configured provider was called and the call failed | `"LLM invocation error: LlmInvocationError"` |
+| 500 | `LlmParseError` — the model responded, but its JSON didn't parse or match the expected shape | `"LLM response parse error: LlmParseError"` |
+| 500 | Any other unexpected error | `"Internal server error: RuntimeError"` |
+| 503 | The service has not finished loading its taxonomy data | `"Service not ready — taxonomy not loaded."` |
+
+See [Choosing the model](#choosing-the-model) for what each `LlmError` subclass means and where
+providers raise them.
+
+### Log format
+
+`LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; default `INFO`) sets verbosity for
+both the API and the batch CLI. An invalid value logs a warning and falls back to `INFO`.
+
+`LOG_FORMAT` selects the line shape: `text` (default — the existing
+`timestamp | LEVEL | logger | message` format) or `json`, one JSON object per line, for log
+aggregators that index structured fields. An invalid value logs a warning and falls back to `text`.
+On the API, uvicorn's own lines (access log, startup/shutdown) are rerouted through the same
+formatter once the app finishes starting, so `LOG_FORMAT=json` covers them too; the first two
+lines uvicorn prints before the app starts (`Started server process`, `Waiting for application
+startup`) are always plain text — there is no earlier hook to format them from.
+
+JSON fields:
+
+| Field | Meaning |
+|---|---|
+| `timestamp` | ISO 8601, UTC |
+| `severity` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `logger` | Logger name (module) |
+| `message` | The log message |
+| `exception` | Traceback, when the record carries one |
+
+Call sites may add their own fields via `extra={"fields": {...}}`; they appear as top-level keys
+alongside the ones above, e.g.:
+
+```json
+{"timestamp": "2026-10-15T09:14:03.120+00:00", "severity": "INFO", "logger": "app.batch_rank_one",
+ "message": "  step | LLM call 1 — skill ranker (anthropic/claude-opus-5) | 2.103s | menu=12 essential=5 optional=4"}
+```
+
+The three LLM step labels (`app/logging_config.py`) name the provider and model that actually ran
+(`LlmConfig.describe()`, `"{provider}/{model}"`) instead of a hardcoded vendor name.
+
+### What must not be logged
+
+These must never be logged, at any level, in any format:
+
+- **Full job description/requirements text.** Assembled LLM prompts are logged in full only
+  under the explicit `--log-llm1-prompt` / `--log-llm2-prompt` / `--log-llm3-prompt` batch CLI
+  flags — never at a default log level, and never reachable from the API (`/rank` never sets
+  these flags).
+- **Raw LLM response text** at default log level.
+- **LLM API keys** — log only `LlmConfig.api_key_tail()` (last 4 characters), as
+  `log_ranker_run_configuration` already does.
+- **MongoDB URI credentials** — mask with `sanitize_mongodb_uri` (`app/logging_config.py`)
+  before logging a connection string.
+- **Langfuse keys.**
+- **The rejected request body** on a validation error — the 422 handler keeps only the field
+  path (`loc`) and message, never the input value.
+
+Safe to log: counts, timings, ids/fingerprints, the configured provider and model name,
+exception class names, and validation field locations (never the rejected value).
 
 ## Type checking and linting
 

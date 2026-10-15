@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings, get_settings, language_resource_dirs
+from app.llm.errors import LlmParseError
 from utils.classifier_linked_entities import strip_json_fence
 
 
@@ -219,12 +220,15 @@ def parse_occupation_skills_relevance_response(raw_text: str) -> OccupationSkill
     Extra fields on objects are ignored. Duplicate (tabiya_occupation_id, skill_id) keys: last wins.
     """
     cleaned = strip_json_fence(raw_text)
-    data = json.loads(cleaned)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        raise LlmParseError(f"Occupation skills relevance JSON could not be parsed: {e}") from e
     if not isinstance(data, dict):
-        raise ValueError("Occupation skills relevance JSON must be an object")
+        raise LlmParseError("Occupation skills relevance JSON must be an object")
     raw_list = data.get("decisions")
     if not isinstance(raw_list, list):
-        raise ValueError("Occupation skills relevance JSON must contain a decisions array")
+        raise LlmParseError("Occupation skills relevance JSON must contain a decisions array")
     merged: dict[tuple[str, str], OccupationSkillsRelevanceDecision] = {}
     for item in raw_list:
         if not isinstance(item, dict):
@@ -262,9 +266,12 @@ def parse_job_attributes_response(
     under that key for downstream matching eligibility (Kenya pipeline).
     """
     cleaned = strip_json_fence(raw_text)
-    data = json.loads(cleaned)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        raise LlmParseError(f"Job attributes JSON could not be parsed: {e}") from e
     if not isinstance(data, dict):
-        raise ValueError("Job attributes JSON must be an object")
+        raise LlmParseError("Job attributes JSON must be an object")
 
     allowed_levels = allowed_level_ids_by_attribute(schema)
     attr_names = frozenset(allowed_levels.keys())

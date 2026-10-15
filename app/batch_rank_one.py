@@ -17,12 +17,13 @@ from pymongo.operations import UpdateOne
 
 from app.config import Settings
 from app.job_context import build_job_description_context
+from app.llm.base import LlmConfig
 from app.logging_config import (
-    STEP_LLM1_SKILL_RANKER,
-    STEP_LLM2_JOB_ATTRIBUTES,
-    STEP_LLM3_OCC_SKILLS,
     STEP_MONGO_UPSERT,
     STEP_OCCUPATION_TAXONOMY,
+    step_llm1_skill_ranker,
+    step_llm2_job_attributes,
+    step_llm3_occ_skills,
 )
 from app.pipeline import JobResult, Llm3Outcome, TaxonomyContext, process_single_job
 from app.ranked_jobs.upsert import ranked_job_upsert_update_one
@@ -62,10 +63,13 @@ class RankOneJobResult:
     llm3_inc: int
 
 
-def _log_pipeline_steps(result: JobResult) -> None:
+def _log_pipeline_steps(result: JobResult, *, llm: LlmConfig) -> None:
     """Per-step INFO lines for one job, from what :func:`process_single_job` reports."""
     st = result.stats
     outcome = result.llm3_outcome
+    l1 = step_llm1_skill_ranker(llm)
+    l2 = step_llm2_job_attributes(llm)
+    l3 = step_llm3_occ_skills(llm)
     if outcome is Llm3Outcome.DISABLED:
         llm3_note = " | llm3=skipped"
     elif outcome is Llm3Outcome.NO_MENU:
@@ -90,38 +94,38 @@ def _log_pipeline_steps(result: JobResult) -> None:
     if outcome is Llm3Outcome.FOLDED:
         logger.info(
             "  step | %s | folded into LLM1 | llm3_prompt_skills=%s added_llm1_candidates=%s",
-            STEP_LLM3_OCC_SKILLS,
+            l3,
             st.llm3_prompt_skills,
             st.llm3_added_llm1_candidates,
         )
     elif outcome is Llm3Outcome.CALLED:
         logger.info(
             "  step | %s | %.3fs | taxonomy_menu_skills=%s llm3_prompt_skills=%s decisions=%s",
-            STEP_LLM3_OCC_SKILLS,
+            l3,
             result.timings.get("llm3_s", 0.0),
             st.taxonomy_menu_skills,
             st.llm3_prompt_skills,
             st.llm3_decisions,
         )
     elif outcome is Llm3Outcome.DISABLED:
-        logger.info("  step | %s | skipped | RERANKER_ENABLE_LLM3=0", STEP_LLM3_OCC_SKILLS)
+        logger.info("  step | %s | skipped | RERANKER_ENABLE_LLM3=0", l3)
     elif outcome is Llm3Outcome.MENU_FILTERED_OUT:
         logger.info(
             "  step | %s | skipped | llm3 prompt menu empty after filters "
             "(taxonomy_menu=%s; try RERANKER_LLM3_CLASSIFIER_INTERSECT=0 or more classifier skills)",
-            STEP_LLM3_OCC_SKILLS,
+            l3,
             st.taxonomy_menu_skills,
         )
     else:
         logger.info(
             "  step | %s | skipped | no essential/optional occupation skills to judge",
-            STEP_LLM3_OCC_SKILLS,
+            l3,
         )
 
     if result.ran_llm1:
         logger.info(
             "  step | %s | %.3fs | menu=%s essential=%s optional=%s",
-            STEP_LLM1_SKILL_RANKER,
+            l1,
             result.timings.get("llm1_s", 0.0),
             st.llm1_menu,
             st.llm1_essential,
@@ -144,13 +148,13 @@ def _log_pipeline_steps(result: JobResult) -> None:
     else:
         logger.info(
             "  step | %s | skipped | no ESCO skill candidates for job",
-            STEP_LLM1_SKILL_RANKER,
+            l1,
         )
 
     if result.ran_llm2:
         logger.info(
             "  step | %s | %.3fs | attribute_estimates=%s work_activity_ids=%s",
-            STEP_LLM2_JOB_ATTRIBUTES,
+            l2,
             result.timings.get("llm2_s", 0.0),
             st.attribute_estimates,
             st.work_activity_ids,
@@ -203,7 +207,7 @@ def rank_one_classified_document(
         log_llm3_prompt=args.log_llm3_prompt,
     )
     if not log_prompt_debug:
-        _log_pipeline_steps(result)
+        _log_pipeline_steps(result, llm=settings.llm)
 
     mongo_s = 0.0
     update_op: UpdateOne | None = None
