@@ -7,6 +7,7 @@ from typing import Any
 from pymongo.database import Database
 
 from app.classified_jobs.repository import IClassifiedJobsRepository
+from app.classified_jobs.types import ClassifiedJobsFilter
 from app.config import Settings
 from app.server_dependencies.database_collections import Collections
 
@@ -18,6 +19,22 @@ class MongoClassifiedJobsRepository(IClassifiedJobsRepository):
 
     def __init__(self, db: Database[dict[str, Any]], settings: Settings):
         self._collection = db.get_collection(Collections.from_settings(settings).SOURCE)
+        self._job_id_field = settings.mongo_field_job_id
+
+    def build_query(self, job_filter: ClassifiedJobsFilter | None) -> dict[str, Any]:
+        """The Mongo filter for ``job_filter`` (``{}`` matches every document)."""
+        if job_filter is None:
+            return {}
+        clauses: list[dict[str, Any]] = []
+        if job_filter.classified_since is not None:
+            # Anchor on immutable `classified_at` only (set once, on first classifier insert).
+            # Avoids matching docs whose `updated_at` gets bumped by re-classification.
+            clauses.append({"classified_at": {"$gte": job_filter.classified_since}})
+        if job_filter.exclude_job_ids:
+            clauses.append({self._job_id_field: {"$nin": list(job_filter.exclude_job_ids)}})
+        if not clauses:
+            return {}
+        return clauses[0] if len(clauses) == 1 else {"$and": clauses}
 
     def iter_jobs(
         self,
@@ -26,11 +43,11 @@ class MongoClassifiedJobsRepository(IClassifiedJobsRepository):
         skip: int = 0,
         sort_field: str = "_id",
         sort_direction: int = -1,
-        query: dict[str, Any] | None = None,
+        job_filter: ClassifiedJobsFilter | None = None,
     ) -> Iterator[dict[str, Any]]:
         # Long parallel batches can exceed MongoDB's default ~10m idle cursor timeout between chunk reads.
         cur = (
-            self._collection.find(query or {}, no_cursor_timeout=True)
+            self._collection.find(self.build_query(job_filter), no_cursor_timeout=True)
             .sort(sort_field, sort_direction)
             .skip(skip)
         )
@@ -46,7 +63,7 @@ class MongoClassifiedJobsRepository(IClassifiedJobsRepository):
         skip: int = 0,
         sort_field: str = "_id",
         sort_direction: int = -1,
-        query: dict[str, Any] | None = None,
+        job_filter: ClassifiedJobsFilter | None = None,
     ) -> Iterator[list[dict[str, Any]]]:
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1")
@@ -55,7 +72,7 @@ class MongoClassifiedJobsRepository(IClassifiedJobsRepository):
             skip=skip,
             sort_field=sort_field,
             sort_direction=sort_direction,
-            query=query,
+            job_filter=job_filter,
         )
         while True:
             chunk = list(itertools.islice(it, chunk_size))

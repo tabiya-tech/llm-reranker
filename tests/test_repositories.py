@@ -11,7 +11,9 @@ from bson import ObjectId
 from pymongo.operations import UpdateOne
 
 from app.classified_jobs.mongo_repository import MongoClassifiedJobsRepository
+from app.classified_jobs.types import ClassifiedJobsFilter
 from app.ranked_jobs.mongo_repository import MongoRankedJobsRepository
+from app.ranked_jobs.types import RankedJobKey, RankedJobUpsert
 from app.run_logs.mongo_repository import MongoRunLogsRepository
 from app.run_logs.repository import RunStats
 from app.run_state.mongo_repository import MongoRunStateRepository
@@ -113,10 +115,35 @@ class TestClassifiedJobsRepository:
 
     def test_iter_jobs_newest_first_without_cursor_timeout(self, settings):
         repo, coll = self._repo(settings)
-        docs = list(repo.iter_jobs(query={"classified_at": {"$gte": 1}}))
+        since = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        docs = list(repo.iter_jobs(job_filter=ClassifiedJobsFilter(classified_since=since)))
         assert [d["_id"] for d in docs] == [4, 3, 2, 1, 0]
-        assert coll.find_calls == [({"classified_at": {"$gte": 1}}, {"no_cursor_timeout": True})]
+        assert coll.find_calls == [
+            ({"classified_at": {"$gte": since}}, {"no_cursor_timeout": True})
+        ]
         assert coll.cursors[0].sort_args == ("_id", -1)
+
+    def test_query_excludes_ranked_job_ids(self, settings):
+        repo, _ = self._repo(settings)
+        assert repo.build_query(ClassifiedJobsFilter(exclude_job_ids=("a", "b"))) == {
+            settings.mongo_field_job_id: {"$nin": ["a", "b"]}
+        }
+
+    def test_query_combines_cutoff_and_exclusions(self, settings):
+        repo, _ = self._repo(settings)
+        since = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        job_filter = ClassifiedJobsFilter(classified_since=since, exclude_job_ids=("a",))
+        assert repo.build_query(job_filter) == {
+            "$and": [
+                {"classified_at": {"$gte": since}},
+                {settings.mongo_field_job_id: {"$nin": ["a"]}},
+            ]
+        }
+
+    def test_empty_filter_matches_everything(self, settings):
+        repo, _ = self._repo(settings)
+        assert repo.build_query(None) == {}
+        assert repo.build_query(ClassifiedJobsFilter()) == {}
 
     def test_iter_jobs_limit_zero_means_all(self, settings):
         repo, coll = self._repo(settings)
@@ -147,9 +174,33 @@ class TestRankedJobsRepository:
         db = FakeDatabase()
         repo = MongoRankedJobsRepository(db, settings)  # type: ignore[arg-type]
         repo.bulk_upsert([])
-        op = UpdateOne({"job_id": "a"}, {"$set": {"x": 1}}, upsert=True)
-        repo.bulk_upsert([op])
-        assert db.collections["dst"].bulk_write_calls == [([op], False)]
+        repo.bulk_upsert([RankedJobUpsert(RankedJobKey.JOB_ID, "a", {"x": 1})])
+        ((ops, ordered),) = db.collections["dst"].bulk_write_calls
+        assert ordered is False
+        assert len(ops) == 1
+
+    def test_upsert_matches_on_the_configured_field(self, make_settings):
+        s = make_settings(
+            MONGODB_TARGET_COLLECTION="dst",
+            CLASSIFIED_MONGO_FIELD_JOB_ID="jid",
+            CLASSIFIED_MONGO_FIELD_JOB_FINGERPRINT="fp",
+        )
+        repo = MongoRankedJobsRepository(FakeDatabase(), s)  # type: ignore[arg-type]
+
+        filters = [
+            repo.upsert_operation(RankedJobUpsert(key, "v", {}))._filter for key in RankedJobKey
+        ]
+
+        assert filters == [{"jid": "v"}, {"fp": "v"}, {"source_classified_id": "v"}]
+
+    def test_upsert_sets_the_document_and_drops_legacy_fields(self, settings):
+        repo = MongoRankedJobsRepository(FakeDatabase(), settings)  # type: ignore[arg-type]
+        op = repo.upsert_operation(RankedJobUpsert(RankedJobKey.JOB_ID, "a", {"x": 1}))
+        update = op._doc
+        assert isinstance(update, dict)
+        assert update["$set"] == {"x": 1}
+        assert "llm_skill_ranker" in update["$unset"]
+        assert op._upsert is True
 
 
 class TestRunLogsRepository:

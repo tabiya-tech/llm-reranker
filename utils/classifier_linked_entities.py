@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Any
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.job_context import JobDescriptionContext
 from app.llm.errors import LlmParseError
 
@@ -145,7 +145,7 @@ def _dedupe_linked_entities_by_label(
 
 def extract_linked_entity_candidates(
     classified_doc: dict[str, Any],
-    settings: Settings | None = None,
+    settings: Settings,
 ) -> list[LinkedEntityCandidate]:
     """
     Collect linked taxonomy candidates for configured ``entity_type`` values (e.g. skill, occupation).
@@ -157,8 +157,7 @@ def extract_linked_entity_candidates(
     ``label`` (per type), preferring highest score.
     Dedupes by (entity_type, uri), keeping best similarity_score; then applies label dedupe if configured.
     """
-    s = settings or get_settings()
-    wanted = frozenset(s.classified_linked_entity_types)
+    wanted = frozenset(settings.classified_linked_entity_types)
     by_key: dict[tuple[str, str], LinkedEntityCandidate] = {}
     cls = classified_doc.get("classification") or {}
     entities = cls.get("entities") or []
@@ -181,9 +180,9 @@ def extract_linked_entity_candidates(
                 score = float(raw_score) if raw_score is not None else None
             except (TypeError, ValueError):
                 score = None
-            min_sim = s.classified_linked_entity_min_similarity
+            min_sim = settings.classified_linked_entity_min_similarity
             if min_sim is not None:
-                if s.classified_linked_entity_min_similarity_strict and score is None:
+                if settings.classified_linked_entity_min_similarity_strict and score is None:
                     continue
                 if score is not None and score < min_sim:
                     continue
@@ -204,12 +203,14 @@ def extract_linked_entity_candidates(
             ):
                 by_key[key] = cand
     merged = list(by_key.values())
-    return _dedupe_linked_entities_by_label(merged, s.classified_linked_entity_label_dedupe_types)
+    return _dedupe_linked_entities_by_label(
+        merged, settings.classified_linked_entity_label_dedupe_types
+    )
 
 
 def group_linked_entities_by_type(
     classified_doc: dict[str, Any],
-    settings: Settings | None = None,
+    settings: Settings,
 ) -> dict[str, list[LinkedEntityCandidate]]:
     """Candidates grouped by ``entity_type`` (lowercase keys)."""
     out: dict[str, list[LinkedEntityCandidate]] = {}
@@ -218,13 +219,14 @@ def group_linked_entities_by_type(
     return out
 
 
-def extract_esco_skill_candidates(classified_doc: dict[str, Any]) -> list[EscoSkillCandidate]:
+def extract_esco_skill_candidates(
+    classified_doc: dict[str, Any], settings: Settings
+) -> list[EscoSkillCandidate]:
     """
     ESCO-linked **skills** only (``entity_type`` skill), for the skill ranker.
 
     Delegates to :func:`extract_linked_entity_candidates` and maps to ``EscoSkillCandidate``.
     """
-    settings = get_settings()
     out: list[EscoSkillCandidate] = []
     for c in extract_linked_entity_candidates(classified_doc, settings):
         if c.entity_type != "skill":
@@ -255,10 +257,10 @@ def skills_to_prompt_dicts(
     description_by_esco: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Serialize candidates for :func:`app.prompts.build_skill_ranker_prompt`.
+    Serialize candidates for :func:`app.job_ranking.skill_ranker.prompt.build_skill_ranker_prompt`.
 
     ``description_by_esco``: optional lowercase ESCO uuid → text from ``skills.csv`` (see
-    :mod:`utils.skill_descriptions`). URIs and classifier scores are omitted from the prompt.
+    :func:`app.taxonomy.csv_loaders.load_skill_description_by_esco`). URIs and classifier scores are omitted from the prompt.
     """
     out: list[dict[str, Any]] = []
     for c in candidates:
@@ -294,6 +296,18 @@ def full_details_from_context(ctx: JobDescriptionContext) -> str:
     if ctx.requirements_text:
         parts.append(f"Requirements:\n{ctx.requirements_text}")
     return "\n\n".join(parts) if parts else "(no opportunity details)"
+
+
+def json_bool(v: object, default: bool = True) -> bool:
+    """A boolean from model JSON: real bools, or "true"/"1"/"yes" and "false"/"0"/"no"."""
+    if isinstance(v, bool):
+        return v
+    s = str(v or "").strip().lower()
+    if s in ("true", "1", "yes"):
+        return True
+    if s in ("false", "0", "no"):
+        return False
+    return default
 
 
 def strip_json_fence(text: str) -> str:

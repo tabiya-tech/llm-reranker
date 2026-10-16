@@ -178,8 +178,8 @@ class LlmConfig:
 class LlmClient(ABC):
     """One configured model, ready to answer prompts with JSON.
 
-    Implementations are constructed once per :class:`LlmConfig` and reused for the
-    whole run (see :func:`app.llm.factory.get_llm_client`), so they may hold
+    Implementations are constructed once per process by the composition root
+    (the ``get_*_service`` providers) and passed to the services that use them, so they may hold
     connection pools. They must be safe to call from several threads at once —
     the batch CLI runs up to ``RERANKER_PARALLEL_WORKERS`` jobs concurrently and
     overlaps two calls within a single job.

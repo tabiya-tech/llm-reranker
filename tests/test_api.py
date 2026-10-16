@@ -13,8 +13,13 @@ We cover the two safest behaviours that don't require Gemini or Mongo:
 from __future__ import annotations
 
 import api
-from app.api_models import JsonValue
-from app.api_models import normalize_mongo_extended_json as _normalize_mongo_extended_json
+from app.job_ranking.routes.types import JsonValue
+from app.job_ranking.routes.types import (
+    normalize_mongo_extended_json as _normalize_mongo_extended_json,
+)
+from app.taxonomy.repository import TaxonomyRepository
+from app.taxonomy.types import TaxonomyContext
+from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap
 
 # ---------------------------------------------------------------------------
 # _normalize_mongo_extended_json
@@ -77,23 +82,28 @@ class TestNormalizeMongoExtendedJson:
 # ---------------------------------------------------------------------------
 
 
-class _FakeTaxonomy:
-    """Minimal stand-in for ``app.pipeline.TaxonomyContext``.
-
-    Only ``occ_map`` is read in the ``api.lifespan`` log line.
-    """
-
-    def __init__(self):
-        self.occ_map = {}
+def _empty_taxonomy() -> TaxonomyContext:
+    """A taxonomy with no rows: enough for the lifespan to build and warm the service."""
+    return TaxonomyContext(
+        occ_map={},
+        csv_skill_labels=None,
+        occ_skill_relation=None,
+        occ_skill_signalling=None,
+        occ_bridge={},
+        occ_all_ids=frozenset(),
+        skills_uuid_tabiya_map=SkillsUuidTabiyaMap(),
+        skill_desc_by_esco={},
+        occ_label_by_esco={},
+        occ_desc_by_esco={},
+    )
 
 
 def test_health_endpoint_returns_ok(make_settings, monkeypatch):
     """FastAPI lifespan boots when taxonomy load is stubbed."""
-    # Real loaders need full resources/CSVs; we replace with a fake taxonomy
-    # and a Gemini key (lifespan refuses to start without one).
+    # The real repository needs the full resources/CSVs; it is replaced with an empty
+    # taxonomy and a Gemini key (lifespan refuses to start without one).
     make_settings(GEMINI_API_KEY="dummy-key", TARGET_COUNTRY="kenya")
-    fake_tx = _FakeTaxonomy()
-    monkeypatch.setattr(api, "load_taxonomy_context", lambda settings: fake_tx)
+    monkeypatch.setattr(TaxonomyRepository, "load", lambda self, settings: _empty_taxonomy())
 
     from fastapi.testclient import TestClient
 
@@ -108,3 +118,13 @@ def test_health_endpoint_returns_ok(make_settings, monkeypatch):
         "supported_languages": ["en", "es"],
         "loaded_languages": ["en"],
     }
+
+
+def test_requests_are_503_when_the_service_cannot_be_built(make_settings):
+    """A model selection that cannot be built surfaces as 503, not a crash."""
+    from fastapi.testclient import TestClient
+
+    # Anthropic without an API key or model: the client constructor refuses.
+    make_settings(RERANKER_LLM_PROVIDER="anthropic", TARGET_COUNTRY="kenya")
+    client = TestClient(api.app)  # not entered: the lifespan does not run
+    assert client.get("/health").status_code == 503

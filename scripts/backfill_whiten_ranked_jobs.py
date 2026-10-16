@@ -2,7 +2,7 @@
 
 For each doc with a raw L2-normalized ``job_embedding`` and no whitening provenance:
   1. Copy existing ``job_embedding`` to ``raw_embedding``
-  2. Overwrite ``job_embedding`` with ``whiten_concat_rows(raw_embedding)``
+  2. Overwrite ``job_embedding`` with ``ConcatWhitener.whiten(raw_embedding)``
   3. Set ``llm_reranker_meta.embedding.whitening`` provenance
 
 Does NOT call Gemini. Idempotent: skips docs already migrated.
@@ -39,23 +39,17 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from pymongo import UpdateOne
-from pymongo.collection import Collection
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.config import Settings  # noqa: E402
+from app.job_embedding.whitening import CONCAT_WHITENING_ARTIFACT_SHA256, ConcatWhitener
+from app.ranked_jobs.mongo_repository import MongoRankedJobsRepository
+from app.ranked_jobs.repository import IRankedJobsRepository
+from app.job_embedding.whitening_repository import WhiteningArtifactRepository
 from app.server_dependencies.db_dependencies import standalone_db  # noqa: E402
-from utils.concat_whitening import (  # noqa: E402
-    CONCAT_WHITENING_ARTIFACT_SHA256,
-    assert_concat_whitening_artifact_sha256,
-    concat_whitening_artifact_sha256,
-    concat_whitening_target,
-    reset_concat_whitening_cache,
-    whiten_concat_rows,
-)
 
 DEFAULT_COLLECTION = "ranked_jobs"
 DEFAULT_BATCH_SIZE = 200
@@ -81,21 +75,11 @@ def _already_migrated(doc: dict[str, Any]) -> bool:
     return bool(whitening.get("enabled")) and isinstance(doc.get("raw_embedding"), list)
 
 
-def _candidate_filter() -> dict[str, Any]:
-    return {
-        "job_embedding": {"$exists": True, "$type": "array", "$ne": []},
-        "$or": [
-            {"llm_reranker_meta.embedding.whitening.enabled": {"$ne": True}},
-            {"raw_embedding": {"$exists": False}},
-        ],
-    }
-
-
-def _build_whitening_provenance(*, artifact_sha256: str | None, applied_at: datetime) -> dict[str, Any]:
+def _build_whitening_provenance(*, whitener: ConcatWhitener, applied_at: datetime) -> dict[str, Any]:
     return {
         "enabled": True,
-        "artifact_sha256": artifact_sha256,
-        "target": concat_whitening_target(),
+        "artifact_sha256": whitener.artifact_sha256,
+        "target": whitener.target,
         "applied_at": applied_at.isoformat(),
     }
 
@@ -103,7 +87,7 @@ def _build_whitening_provenance(*, artifact_sha256: str | None, applied_at: date
 def _process_doc(
     doc: dict[str, Any],
     *,
-    settings: Settings,
+    whitener: ConcatWhitener,
     expected_dim: int,
 ) -> tuple[dict[str, Any] | None, str | None]:
     if _already_migrated(doc):
@@ -116,10 +100,10 @@ def _process_doc(
         return None, "wrong_dim"
 
     raw = np.asarray(je, dtype=np.float64)
-    whitened = whiten_concat_rows(raw.reshape(1, -1), settings=settings)[0]
-    applied_at = datetime.now(timezone.utc)
-    artifact_sha = concat_whitening_artifact_sha256(settings=settings)
-    whitening = _build_whitening_provenance(artifact_sha256=artifact_sha, applied_at=applied_at)
+    whitened = whitener.whiten(raw.reshape(1, -1))[0]
+    whitening = _build_whitening_provenance(
+        whitener=whitener, applied_at=datetime.now(timezone.utc)
+    )
 
     update: dict[str, Any] = {
         "raw_embedding": [float(x) for x in raw.tolist()],
@@ -131,30 +115,26 @@ def _process_doc(
 
 def run_backfill(
     *,
-    coll: Collection[dict[str, Any]],
+    ranked_jobs: IRankedJobsRepository,
     settings: Settings,
     limit: int | None,
     batch_size: int,
     dry_run: bool,
     expected_artifact_sha256: str | None,
 ) -> BackfillStats:
-    reset_concat_whitening_cache()
+    whitener = ConcatWhitener(WhiteningArtifactRepository().load(settings))
     if expected_artifact_sha256:
-        assert_concat_whitening_artifact_sha256(expected_artifact_sha256, settings=settings)
+        whitener.assert_sha256(expected_artifact_sha256)
     elif not dry_run:
-        assert_concat_whitening_artifact_sha256(CONCAT_WHITENING_ARTIFACT_SHA256, settings=settings)
+        whitener.assert_sha256(CONCAT_WHITENING_ARTIFACT_SHA256)
 
     stats = BackfillStats()
     expected_dim = settings.reranker_job_embedding_dim
 
-    cursor = coll.find(_candidate_filter(), projection={"job_embedding": 1, "raw_embedding": 1, "llm_reranker_meta": 1})
-    if limit is not None:
-        cursor = cursor.limit(limit)
-
-    ops: list[UpdateOne] = []
-    for doc in cursor:
+    ops: list[tuple[Any, dict[str, Any]]] = []
+    for doc in ranked_jobs.iter_whitening_backfill_candidates(limit=limit):
         stats.scanned += 1
-        update, reason = _process_doc(doc, settings=settings, expected_dim=expected_dim)
+        update, reason = _process_doc(doc, whitener=whitener, expected_dim=expected_dim)
         if reason == "already_migrated":
             stats.skipped_already_migrated += 1
             continue
@@ -171,15 +151,13 @@ def run_backfill(
             stats.dry_run_would_write += 1
             continue
 
-        ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": update}))
+        ops.append((doc["_id"], update))
         if len(ops) >= batch_size:
-            result = coll.bulk_write(ops, ordered=False)
-            stats.written += result.modified_count
+            stats.written += ranked_jobs.bulk_set(ops)
             ops.clear()
 
     if ops and not dry_run:
-        result = coll.bulk_write(ops, ordered=False)
-        stats.written += result.modified_count
+        stats.written += ranked_jobs.bulk_set(ops)
 
     return stats
 
@@ -216,13 +194,12 @@ def main() -> int:
     os.environ["RERANKER_CONCAT_WHITENING_ENABLED"] = "1"
     os.environ["RERANKER_CONCAT_WHITENING_PATH"] = args.concat_whitening_path
     os.environ["RERANKER_CONCAT_WHITENING_REQUIRED"] = "1"
-    reset_concat_whitening_cache()
     settings = Settings.from_env()
 
     t0 = time.time()
     with standalone_db(settings) as db:
         stats = run_backfill(
-            coll=db[args.collection],
+            ranked_jobs=MongoRankedJobsRepository(db, settings, collection_name=args.collection),
             settings=settings,
             limit=args.limit,
             batch_size=max(1, args.batch_size),

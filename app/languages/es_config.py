@@ -33,7 +33,7 @@ LANGUAGE_CONFIG = {
     # original Spanish ad. Prompting in Spanish over machine-translated English text
     # would mix the two. Set RERANKER_PREFER_TRANSLATION=1 to force the MT path back on.
     "prefer_translation": False,
-    # Human-facing scaffolding of the LLM2 user block (app/prompts.py). The JSON response
+    # Human-facing scaffolding of the LLM2 user block (app/job_ranking/job_attributes/prompt.py). The JSON response
     # contract is deliberately NOT translated: its keys (`attribute_name`,
     # `selected_level_id`, …) and the level ids are identifiers the model must copy
     # verbatim, and a translated contract invites translated keys back.

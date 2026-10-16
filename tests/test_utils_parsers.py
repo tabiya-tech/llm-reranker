@@ -6,7 +6,7 @@ Covers:
 - ``utils.occupation_to_skills_mapping`` low-level helpers
   (``cell_to_taxonomy_id``, ``esco_skill_uri_for_uuid``,
   ``occupation_block_skill_counts``).
-- ``utils.update_is_active_from_closing_date._parse_date`` and the sync
+- ``app.ranked_jobs.is_active.parse_closing_date`` and the sync
   function against an in-memory fake collection.
 """
 
@@ -19,18 +19,16 @@ from typing import Any, Iterator, cast
 import pytest
 from pymongo.collection import Collection
 
+from app.ranked_jobs.is_active import parse_closing_date as _parse_date
+from app.ranked_jobs.mongo_repository import sync_is_active_from_closing_date
+from app.taxonomy.csv_loaders import load_skills_uuid_tabiya_map
 from utils.occupation_to_skills_mapping import (
     cell_to_taxonomy_id,
     esco_skill_uri_for_uuid,
     occupation_block_skill_counts,
 )
-from utils.update_is_active_from_closing_date import (
-    _parse_date,
-    sync_is_active_from_closing_date,
-)
 from utils.uuid_to_tabiya_id import (
     cell_to_esco_uuid,
-    load_skills_uuid_tabiya_map,
     parse_uuid_history_cell,
 )
 
@@ -151,7 +149,7 @@ class TestOccupationBlockSkillCounts:
 
 
 # ---------------------------------------------------------------------------
-# update_is_active_from_closing_date._parse_date
+# is_active.parse_closing_date
 # ---------------------------------------------------------------------------
 
 

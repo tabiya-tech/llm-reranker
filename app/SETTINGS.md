@@ -181,7 +181,7 @@ An unrecognised `TARGET_COUNTRY` falls back to `zambia` rather than failing a ba
 A relative `*_path` value resolves against `resources/<language>/` → `resources/en/` →
 `resources/`, then the repo root; an absolute path is used as given.
 
-## Work-activities enrichment (`utils/work_activities_enrichment.py`)
+## Work-activities enrichment (`app/work_activities_enrichment/`)
 
 Runs after every batch when `reranker_run_wa_enrichment` (below) is on.
 
@@ -207,8 +207,8 @@ Runs after every batch when `reranker_run_wa_enrichment` (below) is on.
 | `LOG_LEVEL` | `log_level` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` \| `CRITICAL` | `INFO` |
 
 Not on `Settings` (read live from the environment by the code that uses them):
-`RERANKER_PREFER_TRANSLATION` (`app/database.py`); `RERANKER_CUTOFF_DATE` and its
-per-country override `<COUNTRY>_RERANKER_CUTOFF_DATE` (`main.py`, e.g.
+`RERANKER_PREFER_TRANSLATION` (`app/translation.py`); `RERANKER_CUTOFF_DATE` and its
+per-country override `<COUNTRY>_RERANKER_CUTOFF_DATE` (`app/batch/service.py`, e.g.
 `KENYA_RERANKER_CUTOFF_DATE`) — the variable name is built from `TARGET_COUNTRY` at
 runtime, so it can't be a static field; and Langfuse tracing (`RERANKER_ENABLE_TRACING`
 and friends — see `app/observability/config.py`).

@@ -20,7 +20,7 @@ LANGUAGE_CONFIG = {
     # Prefer `translation.text_en` / `fields_en` on classified_jobs for prompt text.
     # Irrelevant for English documents, which carry no `translation` field.
     "prefer_translation": True,
-    # Human-facing scaffolding of the LLM2 user block (app/prompts.py). These are the
+    # Human-facing scaffolding of the LLM2 user block (app/job_ranking/job_attributes/prompt.py). These are the
     # English strings the prompts have always used — changing them changes English
     # prompts. The JSON response contract stays in English for every language: its keys
     # and level ids are English identifiers the model must copy verbatim.

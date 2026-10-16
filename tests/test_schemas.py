@@ -12,26 +12,30 @@ import json
 
 import pytest
 
-from app.llm.errors import LlmParseError
-from app.schemas import (
+from app.job_ranking.job_attributes.parser import (
+    _normalize_confidence,
+    allowed_level_ids_by_attribute,
+    parse_job_attributes_response,
+    parse_requires_post_secondary,
+)
+from app.job_ranking.job_attributes.repository import (
+    JobAttributesRepository,
+    onet_work_activities_path,
+)
+from app.job_ranking.job_attributes.types import (
     AttributeDefinition,
     AttributeLevel,
     JobAttributesResult,
     JobAttributesSchema,
+    OnetWorkActivity,
+)
+from app.job_ranking.occupation_skills.parser import parse_occupation_skills_relevance_response
+from app.job_ranking.occupation_skills.types import (
     OccupationSkillsRelevanceDecision,
     OccupationSkillsRelevanceResult,
-    OnetWorkActivity,
-    _json_bool,
-    _normalize_confidence,
-    allowed_level_ids_by_attribute,
-    job_attributes_schema_path,
-    load_job_attributes_schema,
-    load_onet_work_activities,
-    onet_work_activities_path,
-    parse_job_attributes_response,
-    parse_occupation_skills_relevance_response,
-    parse_requires_post_secondary,
 )
+from app.llm.errors import LlmParseError
+from utils.classifier_linked_entities import json_bool
 
 # ---------------------------------------------------------------------------
 # Resource paths and loaders (use the real, committed resources)
@@ -41,14 +45,14 @@ from app.schemas import (
 class TestResourceLoaders:
     def test_paths_resolve_under_resources_dir(self, make_settings):
         s = make_settings()
-        assert job_attributes_schema_path(s).is_file()
+        assert s.job_attributes_schema_path.is_file()
         assert onet_work_activities_path(s).is_file()
         # Default basename matches what app.config resolves to.
-        assert job_attributes_schema_path(s).name == "job_attributes_reduced.json"
+        assert s.job_attributes_schema_path.name == "job_attributes_reduced.json"
 
     def test_load_job_attributes_schema_returns_typed_definitions(self, make_settings):
         s = make_settings()
-        schema = load_job_attributes_schema(settings=s)
+        schema = JobAttributesRepository().load_schema(s)
         assert isinstance(schema, JobAttributesSchema)
         assert len(schema.attributes) > 0
         for a in schema.attributes:
@@ -61,7 +65,7 @@ class TestResourceLoaders:
 
     def test_load_onet_work_activities_returns_tuple(self, make_settings):
         s = make_settings()
-        wa = load_onet_work_activities(settings=s)
+        wa = JobAttributesRepository().load_onet_work_activities(s)
         assert isinstance(wa, tuple)
         assert len(wa) > 0
         for x in wa:
@@ -75,14 +79,14 @@ class TestResourceLoaders:
         bogus = tmp_path / "missing.json"
         s = make_settings(JOB_ATTRIBUTES_SCHEMA=str(bogus))
         with pytest.raises(FileNotFoundError):
-            load_job_attributes_schema(settings=s)
+            JobAttributesRepository().load_schema(s)
 
     def test_load_onet_work_activities_missing_file_raises(self, tmp_path, make_settings):
         bogus_resources = tmp_path / "no_resources"
         bogus_resources.mkdir()
         s = make_settings(RESOURCES_DIR=str(bogus_resources))
         with pytest.raises(FileNotFoundError):
-            load_onet_work_activities(settings=s)
+            JobAttributesRepository().load_onet_work_activities(s)
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +129,7 @@ class TestJsonBool:
         ],
     )
     def test_bool_parsing(self, raw, default, expected):
-        assert _json_bool(raw, default) == expected
+        assert json_bool(raw, default) == expected
 
 
 class TestParseRequiresPostSecondary:
@@ -147,7 +151,7 @@ class TestParseRequiresPostSecondary:
 class TestAllowedLevelIdsByAttribute:
     def test_returns_frozenset_per_attribute(self, make_settings):
         s = make_settings()
-        schema = load_job_attributes_schema(settings=s)
+        schema = JobAttributesRepository().load_schema(s)
         allowed = allowed_level_ids_by_attribute(schema)
         for a in schema.attributes:
             assert a.name in allowed
@@ -429,7 +433,7 @@ class TestParseOccupationSkillsRelevanceResponse:
         assert result.decisions == ()
 
     def test_is_relevant_default_when_missing(self):
-        # _json_bool default is True
+        # json_bool default is True
         raw = json.dumps({"decisions": [{"skill_id": "s1", "tabiya_occupation_id": "t1"}]})
         result = parse_occupation_skills_relevance_response(raw)
         assert result.decisions[0].is_relevant is True

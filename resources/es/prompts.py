@@ -1,6 +1,6 @@
 """System prompts en español (LLM2 y LLM3).
 
-Traducción de ``en/prompts.py``. ``app/prompt_resources.py`` extrae cada bloque con una
+Traducción de ``en/prompts.py``. ``app/job_ranking/prompts/repository.py`` extrae cada bloque con una
 expresión regular sobre el nombre de la constante, así que hay que conservar los nombres
 ``JOB_ATTRIBUTES_SYSTEM_PROMPT`` y ``OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT`` y las
 comillas triples. Marcadores disponibles: ``{country}`` y ``{language}``.

@@ -11,12 +11,15 @@ app/
 │   ├── db_dependencies.py       RerankerDBProvider: the one client; build_client_kwargs; standalone_db
 │   └── database_collections.py  Collections: collection names (from Settings)
 ├── classified_jobs/             source collection (read)
-│   ├── repository.py            IClassifiedJobsRepository: the interface main.py depends on (and tests mock)
+│   ├── repository.py            IClassifiedJobsRepository: the interface the batch service depends on (and tests fake)
+│   ├── types.py                 ClassifiedJobsFilter: which jobs a batch reads (no Mongo syntax)
 │   └── mongo_repository.py      MongoClassifiedJobsRepository: every query on the source collection
-├── ranked_jobs/                 target collection (write)
+├── ranked_jobs/                 target collection (write; also the is_active sync and enrichment queries)
 │   ├── repository.py            IRankedJobsRepository
-│   ├── mongo_repository.py      MongoRankedJobsRepository
-│   └── upsert.py                ranked_job_upsert_update_one: one ranked document → UpdateOne (pure)
+│   ├── mongo_repository.py      MongoRankedJobsRepository: builds every UpdateOne it writes
+│   ├── types.py                 RankedJobUpsert: a ranked document and the key it is matched on
+│   ├── upsert.py                ranked_job_upsert: picks that key for one ranked document (pure)
+│   └── is_active.py             is_active from closing_date (pure rules)
 ├── run_logs/                    reranker_logs: IRunLogsRepository / MongoRunLogsRepository, RunStats
 ├── run_state/                   reranker_state: IRunStateRepository / MongoRunStateRepository
 ├── job_context.py               build_job_description_context: classified doc → JobDescriptionContext (pure)
@@ -32,33 +35,35 @@ optional client and opens its own.
 ### Batch run (`main.py`)
 
 1. **Run start**: `run()` calls `RerankerDBProvider.get_db(settings)`, which reads the settings and
-   creates the client. pymongo connects lazily, so this does no I/O. `run()` then builds the four
-   repositories around that database and uses only them.
+   creates the client. pymongo connects lazily, so this does no I/O. `build_batch_ranking_service`
+   (`app/batch/get_batch_service.py`) builds the four repositories around that database, and
+   `BatchRankingService` uses only them.
 2. **During the run**: the worker threads (`RERANKER_PARALLEL_WORKERS`) share the client.
    `MongoClient` is thread-safe and pools connections. The post-steps get the same connection: the
    `is_active` sync runs through `MongoRankedJobsRepository`, and the work-activities enrichment gets
-   the run's client.
+   a `MongoRankedJobsRepository` on the run's client (`ENRICH_WA_DATABASE` may name another database
+   on the same cluster).
 3. **Run end**: `main()` calls `RerankerDBProvider.close()` in its `finally`, so the client is closed
    on success, on failure, and on the `SystemExit(1)` path.
 
 `get_client()` creates the client under a `threading.Lock` with a double check, so concurrent first
 callers share one client.
 
-### CLIs (`utils/`, `scripts/`)
+### CLIs
 
 CLIs have no run around them. They open a short-lived client with `standalone_db()`, which closes it
 when the block exits:
 
 ```python
-from app.server_dependencies.database_collections import Collections
+from app.ranked_jobs.mongo_repository import MongoRankedJobsRepository
 from app.server_dependencies.db_dependencies import standalone_db
 
 settings = get_settings()
 with standalone_db(settings) as db:
-    stats = sync_is_active_from_closing_date(db[Collections.from_settings(settings).TARGET])
+    stats = MongoRankedJobsRepository(db, settings).sync_is_active_from_closing_date()
 ```
 
-`utils/update_is_active_from_closing_date.py`, `utils/work_activities_enrichment.py` and
+`app/ranked_jobs/is_active_cli.py`, `app/work_activities_enrichment/cli.py` and
 `scripts/backfill_whiten_ranked_jobs.py` work this way. Never use `standalone_db()` inside the batch
 run: it would close the run's client.
 
@@ -67,15 +72,18 @@ run: it would close the run's client.
 The API holds **no** client. `POST /rank` takes the classified document in the body and returns the
 ranked document; it does not read or write MongoDB. If a route ever needs the database, open the
 client in the `lifespan` (`RerankerDBProvider.get_db()` at startup, `RerankerDBProvider.close()` at
-shutdown), and give the route its repository through a FastAPI dependency:
+shutdown), and give the route a service that holds the repository, through the module's
+`get_<x>_service.py` provider (as compass does):
 
 ```python
-def get_ranked_jobs_repository() -> IRankedJobsRepository:
+# app/<use_case>/get_<x>_service.py
+def get_x_service() -> IXService:
     settings = get_settings()
-    return MongoRankedJobsRepository(RerankerDBProvider.get_db(settings), settings)
+    return XService(MongoRankedJobsRepository(RerankerDBProvider.get_db(settings), settings))
 
-@app.get("/…")
-async def route(ranked_jobs: IRankedJobsRepository = Depends(get_ranked_jobs_repository)): ...
+# app/<use_case>/routes.py
+@router.get("/…")
+async def route(service: IXService = Depends(get_x_service)): ...
 ```
 
 pymongo is synchronous: run its calls off the event loop (a plain `def` route, or
@@ -118,7 +126,7 @@ The work-activities enrichment can target another database or collection on the 
   field names are configured in `Settings`.
 - **Target**: each job is upserted by `job_id`, else `job_fingerprint`, else `source_classified_id`
   (see `ranked_jobs/upsert.py`). The document shape is the contract with the matching engine, defined
-  by `app/ranked_job_schema.py`.
+  by `app/job_ranking/ranked_document.py`.
 - **Logs**: one document per run, holding `status` (`running` → `completed` / `failed`), `config`
   (model, limit, collections), `stats` (jobs, upserts, LLM calls), `elapsed_s` and `error_message`.
   Progress is written every 10 jobs.
@@ -130,15 +138,17 @@ The work-activities enrichment can target another database or collection on the 
 ## Adding a query
 
 1. **Declare it on the interface.** Add an abstract method to the collection's `I…Repository`
-   (`repository.py`), with a docstring that states its filter, sort and return shape. `main.py`
-   depends on the interface, so this is also what tests mock.
+   (`repository.py`), with a docstring that states its filter, sort and return shape. The services
+   depend on the interface, so this is also what tests fake.
 2. **Implement it in the `Mongo…Repository`** (`mongo_repository.py`). Use `self._collection`. Do
    not open a client or reach for the provider.
-3. **Keep policy out of it.** If the filter depends on run options or business rules (like the
-   cutoff resolution in `main.py`), build it in the caller and pass it in, as
-   `iter_jobs(query=…)` does. Pure document mapping belongs next to the data it describes
-   (`job_context.py`, `ranked_jobs/upsert.py`), not in the repository.
-4. **Use it** from `main.py` through the repository instance `run()` already built.
+3. **Keep policy out of it, and Mongo syntax in it.** If the filter depends on run options or
+   business rules (like the cutoff resolution in `BatchRankingService.build_source_filter`), decide
+   it in the service and pass it in as a plain type from the collection's `types.py`, as
+   `iter_jobs(job_filter=ClassifiedJobsFilter(…))` does; the repository turns it into the query.
+   Writes work the same way: the service hands over `RankedJobUpsert`s and the repository builds
+   the `UpdateOne`s. Services never import `pymongo` (`tests/test_architecture.py` enforces it).
+4. **Use it** from the service that receives the repository (built in the module's `get_<x>_service.py`).
 5. **Test it offline.** `tests/test_repositories.py` runs each repository against an in-process
    fake database that records `find` / `sort` / `limit` / `bulk_write` / `update_one`.
 
@@ -146,5 +156,6 @@ The work-activities enrichment can target another database or collection on the 
 
 Add a `Settings` field (env-driven, with a default) and a `Collections` entry, then create a
 repository package like `app/run_state/` (an interface plus a Mongo implementation taking
-`(db, settings)`). Build it in `main.py` next to the others. If it lives in a different database,
+`(db, settings)`). Build it in the provider of the service that uses it (e.g.
+`app/batch/get_batch_service.py`). If it lives in a different database,
 take it from `RerankerDBProvider.get_client()[name]`. Never create a second client.
