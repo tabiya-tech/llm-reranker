@@ -1,4 +1,4 @@
-"""Unit + regression tests for ``app.ranked_job_schema``.
+"""Unit + regression tests for ``app.job_ranking.ranked_document`` and ``app.job_ranking.occupation_skills.menu``.
 
 This module produces every document written to ``ranked_jobs``. The tests:
 
@@ -19,28 +19,31 @@ from typing import Any
 import pytest
 
 from app.job_context import JobDescriptionContext
-from app.ranked_job_schema import (
-    PIPELINE_SCHEMA_VERSION,
+from app.job_ranking.job_attributes.repository import JobAttributesRepository
+from app.job_ranking.job_attributes.types import AttributeEstimate, JobAttributesResult
+from app.job_ranking.occupation_skills.menu import (
     _llm3_signalling_label_rank,
     apply_occupation_skills_listing_relevance,
     build_llm3_occupation_menu,
-    build_llm_reranker_meta,
-    build_ranked_job_document,
-    classifier_metadata_from_context,
     classifier_skill_esco_uuids_lower,
     filter_occupation_skills_nested_by_signal_include,
     llm3_menu_skill_candidates,
     occupation_skill_signal_tier,
     occupation_skills_relevance_menu_size,
-    occupation_to_skills_with_meta,
     subset_occupation_nested_for_llm3_prompt,
-    work_activity_names_for_ids,
 )
-from app.schemas import (
-    AttributeEstimate,
-    JobAttributesResult,
+from app.job_ranking.occupation_skills.types import (
     OccupationSkillsRelevanceDecision,
     OccupationSkillsRelevanceResult,
+)
+from app.job_ranking.ranked_document import (
+    PIPELINE_SCHEMA_VERSION,
+    build_llm_reranker_meta,
+    build_ranked_job_document,
+    classifier_metadata_from_context,
+    derive_skill_groups_origin_uuids,
+    occupation_to_skills_with_meta,
+    work_activity_names_for_ids,
 )
 from utils.classifier_linked_entities import EscoSkillCandidate, MappedEscoSkills
 
@@ -497,12 +500,23 @@ class TestOccupationToSkillsWithMeta:
 class TestWorkActivityNamesForIds:
     def test_resolves_real_resource_ids(self, make_settings):
         s = make_settings()
-        names = work_activity_names_for_ids(("4.A.4.b.4",), settings=s)
+        onet = JobAttributesRepository().load_onet_work_activities(s)
+        names = work_activity_names_for_ids(("4.A.4.b.4",), onet)
         assert names and isinstance(names[0], str) and names[0]
 
     def test_unknown_id_returns_empty_string(self, make_settings):
         s = make_settings()
-        assert work_activity_names_for_ids(("zzz.unknown",), settings=s) == [""]
+        onet = JobAttributesRepository().load_onet_work_activities(s)
+        assert work_activity_names_for_ids(("zzz.unknown",), onet) == [""]
+
+
+class TestDeriveSkillGroupsOriginUuids:
+    def test_unions_and_sorts_parent_groups(self):
+        groups = {"s1": frozenset({"g2", "g1"}), "s2": frozenset({"g1"})}
+        assert derive_skill_groups_origin_uuids(["s1", "s2", "", "unknown"], groups) == [
+            "g1",
+            "g2",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +571,7 @@ class TestBuildRankedJobDocument:
         s = make_settings()
         ctx = _ctx()
         out = build_ranked_job_document(
-            classified_doc={"_id": "doc-1"}, ctx=ctx, settings=s, ja=None
+            classified_doc={"_id": "doc-1"}, ctx=ctx, settings=s, ja=None, onet_work_activities=()
         )
         assert out is None
 
@@ -569,6 +583,7 @@ class TestBuildRankedJobDocument:
             ctx=ctx,
             settings=s,
             ja=_ja_minimal(),
+            onet_work_activities=(),
         )
         assert out is not None
         # Regression: any new top-level key needs an explicit test update.
@@ -609,6 +624,7 @@ class TestBuildRankedJobDocument:
             ctx=ctx,
             settings=s,
             ja=_ja_minimal(),
+            onet_work_activities=(),
             skill_ranker=(["Python"], [], mapped, ""),
             ranker_candidates=[cand],
             classifier_skill_candidates=[cand],

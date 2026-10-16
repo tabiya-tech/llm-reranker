@@ -11,7 +11,7 @@ uvicorn api:app --host 0.0.0.0 --port 8000
 
 The OpenAPI spec is at `/openapi.json`, with interactive docs at `/docs`. Every request
 and response field below is also described there, with examples. The models are in
-`app/api_models.py`.
+`app/job_ranking/routes/types.py`.
 
 ## Endpoints
 
@@ -134,7 +134,7 @@ never contains the rejected request body or a raw exception message.
 | `500` | A configured provider was called and the call failed, e.g. retries exhausted (`RERANKER_LLM_MAX_ATTEMPTS`) (`LlmInvocationError`) | `{"detail": "LLM invocation error: LlmInvocationError"}` |
 | `500` | The model responded, but its JSON didn't parse or match the expected shape (`LlmParseError`) | `{"detail": "LLM response parse error: LlmParseError"}` |
 | `500` | Any other unexpected error | `{"detail": "Internal server error: RuntimeError"}` |
-| `503` | The service is still starting up and the taxonomy is not loaded | `{"detail": "Service not ready — taxonomy not loaded."}` |
+| `503` | The ranking services could not be built (model or default language pack) | `{"detail": "Service not ready: FileNotFoundError"}` |
 
 A misconfigured model (unknown provider, missing key or model id) fails at **startup**,
 not on a request: the container fails its startup probe.
@@ -153,15 +153,15 @@ not on a request: the container fails its startup probe.
 
 ## How the batch CLI relates
 
-`python main.py` and `POST /rank` call the same function for each job:
-`app.pipeline.process_single_job`. Given the same document and configuration, both run
+`python main.py` and `POST /rank` call the same service for each job:
+`JobRankingService.rank` (`app/job_ranking/service.py`). Given the same document and configuration, both run
 the same steps, make the same LLM calls with the same prompts, and build the same ranked
 document. The two differ only in what happens around that call:
 
 | | API | Batch CLI |
 |---|---|---|
 | Input | One document in the request body | Documents streamed from `MONGODB_SOURCE_COLLECTION` |
-| Per-job pipeline | `process_single_job` | `process_single_job`, via `app/batch_rank_one.py` |
+| Per-job pipeline | `JobRankingService.rank` | `JobRankingService.rank`, via `BatchJobRanker` (`app/batch/job_ranker.py`) |
 | Per-step log lines | — | One line per step, with counts and timings |
 | `--log-llm{1,2,3}-prompt` | — | Logs each assembled prompt |
 | Job embedding (`RERANKER_ENABLE_JOB_EMBEDDING`) | Not computed | Adds `job_embedding` (plus `raw_embedding` when whitening is on) and `llm_reranker_meta.embedding` |

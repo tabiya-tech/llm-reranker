@@ -110,6 +110,7 @@ _RERANKER_ENV_VARS = (
     "RERANKER_ENABLE_LLM3",
     "RERANKER_LLM3_MODE",
     "RERANKER_RUN_WA_ENRICHMENT",
+    "RERANKER_SKIP_ALREADY_RANKED",
     "RERANKER_FAIL_ON_WA_ENRICHMENT_ERROR",
     "RERANKER_SYNC_IS_ACTIVE_FROM_CLOSING_DATE",
     "RERANKER_CUTOFF_DATE",
@@ -177,40 +178,6 @@ def _clear_settings_caches() -> None:
         app_languages._locale_index.cache_clear()
     except Exception:
         pass
-    try:
-        from app import schemas as app_schemas
-
-        app_schemas._load_job_attributes_schema_cached.cache_clear()
-        app_schemas._load_onet_work_activities_cached.cache_clear()
-    except Exception:
-        pass
-    try:
-        from utils import skill_groups
-
-        skill_groups._load_skill_to_groups_map.cache_clear()
-    except Exception:
-        pass
-    try:
-        from utils import occupation_to_skills_mapping
-
-        if hasattr(occupation_to_skills_mapping, "_load_occupations_lookup_cached"):
-            occupation_to_skills_mapping._load_occupations_lookup_cached.cache_clear()
-    except Exception:
-        pass
-    try:
-        from utils import concat_whitening
-
-        concat_whitening.reset_concat_whitening_cache()
-    except Exception:
-        pass
-    try:
-        from app.llm import reset_llm_clients
-
-        # A cached client is bound to the LlmConfig it was built from, so a test that
-        # changes RERANKER_LLM_* must not inherit the previous test's client.
-        reset_llm_clients()
-    except Exception:
-        pass
 
 
 @pytest.fixture(autouse=True)
@@ -227,6 +194,10 @@ def _tracing_off(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
     tracing._client = None
     tracing._config = tracing.TracingConfig()
+    from app.job_ranking.get_job_ranking_service import reset_job_ranking_services
+
+    # The API's ranking services are a process-wide singleton; a test must not inherit another's.
+    reset_job_ranking_services()
 
 
 @pytest.fixture

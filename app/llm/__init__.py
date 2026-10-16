@@ -14,13 +14,15 @@ from app.llm.base import (
 from app.llm.errors import LlmConfigurationError, LlmError, LlmInvocationError
 from app.llm.factory import (
     build_llm_client,
+    build_traced_llm_client,
     describe_available_providers,
-    get_llm_client,
+    describe_llm_configuration_error,
     load_llm_client_class,
-    reset_llm_clients,
 )
+from app.llm.traced import TracedLlmClient
 
 __all__ = [
+    "TracedLlmClient",
     "CUSTOM_PROVIDER",
     "DEFAULT_TEMPERATURE",
     "LlmClient",
@@ -32,10 +34,10 @@ __all__ = [
     "PROVIDER_BASE_URL_ENV_VARS",
     "PROVIDER_CLASS_PATHS",
     "build_llm_client",
+    "build_traced_llm_client",
+    "describe_llm_configuration_error",
     "describe_available_providers",
-    "get_llm_client",
     "load_llm_client_class",
     "normalise_provider",
-    "reset_llm_clients",
     "resolve_provider_class_path",
 ]

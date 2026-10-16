@@ -5,7 +5,7 @@ We focus on:
 - ``build_job_description_context`` field-resolution precedence rules
   (top-level vs metadata, dotted paths, multi-key first-match-wins).
 - ``_scalar_to_str`` value coercion.
-- ``_upsert_filter_for_llm_results`` selector logic (covers all three
+- ``ranked_job_upsert`` key selection (covers all three
   fall-back paths and the error case).
 
 The repositories are tested against a fake collection in ``test_repositories.py``.
@@ -28,7 +28,8 @@ from app.job_context import (
     _scalar_to_str,
     build_job_description_context,
 )
-from app.ranked_jobs.upsert import _upsert_filter_for_llm_results
+from app.ranked_jobs.types import RankedJobKey, RankedJobUpsert
+from app.ranked_jobs.upsert import ranked_job_upsert
 
 # ---------------------------------------------------------------------------
 # _scalar_to_str
@@ -204,7 +205,7 @@ class TestBuildJobDescriptionContext:
 
 
 # ---------------------------------------------------------------------------
-# _upsert_filter_for_llm_results
+# ranked_job_upsert
 # ---------------------------------------------------------------------------
 
 
@@ -231,27 +232,22 @@ def _ctx(**overrides):
     return JobDescriptionContext(**base)
 
 
-class TestUpsertFilterForLlmResults:
-    def test_prefers_job_id(self, make_settings):
-        s = make_settings()
+class TestRankedJobUpsert:
+    def test_prefers_job_id(self):
         ctx = _ctx(job_id="jid-1", job_fingerprint="fp")
-        flt = _upsert_filter_for_llm_results({"_id": "doc-1"}, ctx, s)
-        assert flt == {s.mongo_field_job_id: "jid-1"}
+        doc = {"x": 1}
+        assert ranked_job_upsert({"_id": "doc-1"}, ctx, doc) == RankedJobUpsert(
+            RankedJobKey.JOB_ID, "jid-1", doc
+        )
 
-    def test_falls_back_to_fingerprint(self, make_settings):
-        s = make_settings()
-        ctx = _ctx(job_fingerprint="fp")
-        flt = _upsert_filter_for_llm_results({"_id": "doc-1"}, ctx, s)
-        assert flt == {s.mongo_field_job_fingerprint: "fp"}
+    def test_falls_back_to_fingerprint(self):
+        upsert = ranked_job_upsert({"_id": "doc-1"}, _ctx(job_fingerprint="fp"), {})
+        assert (upsert.key, upsert.key_value) == (RankedJobKey.JOB_FINGERPRINT, "fp")
 
-    def test_falls_back_to_source_classified_id(self, make_settings):
-        s = make_settings()
-        ctx = _ctx()
-        flt = _upsert_filter_for_llm_results({"_id": "doc-1"}, ctx, s)
-        assert flt == {"source_classified_id": "doc-1"}
+    def test_falls_back_to_source_classified_id(self):
+        upsert = ranked_job_upsert({"_id": "doc-1"}, _ctx(), {})
+        assert (upsert.key, upsert.key_value) == (RankedJobKey.SOURCE_CLASSIFIED_ID, "doc-1")
 
-    def test_raises_when_no_identifier(self, make_settings):
-        s = make_settings()
-        ctx = _ctx()
+    def test_raises_when_no_identifier(self):
         with pytest.raises(ValueError, match="no job id, fingerprint, or source _id"):
-            _upsert_filter_for_llm_results({}, ctx, s)
+            ranked_job_upsert({}, _ctx(), {})

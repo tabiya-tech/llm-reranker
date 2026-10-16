@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
-import threading
 
 from app.llm.base import (
     CUSTOM_PROVIDER,
@@ -12,11 +11,9 @@ from app.llm.base import (
     LlmConfig,
 )
 from app.llm.errors import LlmConfigurationError
+from app.llm.traced import TracedLlmClient
 
 logger = logging.getLogger(__name__)
-
-_clients: dict[LlmConfig, LlmClient] = {}
-_lock = threading.Lock()
 
 
 def _split_class_path(dotted: str) -> tuple[str, str]:
@@ -122,38 +119,29 @@ def build_llm_client(config: LlmConfig) -> LlmClient:
     return client
 
 
-def get_llm_client(config: LlmConfig) -> LlmClient:
-    """Process-scoped client for ``config``, built on first use.
-
-    Thread-safe: the batch CLI builds this from whichever worker thread gets there
-    first, and every other worker must reuse that instance.
-    """
-    existing = _clients.get(config)
-    if existing is not None:
-        return existing
-    with _lock:
-        existing = _clients.get(config)
-        if existing is not None:
-            return existing
-        client = build_llm_client(config)
-        _clients[config] = client
-        return client
-
-
-def reset_llm_clients() -> None:
-    """Drop every cached client (closing it first). Used by tests and by ``--language`` reruns."""
-    with _lock:
-        cached = list(_clients.values())
-        _clients.clear()
-    for client in cached:
-        try:
-            client.close()
-        except Exception as e:  # a failed close must not mask the caller's intent
-            logger.debug("Ignoring error closing LLM client %r: %s", client, e)
-
-
 def describe_available_providers() -> str:
     """Human-readable provider list for error messages and ``--help`` style output."""
     rows = [f"  {name:<18} {path}" for name, path in sorted(PROVIDER_CLASS_PATHS.items())]
     rows.append(f"  {CUSTOM_PROVIDER:<18} any dotted path in RERANKER_LLM_CLIENT_CLASS")
     return "\n".join(rows)
+
+
+def build_traced_llm_client(config: LlmConfig) -> TracedLlmClient:
+    """The configured model, traced. Raises :class:`LlmConfigurationError` on a bad selection."""
+    return TracedLlmClient(build_llm_client(config))
+
+
+def describe_llm_configuration_error(config: LlmConfig | None, error: Exception) -> str:
+    """Operator-facing message for a model selection that cannot be built."""
+    selection = (
+        f"Configured selection: provider={config.provider} "
+        f"model={config.model or '(unset)'} class={config.client_class}\n\n"
+        if config is not None
+        else ""
+    )
+    return (
+        f"LLM configuration error: {error}\n\n"
+        f"{selection}"
+        f"Available providers (RERANKER_LLM_PROVIDER):\n"
+        f"{describe_available_providers()}"
+    )

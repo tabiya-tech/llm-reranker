@@ -10,7 +10,6 @@ from .classifier_linked_entities import (
     parse_skill_ranker_json,
     skills_to_prompt_dicts,
 )
-from .skill_groups import derive_skill_groups_origin_uuids
 
 __all__ = [
     "EscoSkillCandidate",
@@ -23,5 +22,4 @@ __all__ = [
     "map_skill_labels_to_esco_uris",
     "parse_skill_ranker_json",
     "skills_to_prompt_dicts",
-    "derive_skill_groups_origin_uuids",
 ]

@@ -17,23 +17,20 @@ Tabiya ``SKILLID`` → ESCO via :mod:`utils.uuid_to_tabiya_id` (``skills.csv``).
 
 from __future__ import annotations
 
-import csv
 import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from utils.classifier_linked_entities import (
     EscoSkillCandidate,
     LinkedEntityCandidate,
     group_linked_entities_by_type,
     linked_entity_preferred_taxonomy_id,
 )
-from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap, cell_to_esco_uuid, parse_uuid_history_cell
+from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap, cell_to_esco_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -66,357 +63,6 @@ def cell_to_taxonomy_id(cell: str) -> str | None:
 def esco_skill_uri_for_uuid(uuid: str) -> str:
     u = uuid.strip().lower()
     return f"http://data.europa.eu/esco/skill/{u}"
-
-
-def _infer_skill_label_column(fieldnames: list[str]) -> str | None:
-    """
-    Column holding the **skill** display name — not occupation text or ``SIGNALLINGVALUELABEL``
-    (that field describes relation strength, e.g. \"high\", not the skill concept title).
-    """
-    lower = {h.lower().replace(" ", "_"): h for h in fieldnames if h and str(h).strip()}
-    for key in (
-        "skill_label",
-        "skill_preferred_label",
-        "skillpreferredlabel",
-        "relatedskill_label",
-        "skill_name",
-        "preferred_label",
-        "preferredlabel",
-        "skill_title",
-        "label",
-    ):
-        if key in lower:
-            return lower[key]
-    return None
-
-
-def _infer_relation_type_column(fieldnames: list[str]) -> str | None:
-    lower = {h.lower().replace(" ", "_"): h for h in fieldnames if h and str(h).strip()}
-    for key in ("relationtype", "relation_type", "rel_type", "relation_kind"):
-        if key in lower:
-            return lower[key]
-    for h in fieldnames:
-        if h and str(h).strip():
-            hl = h.lower().replace(" ", "_")
-            if "relation" in hl and "type" in hl:
-                return h
-    return None
-
-
-def _infer_occupation_type_column(fieldnames: list[str]) -> str | None:
-    """Column for relation row kind, e.g. ``escooccupation`` / ``localoccupation`` (``OCCUPATIONTYPE``)."""
-    lower = {h.lower().replace(" ", "_"): h for h in fieldnames if h and str(h).strip()}
-    for key in ("occupationtype", "occupation_type", "occ_type", "occupation_kind"):
-        if key in lower:
-            return lower[key]
-    for h in fieldnames:
-        if h and str(h).strip():
-            hl = h.lower().replace(" ", "_")
-            if "occupation" in hl and "type" in hl and "relation" not in hl:
-                return h
-    return None
-
-
-def _infer_signalling_value_column(fieldnames: list[str]) -> str | None:
-    lower = {h.lower().replace(" ", "_"): h for h in fieldnames if h and str(h).strip()}
-    for key in ("signallingvalue", "signalingvalue", "signal_value", "signalling_value"):
-        if key in lower:
-            return lower[key]
-    return None
-
-
-def _infer_signalling_label_column(fieldnames: list[str]) -> str | None:
-    lower = {h.lower().replace(" ", "_"): h for h in fieldnames if h and str(h).strip()}
-    for key in (
-        "signallingvaluelabel",
-        "signalingvaluelabel",
-        "signal_label",
-        "signalling_value_label",
-    ):
-        if key in lower:
-            return lower[key]
-    return None
-
-
-def _signalling_strength_key(
-    signalling_label: str,
-    signalling_value: str,
-) -> tuple[int, float]:
-    """
-    Lower tuple sorts earlier = stronger relation for menu ordering.
-
-    Uses ``SIGNALLINGVALUELABEL`` (high / medium / low) when present, then numeric
-    ``SIGNALLINGVALUE`` when parseable (higher is stronger).
-    """
-    lab = (signalling_label or "").strip().lower()
-    lab_rank = {"high": 0, "medium": 1, "low": 2}.get(lab, 3)
-    raw = (signalling_value or "").strip()
-    try:
-        v = float(raw)
-    except ValueError:
-        v = float("-inf")
-    return (lab_rank, -v)
-
-
-def _merge_signalling_cells(
-    prev: dict[str, str] | None,
-    value_cell: str,
-    label_cell: str,
-) -> dict[str, str]:
-    """Pick the stronger of two CSV rows for the same occupation–skill pair."""
-    cur = {
-        "signalling_value": (value_cell or "").strip(),
-        "signalling_label": (label_cell or "").strip().lower(),
-    }
-    if prev is None:
-        return cur
-    if not cur["signalling_value"] and not cur["signalling_label"]:
-        return prev
-    if not prev.get("signalling_value") and not prev.get("signalling_label"):
-        return cur
-    ka = _signalling_strength_key(
-        prev.get("signalling_label", ""), prev.get("signalling_value", "")
-    )
-    kc = _signalling_strength_key(cur["signalling_label"], cur["signalling_value"])
-    return prev if ka <= kc else cur
-
-
-_RELTYPE_PRIORITY = {"essential": 0, "optional": 1, "unspecified": 99}
-
-
-def _merge_relation_types(prev: str | None, new: str) -> str:
-    """Prefer *essential* over *optional* over other strings when duplicates exist for one skill."""
-    new_n = (new or "").strip().lower() or "unspecified"
-    if prev is None:
-        return new_n
-    pa = _RELTYPE_PRIORITY.get(prev, 50)
-    na = _RELTYPE_PRIORITY.get(new_n, 50)
-    if na < pa:
-        return new_n
-    return prev
-
-
-def _infer_occ_skill_columns(fieldnames: list[str]) -> tuple[str | None, str | None]:
-    if not fieldnames:
-        return None, None
-    norm_map = {h: h.strip() for h in fieldnames if h and str(h).strip()}
-    lower = {h.lower().replace(" ", "_"): h for h in norm_map.values()}
-
-    def pick(*candidates: str) -> str | None:
-        for c in candidates:
-            if c in lower:
-                return lower[c]
-        return None
-
-    occ = pick(
-        "occupationid",
-        "occupation_uuid",
-        "occupation_id",
-        "occupation_uri",
-        "occupationconcepturi",
-        "occupation_concept_uri",
-    )
-    sk = pick(
-        "skillid",
-        "skill_uuid",
-        "skill_id",
-        "skill_uri",
-        "relatedskill",
-        "skillconcepturi",
-        "skill_concept_uri",
-    )
-    if occ is None or sk is None:
-        for h in norm_map.values():
-            hl = h.lower()
-            if occ is None and "occupation" in hl and "type" not in hl:
-                occ = h
-            elif sk is None and "skill" in hl and "occupation" not in hl and "type" not in hl:
-                sk = h
-    if len(norm_map) == 2 and (occ is None or sk is None):
-        vals = list(norm_map.values())
-        occ, sk = vals[0], vals[1]
-    return occ, sk
-
-
-def load_occupation_skill_relations(
-    path_str: str,
-    *,
-    accepted_occupation_types: frozenset[str] | None = None,
-) -> tuple[
-    dict[str, frozenset[str]],
-    dict[str, str],
-    dict[str, dict[str, str]],
-    dict[str, dict[str, dict[str, str]]],
-]:
-    """
-    - ``OCCUPATIONID`` → set of ``SKILLID`` (union for reranker).
-    - Optional per-skill display labels.
-    - ``occupation_id`` → ``skill_id`` → ``RELATIONTYPE`` (e.g. essential / optional), normalized lowercase.
-    - ``occupation_id`` → ``skill_id`` → ``{signalling_value, signalling_label}`` from CSV signalling
-      columns when present (used to prioritize the LLM3 menu when capping).
-
-    When ``accepted_occupation_types`` is set, only CSV rows whose ``OCCUPATIONTYPE`` cell (case-insensitive)
-    is in that set are loaded (e.g. ``escooccupation`` vs ``localoccupation``). If the column is missing,
-    a warning is logged once and **no** type filtering is applied.
-    """
-    empty = {}, {}, {}, {}
-    path = Path(path_str)
-    if not path.is_file():
-        logger.warning("occupation_to_skill_relations.csv not found: %s", path)
-        return empty
-
-    occupation_to_skills: dict[str, set[str]] = {}
-    skill_labels: dict[str, str] = {}
-    occ_skill_relation: dict[str, dict[str, str]] = {}
-    occ_skill_signalling: dict[str, dict[str, dict[str, str]]] = {}
-    with path.open(encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            return empty
-        fn = list(reader.fieldnames)
-        occ_col, sk_col = _infer_occ_skill_columns(fn)
-        label_col = _infer_skill_label_column(fn)
-        relation_col = _infer_relation_type_column(fn)
-        sig_val_col = _infer_signalling_value_column(fn)
-        sig_lab_col = _infer_signalling_label_column(fn)
-        occ_type_col = _infer_occupation_type_column(fn)
-        missing_occ_type_warned = False
-        if not relation_col:
-            logger.warning(
-                "No RELATIONTYPE-like column in %s (headers=%s); using relation_type=%r for all rows",
-                path.name,
-                reader.fieldnames,
-                "unspecified",
-            )
-        if not occ_col or not sk_col:
-            logger.warning(
-                "Could not infer occupation/skill columns in %s (headers=%s)",
-                path,
-                reader.fieldnames,
-            )
-            return empty
-        for row in reader:
-            if accepted_occupation_types:
-                if not occ_type_col:
-                    if not missing_occ_type_warned:
-                        logger.warning(
-                            "occupation_to_skill_relations: OCCUPATION_SKILL_RELATION_OCCUPATION_TYPES is set "
-                            "but no OCCUPATIONTYPE-like column in %s (headers=%s); loading all rows",
-                            path.name,
-                            reader.fieldnames,
-                        )
-                        missing_occ_type_warned = True
-                else:
-                    ot = (row.get(occ_type_col) or "").strip().lower()
-                    if ot not in accepted_occupation_types:
-                        continue
-            ou = cell_to_taxonomy_id(row.get(occ_col) or "")
-            su = cell_to_taxonomy_id(row.get(sk_col) or "")
-            if not ou or not su:
-                continue
-            occupation_to_skills.setdefault(ou, set()).add(su)
-            if label_col:
-                lab = (row.get(label_col) or "").strip()
-                if lab:
-                    skill_labels[su] = lab
-            if relation_col:
-                raw_rel = (row.get(relation_col) or "").strip().lower()
-                rel = raw_rel if raw_rel else "unspecified"
-            else:
-                rel = "unspecified"
-            inner = occ_skill_relation.setdefault(ou, {})
-            inner[su] = _merge_relation_types(inner.get(su), rel)
-            if sig_val_col or sig_lab_col:
-                raw_v = (row.get(sig_val_col) or "").strip() if sig_val_col else ""
-                raw_l = (row.get(sig_lab_col) or "").strip() if sig_lab_col else ""
-                if raw_v or raw_l:
-                    sig_map = occ_skill_signalling.setdefault(ou, {})
-                    sig_map[su] = _merge_signalling_cells(sig_map.get(su), raw_v, raw_l)
-
-    occ_frozen = {k: frozenset(v) for k, v in occupation_to_skills.items()}
-    if accepted_occupation_types:
-        n_pairs = sum(len(v) for v in occ_frozen.values())
-        logger.info(
-            "occupation_to_skill_relations %s | OCCUPATIONTYPE filter=%s | occupations=%s pairs=%s",
-            path.name,
-            ",".join(sorted(accepted_occupation_types)),
-            len(occ_frozen),
-            n_pairs,
-        )
-
-    return (
-        occ_frozen,
-        skill_labels,
-        occ_skill_relation,
-        occ_skill_signalling,
-    )
-
-
-def load_occupations_lookup(path_str: str) -> tuple[dict[str, str], frozenset[str]]:
-    """
-    From ``occupations.csv``: map lookup keys (ESCO uuid, Tabiya ``ID``, …) → row ``ID``.
-
-    Parsed once per resolved path per process (cached); treat returned ``bridge`` as read-only.
-
-    Each row contributes:
-    - ``ID`` → itself;
-    - every UUID in ``UUIDHISTORY`` → ``ID``;
-    - ESCO uuid from ``ORIGINURI`` → ``ID`` (when parseable).
-    """
-    path = Path(path_str)
-    try:
-        key = str(path.resolve())
-    except OSError:
-        key = str(path)
-    return _load_occupations_lookup_cached(key)
-
-
-@lru_cache(maxsize=8)
-def _load_occupations_lookup_cached(resolved_path: str) -> tuple[dict[str, str], frozenset[str]]:
-    path = Path(resolved_path)
-    if not path.is_file():
-        logger.warning("occupations.csv not found: %s", path)
-        return {}, frozenset()
-
-    bridge: dict[str, str] = {}
-    all_ids: set[str] = set()
-    with path.open(encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            return {}, frozenset()
-        lower = {str(h).lower().strip(): h for h in reader.fieldnames}
-        id_col = lower.get("id")
-        hist_col = lower.get("uuidhistory")
-        origin_col = lower.get("originuri")
-        if not id_col or not hist_col:
-            logger.warning(
-                "occupations.csv must have ID and UUIDHISTORY (headers=%s)",
-                reader.fieldnames,
-            )
-            return {}, frozenset()
-        for row in reader:
-            raw_id = (row.get(id_col) or "").strip()
-            if not raw_id:
-                continue
-            tid = raw_id.lower()
-            all_ids.add(tid)
-            bridge[tid] = tid
-            for esco_u in parse_uuid_history_cell(row.get(hist_col)):
-                bridge[esco_u.lower()] = tid
-            if origin_col:
-                origin = (row.get(origin_col) or "").strip()
-                if origin:
-                    ou = cell_to_esco_uuid(origin)
-                    if ou:
-                        bridge[ou.lower()] = tid
-
-    logger.info(
-        "Loaded occupations.csv %s: %s distinct occupation id(s), %s lookup key(s)",
-        path.name,
-        len(all_ids),
-        len(bridge),
-    )
-    return bridge, frozenset(all_ids)
 
 
 def _classified_occupation_dicts_for_taxonomy(
@@ -518,7 +164,7 @@ def resolve_occupation_tabiya_id_for_skill_relations(
     bridge: Mapping[str, str],
     all_ids: frozenset[str],
     *,
-    settings: Settings | None = None,
+    settings: Settings,
 ) -> str | None:
     """
     Map one classifier occupation row → Tabiya ``ID`` used as ``OCCUPATIONID`` in relations CSV.
@@ -529,14 +175,13 @@ def resolve_occupation_tabiya_id_for_skill_relations(
 
     Relations rows remain keyed by Tabiya ids; this only changes **which** bridge key wins.
     """
-    s = settings or get_settings()
-    mode = (s.occupation_relation_lookup or "tabiya_bridge").strip().lower()
+    mode = (settings.occupation_relation_lookup or "tabiya_bridge").strip().lower()
     if mode == "esco_uuid_bridge":
         for k in _esco_bridge_keys_for_occupation_row(le):
             tid = _bridge_tabiya_for_key(k, bridge, all_ids)
             if tid:
                 return tid
-        if s.occupation_relation_esco_fallback:
+        if settings.occupation_relation_esco_fallback:
             return _resolve_first_tabiya_id_for_linked_entity(le, bridge, all_ids)
         return None
     return _resolve_first_tabiya_id_for_linked_entity(le, bridge, all_ids)
@@ -547,7 +192,7 @@ def tabiya_occupation_id_for_candidate(
     bridge: Mapping[str, str],
     all_ids: frozenset[str],
     *,
-    settings: Settings | None = None,
+    settings: Settings,
 ) -> str | None:
     """Resolve Tabiya occupation ``ID`` for one classifier occupation row (``occupations.csv``)."""
     le: dict[str, Any] = {
@@ -609,7 +254,7 @@ class OccupationTaxonomyStats:
 def _build_occupation_taxonomy_stats(
     classified_doc: dict[str, Any],
     settings: Settings,
-    bridge: dict[str, str],
+    bridge: Mapping[str, str],
     all_ids: frozenset[str],
     occupation_to_skills: Mapping[str, frozenset[str]],
     classified_skill_count: int,
@@ -652,7 +297,7 @@ def _build_occupation_taxonomy_stats(
 
 
 def _lookup_keys_for_occupation_row(le: dict[str, Any]) -> list[str]:
-    """Normalized keys to try against ``load_occupations_lookup`` bridge."""
+    """Normalized keys to try against the ``occupations.csv`` bridge (``TaxonomyContext.occ_bridge``)."""
     keys: list[str] = []
     seen: set[str] = set()
 
@@ -686,11 +331,10 @@ def _lookup_keys_for_occupation_row(le: dict[str, Any]) -> list[str]:
 
 def resolve_tabiya_occupation_ids_for_relations(
     classified_doc: dict[str, Any],
-    occupations_csv_path: str,
+    bridge: Mapping[str, str],
+    all_ids: frozenset[str],
     *,
-    settings: Settings | None = None,
-    bridge: dict[str, str] | None = None,
-    all_ids: frozenset[str] | None = None,
+    settings: Settings,
 ) -> list[str]:
     """
     Tabiya occupation ``ID`` values (as in ``occupation_to_skill_relations.OCCUPATIONID``)
@@ -700,18 +344,17 @@ def resolve_tabiya_occupation_ids_for_relations(
     bridge + optional fallback). With ``tabiya_bridge``, multiple keys on the same classifier row
     can still append multiple distinct ids when each maps through the bridge.
     """
-    s = settings or get_settings()
-    if bridge is None or all_ids is None:
-        bridge, all_ids = load_occupations_lookup(occupations_csv_path)
     if not bridge:
         return []
 
     out: list[str] = []
     seen: set[str] = set()
-    mode = (s.occupation_relation_lookup or "tabiya_bridge").strip().lower()
-    for le in _classified_occupation_dicts_for_taxonomy(classified_doc, s):
+    mode = (settings.occupation_relation_lookup or "tabiya_bridge").strip().lower()
+    for le in _classified_occupation_dicts_for_taxonomy(classified_doc, settings):
         if mode == "esco_uuid_bridge":
-            tid = resolve_occupation_tabiya_id_for_skill_relations(le, bridge, all_ids, settings=s)
+            tid = resolve_occupation_tabiya_id_for_skill_relations(
+                le, bridge, all_ids, settings=settings
+            )
             if tid:
                 tl = tid.strip().lower()
                 if tl not in seen:
@@ -726,21 +369,6 @@ def resolve_tabiya_occupation_ids_for_relations(
                 seen.add(tid)
                 out.append(tid)
     return out
-
-
-def occupation_skill_taxonomy_for_settings(
-    settings: Settings | None = None,
-) -> tuple[
-    dict[str, frozenset[str]],
-    dict[str, str],
-    dict[str, dict[str, str]],
-    dict[str, dict[str, dict[str, str]]],
-]:
-    s = settings or get_settings()
-    return load_occupation_skill_relations(
-        str(s.occupation_to_skill_relations_path.resolve()),
-        accepted_occupation_types=s.occupation_skill_relation_occupation_types,
-    )
 
 
 def occupation_block_skill_counts(skills: list[dict[str, Any]]) -> dict[str, int]:
@@ -776,7 +404,7 @@ def build_occupation_to_skills_nested(
     occupation_to_skills: Mapping[str, frozenset[str]],
     occupation_skill_relation: Mapping[str, Mapping[str, str]],
     skill_labels: Mapping[str, str],
-    bridge: dict[str, str],
+    bridge: Mapping[str, str],
     all_ids: frozenset[str],
     skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
     occupation_skill_signalling: Mapping[str, Mapping[str, Mapping[str, str]]] | None = None,
@@ -944,7 +572,9 @@ def resolve_occupation_taxonomy_for_classified_job(
     skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
     occupation_skill_signalling: Mapping[str, Mapping[str, Mapping[str, str]]] | None = None,
     *,
-    settings: Settings | None = None,
+    occupations_bridge: Mapping[str, str],
+    occupations_all_ids: frozenset[str],
+    settings: Settings,
 ) -> tuple[list[str], OccupationTaxonomyStats, list[dict[str, Any]]]:
     """
     Resolve classifier occupations via ``occupations.csv`` and skills from the relations CSV.
@@ -960,11 +590,9 @@ def resolve_occupation_taxonomy_for_classified_job(
     labels = csv_skill_labels or {}
     occ_skill_rel = occupation_skill_relation or {}
     occ_sig = occupation_skill_signalling or {}
-    s = settings or get_settings()
-    occ_path = str(s.occupations_csv_path.resolve())
-    bridge, all_ids = load_occupations_lookup(occ_path)
+    bridge, all_ids = occupations_bridge, occupations_all_ids
     tabiya_occ_ids = resolve_tabiya_occupation_ids_for_relations(
-        classified_doc, occ_path, settings=s, bridge=bridge, all_ids=all_ids
+        classified_doc, bridge, all_ids, settings=settings
     )
 
     _taxonomy_rows, taxonomy_skill_ids = build_occupation_taxonomy_skill_rows(
@@ -977,7 +605,7 @@ def resolve_occupation_taxonomy_for_classified_job(
 
     occ_stats = _build_occupation_taxonomy_stats(
         classified_doc,
-        s,
+        settings,
         bridge,
         all_ids,
         occupation_to_skills,
@@ -988,7 +616,7 @@ def resolve_occupation_taxonomy_for_classified_job(
 
     occupation_to_skills_nested = build_occupation_to_skills_nested(
         classified_doc,
-        s,
+        settings,
         occupation_to_skills,
         occ_skill_rel,
         labels,

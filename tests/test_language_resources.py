@@ -28,11 +28,11 @@ RESOURCES = repo_root() / "resources"
 
 # Columns each loader looks up by name.
 REQUIRED_COLUMNS = {
-    # utils/occupation_to_skills_mapping.load_occupations_lookup
+    # app/taxonomy/csv_loaders.load_occupations_lookup
     "occupations.csv": {"ID", "ORIGINURI", "UUIDHISTORY", "PREFERREDLABEL"},
-    # utils/uuid_to_tabiya_id.load_skills_uuid_tabiya_map
+    # app/taxonomy/csv_loaders.load_skills_uuid_tabiya_map
     "skills.csv": {"ID", "ORIGINURI", "UUIDHISTORY", "PREFERREDLABEL"},
-    # utils/occupation_to_skills_mapping.load_occupation_skill_relations
+    # app/taxonomy/csv_loaders.load_occupation_skill_relations
     "occupation_to_skill_relations.csv": {
         "OCCUPATIONTYPE",
         "OCCUPATIONID",
@@ -40,7 +40,7 @@ REQUIRED_COLUMNS = {
         "SKILLID",
         "SIGNALLINGVALUELABEL",
     },
-    # utils/skill_groups._load_skill_to_groups_map
+    # app/taxonomy/csv_loaders.load_skill_to_groups_map
     "skill_hierarchy.csv": {
         "PARENTOBJECTTYPE",
         "CHILDOBJECTTYPE",

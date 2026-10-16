@@ -15,11 +15,9 @@ Maps (all lookup keys lowercased):
 
 from __future__ import annotations
 
-import csv
 import logging
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -96,73 +94,3 @@ class SkillsUuidTabiyaMap:
         if not u:
             return None
         return self.tabiya_by_esco.get(u)
-
-
-def load_skills_uuid_tabiya_map(path_str: str) -> SkillsUuidTabiyaMap:
-    path = Path(path_str)
-    idx = SkillsUuidTabiyaMap()
-    if not path.is_file():
-        logger.warning("skills.csv not found: %s", path)
-        return idx
-
-    n_rows = 0
-    unmapped_primary = 0
-    with path.open(encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames:
-            return idx
-        lower = {str(h).lower().strip(): h for h in reader.fieldnames}
-        id_col = lower.get("id")
-        pref_col = lower.get("preferredlabel")
-        hist_col = lower.get("uuidhistory")
-        origin_col = lower.get("originuri")
-        if not id_col or not pref_col:
-            logger.warning(
-                "skills.csv must have ID and PREFERREDLABEL (headers=%s)",
-                reader.fieldnames,
-            )
-            return idx
-
-        for row in reader:
-            n_rows += 1
-            raw_id = (row.get(id_col) or "").strip()
-            label = (row.get(pref_col) or "").strip()
-            if not raw_id or not label:
-                continue
-            tid = raw_id.lower()
-            idx.preferred_label[tid] = label
-
-            primary: str | None = None
-            if origin_col:
-                primary = cell_to_esco_uuid(row.get(origin_col) or "")
-            if not primary and hist_col:
-                hist = parse_uuid_history_cell(row.get(hist_col))
-                primary = hist[0] if hist else None
-            if primary:
-                idx.primary_esco_by_tabiya[tid] = primary
-                idx.tabiya_by_esco[primary] = tid
-            else:
-                unmapped_primary += 1
-
-            if hist_col:
-                for esco_u in parse_uuid_history_cell(row.get(hist_col)):
-                    idx.preferred_label[esco_u.lower()] = label
-                    if esco_u.lower() not in idx.tabiya_by_esco:
-                        idx.tabiya_by_esco[esco_u.lower()] = tid
-            if origin_col:
-                origin = (row.get(origin_col) or "").strip()
-                if origin:
-                    ou = cell_to_esco_uuid(origin)
-                    if ou:
-                        idx.preferred_label[ou.lower()] = label
-
-    logger.info(
-        "Loaded skills.csv %s: rows=%s label_keys=%s tabiya→esco=%s esco→tabiya=%s tabiya_rows_missing_primary_esco=%s",
-        path.name,
-        n_rows,
-        len(idx.preferred_label),
-        len(idx.primary_esco_by_tabiya),
-        len(idx.tabiya_by_esco),
-        unmapped_primary,
-    )
-    return idx

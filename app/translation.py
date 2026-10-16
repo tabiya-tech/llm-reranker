@@ -8,11 +8,11 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.languages import language_setting
 
 
-def reranker_prefer_translation(settings: Settings | None = None) -> bool:
+def reranker_prefer_translation(settings: Settings) -> bool:
     """Use ``translation`` on classified_jobs for LLM listing text (English MT path).
 
     ``RERANKER_PREFER_TRANSLATION`` wins when set. Otherwise the language decides: English
@@ -23,7 +23,6 @@ def reranker_prefer_translation(settings: Settings | None = None) -> bool:
     raw = (os.getenv("RERANKER_PREFER_TRANSLATION") or "").strip().lower()
     if raw:
         return raw not in ("0", "false", "no")
-    settings = settings or get_settings()
     return bool(language_setting(settings.language, "prefer_translation", True))
 
 
@@ -33,7 +32,7 @@ def overlay_translation_listing_fields(
     title: str | None,
     raw_jd: str | None,
     req_text: str | None,
-    settings: Settings | None = None,
+    settings: Settings,
 ) -> tuple[str | None, str | None, str | None]:
     """Prefer ``translation.text_en`` / ``fields_en`` when present (e.g. Argentina)."""
     if not reranker_prefer_translation(settings):

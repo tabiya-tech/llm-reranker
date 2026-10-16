@@ -1,7 +1,9 @@
-"""``POST /rank`` end to end, with the three LLM calls stubbed at ``app.pipeline``.
+"""``POST /rank`` end to end, with the three LLM steps stubbed.
 
-Real taxonomy resources are loaded by the app's lifespan, so request validation, Extended
-JSON unwrapping, the shared pipeline and the typed response are all exercised for real.
+The app's lifespan builds its ranking services through ``get_job_ranking_services``; the test swaps in
+a service whose LLM steps are stubs. Real taxonomy resources are loaded, so request
+validation, Extended JSON unwrapping, the shared pipeline and the typed response are all
+exercised for real.
 """
 
 from __future__ import annotations
@@ -14,18 +16,22 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 import api
-from app import pipeline as pipeline_module
-from app.api_models import RankedJobDocument, RankRequest
+from app.config import Settings
+from app.job_ranking import get_job_ranking_service
+from app.job_ranking.routes.types import RankedJobDocument, RankRequest
+from app.job_ranking.service import JobRankingService, JobRankingServiceFactory
+from app.llm import TracedLlmClient
 from app.llm.errors import LlmConfigurationError, LlmInvocationError, LlmParseError
-from app.pipeline import load_taxonomy_context, process_single_job
-from tests.test_pipeline_integration import (
-    _classified_doc,
-    _occupation_menu,
-    _relevance_result,
-    _stub_run_job_attributes_for_job,
-    _stub_run_occupation_skills_relevance_for_job,
-    _stub_run_skill_ranker_for_job,
+from tests.ranking_fakes import (
+    FixedOccupationTaxonomy,
+    FixedRankers,
+    StubJobAttributes,
+    StubOccupationRelevance,
+    build_ranking_service,
+    occupation_menu,
+    relevance_result,
 )
+from tests.ranking_fakes import classified_doc as _classified_doc
 
 
 def _extended_json_doc() -> dict[str, Any]:
@@ -38,18 +44,24 @@ def _extended_json_doc() -> dict[str, Any]:
     return doc
 
 
+def _serve(monkeypatch, ranking: JobRankingService) -> None:
+    """Make the app's lifespan serve ``ranking`` for every language."""
+
+    def _build(settings: Settings, llm: TracedLlmClient) -> JobRankingServiceFactory:
+        return FixedRankers(ranking)
+
+    monkeypatch.setattr(get_job_ranking_service, "build_job_ranking_service_factory", _build)
+
+
 @pytest.fixture
-def client(make_settings, monkeypatch):
-    make_settings(GEMINI_API_KEY="dummy", TARGET_COUNTRY="kenya")
-    monkeypatch.setattr(pipeline_module, "run_skill_ranker_for_job", _stub_run_skill_ranker_for_job)
-    monkeypatch.setattr(
-        pipeline_module, "run_job_attributes_for_job", _stub_run_job_attributes_for_job
-    )
-    monkeypatch.setattr(
-        pipeline_module,
-        "run_occupation_skills_relevance_for_job",
-        _stub_run_occupation_skills_relevance_for_job,
-    )
+def stub_llm2():
+    return StubJobAttributes()
+
+
+@pytest.fixture
+def client(make_settings, monkeypatch, stub_llm2):
+    s = make_settings(GEMINI_API_KEY="dummy", TARGET_COUNTRY="kenya")
+    _serve(monkeypatch, build_ranking_service(s, job_attributes=stub_llm2))
     with TestClient(api.app) as c:
         yield c
 
@@ -105,11 +117,11 @@ class TestRank:
         assert resp.status_code == 422
         assert "secret job text should not leak" not in resp.text
 
-    def test_generic_pipeline_failure_is_a_500_with_class_name_only(self, client, monkeypatch):
-        def _boom(*a, **kw):
+    def test_generic_pipeline_failure_is_a_500_with_class_name_only(self, client, stub_llm2):
+        def _boom():
             raise RuntimeError("model unavailable")
 
-        monkeypatch.setattr(pipeline_module, "run_job_attributes_for_job", _boom)
+        stub_llm2.answer = _boom
 
         resp = client.post("/rank", json=_classified_doc())
 
@@ -117,11 +129,11 @@ class TestRank:
         assert resp.json() == {"detail": "Internal server error: RuntimeError"}
         assert "model unavailable" not in resp.text
 
-    def test_llm_configuration_error_is_a_500_with_distinct_detail(self, client, monkeypatch):
-        def _boom(*a, **kw):
+    def test_llm_configuration_error_is_a_500_with_distinct_detail(self, client, stub_llm2):
+        def _boom():
             raise LlmConfigurationError("missing RERANKER_LLM_API_KEY")
 
-        monkeypatch.setattr(pipeline_module, "run_job_attributes_for_job", _boom)
+        stub_llm2.answer = _boom
 
         resp = client.post("/rank", json=_classified_doc())
 
@@ -129,11 +141,11 @@ class TestRank:
         assert resp.json() == {"detail": "LLM configuration error: LlmConfigurationError"}
         assert "missing RERANKER_LLM_API_KEY" not in resp.text
 
-    def test_llm_invocation_error_is_a_500_with_distinct_detail(self, client, monkeypatch):
-        def _boom(*a, **kw):
+    def test_llm_invocation_error_is_a_500_with_distinct_detail(self, client, stub_llm2):
+        def _boom():
             raise LlmInvocationError("Gemini API error (TimeoutError): deadline exceeded")
 
-        monkeypatch.setattr(pipeline_module, "run_job_attributes_for_job", _boom)
+        stub_llm2.answer = _boom
 
         resp = client.post("/rank", json=_classified_doc())
 
@@ -141,11 +153,11 @@ class TestRank:
         assert resp.json() == {"detail": "LLM invocation error: LlmInvocationError"}
         assert "deadline exceeded" not in resp.text
 
-    def test_llm_parse_error_is_a_500_with_distinct_detail(self, client, monkeypatch):
-        def _boom(*a, **kw):
+    def test_llm_parse_error_is_a_500_with_distinct_detail(self, client, stub_llm2):
+        def _boom():
             raise LlmParseError("Job attributes JSON must be an object")
 
-        monkeypatch.setattr(pipeline_module, "run_job_attributes_for_job", _boom)
+        stub_llm2.answer = _boom
 
         resp = client.post("/rank", json=_classified_doc())
 
@@ -183,33 +195,22 @@ class TestRankedJobDocumentModel:
     """The response model must describe exactly what ``build_ranked_job_document`` writes."""
 
     @pytest.mark.parametrize("mode", ["fold", "call"])
-    def test_round_trips_pipeline_output(self, make_settings, monkeypatch, mode):
+    def test_round_trips_pipeline_output(self, make_settings, mode):
         s = make_settings(
             GEMINI_API_KEY="dummy",
             TARGET_COUNTRY="kenya",
             RERANKER_ENABLE_LLM3="1",
             RERANKER_LLM3_MODE=mode,
         )
-        monkeypatch.setattr(
-            pipeline_module, "run_skill_ranker_for_job", _stub_run_skill_ranker_for_job
-        )
-        monkeypatch.setattr(
-            pipeline_module, "run_job_attributes_for_job", _stub_run_job_attributes_for_job
-        )
-        monkeypatch.setattr(
-            pipeline_module,
-            "run_occupation_skills_relevance_for_job",
-            lambda *a, **kw: _relevance_result(),
-        )
-        monkeypatch.setattr(
-            pipeline_module,
-            "resolve_occupation_taxonomy_for_classified_job",
-            lambda *a, **kw: ([], None, _occupation_menu()),
+        ranking = build_ranking_service(
+            s,
+            taxonomy_step=FixedOccupationTaxonomy(occupation_menu()),
+            occupation_relevance=StubOccupationRelevance(relevance_result),
         )
         doc = _classified_doc()
         doc["province"] = "Nairobi County"  # scraper enrichment: an extra metadata key
 
-        ranked = process_single_job(doc, load_taxonomy_context(s), settings=s).ranked_document
+        ranked = ranking.rank(doc).ranked_document
         assert ranked is not None
         model = RankedJobDocument.model_validate(ranked)
 
@@ -242,3 +243,36 @@ class TestOpenApi:
             assert ref.endswith("/ErrorResponse")
         assert op["parameters"][0]["name"] == "language"
         assert op["parameters"][0]["description"]
+
+
+class TestLanguageSelection:
+    """The route picks the language; the factory hands out that language's service."""
+
+    @pytest.fixture
+    def seen(self, client):
+        languages: list[str | None] = []
+        services = get_job_ranking_service.get_job_ranking_services()
+        real = services.for_language
+
+        def _spy(language):
+            languages.append(language)
+            return real(language)
+
+        services.for_language = _spy  # type: ignore[method-assign]
+        return languages
+
+    def test_no_language_means_the_service_default(self, client, seen):
+        assert client.post("/rank", json=_classified_doc()).status_code == 200
+        assert seen == [None]
+
+    def test_document_field_is_normalised(self, client, seen):
+        doc = _classified_doc()
+        doc["language"] = "AR-es"
+        assert client.post("/rank", json=doc).status_code == 200
+        assert seen == ["es"]
+
+    def test_query_parameter_wins_over_the_document(self, client, seen):
+        doc = _classified_doc()
+        doc["language"] = "es"
+        assert client.post("/rank?language=english", json=doc).status_code == 200
+        assert seen == ["en"]

@@ -10,14 +10,19 @@ def test_import_app_config():
     from app import config  # noqa: F401
 
 
-def test_import_app_pipeline():
-    from app import pipeline  # noqa: F401
+def test_import_use_case_modules():
+    from app.batch import service as batch_service  # noqa: F401
+    from app.job_ranking import service as job_ranking_service  # noqa: F401
 
 
-def test_import_app_ranked_job_schema():
-    from app import ranked_job_schema  # noqa: F401
+def test_import_app_ranked_document():
+    from app.job_ranking import ranked_document
 
-    assert ranked_job_schema.PIPELINE_SCHEMA_VERSION == "32"
+    assert ranked_document.PIPELINE_SCHEMA_VERSION == "32"
+
+
+def test_import_main():
+    import main  # noqa: F401
 
 
 def test_import_api():

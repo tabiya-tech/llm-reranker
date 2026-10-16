@@ -96,7 +96,7 @@ class TestSettingsLanguage:
 
     def test_files_absent_from_a_pack_fall_back_to_english(self, make_settings):
         # The Spanish pack ships no ONET file; English's is used rather than failing.
-        from app.schemas import onet_work_activities_path
+        from app.job_ranking.job_attributes.repository import onet_work_activities_path
 
         s = make_settings(RERANKER_LANGUAGE="es")
         path = onet_work_activities_path(s)
@@ -111,7 +111,7 @@ class TestSettingsLanguage:
 
 class TestPrompts:
     def test_spanish_prompts_come_from_the_spanish_pack(self, make_settings):
-        from app.prompt_resources import (
+        from app.job_ranking.prompts.repository import (
             load_job_attributes_system_prompt,
             load_skills_ranker_prompt_template,
         )
@@ -130,7 +130,7 @@ class TestPrompts:
         assert "{full_details}" in skills and "{skills_text}" in skills
 
     def test_english_prompts_are_unchanged(self, make_settings):
-        from app.prompt_resources import load_job_attributes_system_prompt
+        from app.job_ranking.prompts.repository import load_job_attributes_system_prompt
 
         s = make_settings(TARGET_COUNTRY="kenya")
         system = load_job_attributes_system_prompt(s)
@@ -139,7 +139,10 @@ class TestPrompts:
 
     def test_llm2_scaffolding_is_translated(self, make_settings):
         from app.job_context import JobDescriptionContext
-        from app.prompts import llm2_opening_line_from_context, prompt_label
+        from app.job_ranking.job_attributes.prompt import (
+            llm2_opening_line_from_context,
+            prompt_label,
+        )
 
         s = make_settings(RERANKER_LANGUAGE="es", TARGET_COUNTRY="argentina")
         ctx = JobDescriptionContext(
@@ -170,7 +173,7 @@ class TestPrompts:
         assert prompt_label("code", s) == "Código de la taxonomía"
 
     def test_missing_label_falls_back_to_english(self, make_settings):
-        from app.prompts import prompt_label
+        from app.job_ranking.job_attributes.prompt import prompt_label
 
         s = make_settings(RERANKER_LANGUAGE="es")
         # A key no pack defines resolves to itself rather than raising.

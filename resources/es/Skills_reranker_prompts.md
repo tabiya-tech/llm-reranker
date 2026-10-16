@@ -9,7 +9,7 @@ def create_skills_prompt_combined(
     Prompt de habilidades (LLM1), versión en español.
 
     Traducción de ``en/Skills_reranker_prompts.md``. El cargador
-    (``app/prompt_resources.py``) extrae el texto que está dentro de
+    (``app/job_ranking/prompts/repository.py``) extrae el texto que está dentro de
     ``return f\"\"\" … }}\"\"\"``, así que hay que mantener esa estructura y los
     marcadores ``{full_details}`` / ``{skills_text}`` tal como están.
 

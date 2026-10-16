@@ -4,7 +4,7 @@ Batch pipeline and HTTP API that processes classified job documents from MongoDB
 
 ## Pipeline
 
-One per-job pipeline, `app.pipeline.process_single_job`, used by both the API and the batch CLI:
+One per-job pipeline, `JobRankingService.rank` (`app/job_ranking/service.py`), used by both the API and the batch CLI:
 
 1. **Taxonomy** — The classifier's ESCO skill links become skill candidates. Its occupation links are looked up in the occupation-to-skill relations, which gives `occupation_to_skills` and an **occupation-skill menu**.
 2. **LLM 3: occupation–skill menu** — Controlled by `RERANKER_ENABLE_LLM3` and `RERANKER_LLM3_MODE`. In `fold` mode (the default) the menu skills are added to LLM 1's candidates and no LLM 3 call is made. In `call` mode a standalone LLM 3 call judges each menu skill's relevance to the job ad.
@@ -14,24 +14,88 @@ One per-job pipeline, `app.pipeline.process_single_job`, used by both the API an
 In the default configuration, each job makes two LLM calls: LLM 1 and LLM 2.
 
 
-## Repository layout
+## Architecture
 
-| Path | Purpose |
-|------|---------|
-| `api.py` | FastAPI service — single-job HTTP endpoint (Cloud Run Service); see [docs/API.md](docs/API.md) |
-| `app/api_models.py` | `/rank` request and response models (the OpenAPI spec) |
-| `main.py` | Batch CLI — process full collection (Cloud Run Job) |
-| `app/batch_rank_one.py` | Batch per-job step: runs the pipeline, logs it, builds the upsert |
-| `app/pipeline.py` | The per-job pipeline both of the above run |
-| `app/llm/` | The backing LLM: `LlmClient` interface, provider factory, provider implementations |
-| `app/observability/` | LLM tracing to Langfuse — generations and embeddings, per job |
-| `app/server_dependencies/` | The MongoDB connection provider; see [Data access](#data-access) |
-| `app/classified_jobs/`, `app/ranked_jobs/`, `app/run_logs/`, `app/run_state/` | One repository per MongoDB collection |
-| `app/` | Config, prompts, schemas, logging |
-| `utils/` | Classifier entities, ESCO–Tabiya mapping, occupation–skill relations |
-| `app/languages/` | Language registry — one config module per language |
-| `resources/<lang>/` | Per-language pack: taxonomy label CSVs, prompts, job-attribute schema |
-| `resources/` | Language-neutral artifacts (embedding whitening) |
+The code is organized **one module per use case**, as in compass's backend. A module holds
+everything its use case needs, and each file's name gives its role:
+
+| File | Role |
+|---|---|
+| `routes.py` / `routes/` | HTTP only: parse the request, call the service, shape the response (`routes/types.py`) |
+| `service.py`, `*_service.py` | Orchestration. Receives its repositories, clients and steps through its constructor |
+| `step.py`, `*_step.py` | One stage of the ranking pipeline (a reusable class run by a service) |
+| `repository.py`, `mongo_repository.py`, `*_repository.py` | All IO: one MongoDB collection, or one kind of resource file |
+| `types.py`, `prompt.py`, `parser.py`, `rules.py`, `menu.py` | Pure: data types, prompt building, response parsing, business rules — no IO |
+| `get_<x>_service.py` | The provider that builds the module's service and its dependencies (the FastAPI dependency for routes) |
+
+Dependencies point one way: routes → services / steps → repositories. The pure files can be used
+from any of them. Services never import routes or providers, repositories never import services,
+and pure files import no IO library. Only the `get_*` providers construct an `LlmClient` or an
+`EmbeddingClient`; everything else receives instances. `tests/test_architecture.py` checks these
+rules.
+
+### Modules
+
+```
+api.py                               HTTP entrypoint: mounts the routes, warms the ranking service
+main.py                              Batch entrypoint: parses arguments, calls BatchRankingService.run
+scripts/                             Local-only tools (whitening backfill); not in the image
+app/
+├── job_ranking/                     Rank one classified job (used by the API and the batch)
+│   ├── routes/                      POST /rank, GET /health; request/response models (types.py)
+│   ├── get_job_ranking_service.py   provider: the per-language JobRankingServiceFactory (the API's dependency)
+│   ├── service.py                   JobRankingService (the pipeline) + JobRankingServiceFactory (one per language)
+│   ├── types.py                     JobResult, JobStats, Llm3Outcome, PromptLogging
+│   ├── skill_ranker/                LLM 1: prompt.py, parser.py, step.py, types.py
+│   ├── job_attributes/              LLM 2: prompt.py, parser.py, step.py, types.py, repository.py (schema, ONET)
+│   ├── occupation_skills/           taxonomy_step.py, menu.py (LLM 3 menu), LLM 3 prompt / parser / relevance_step
+│   ├── prompts/                     PromptTemplates, PromptRepository (prompt files), shared job-ad text
+│   └── ranked_document.py           RankedJobDocumentAssembler: the ranked job document
+├── taxonomy/                        Per-language taxonomy: CSV loaders, TaxonomyRepository, TaxonomyService (cache)
+├── batch/                           A batch run: BatchRankingService, BatchJobRanker, BatchPostSteps, provider
+├── job_embedding/                   JobEmbeddingService, EmbeddingClient / GeminiEmbeddingClient, ConcatWhitener
+├── work_activities_enrichment/      onet_work_activities post-step: service, rules, config, repository, provider, cli.py
+├── classified_jobs/                 source collection repository
+├── ranked_jobs/                     target collection repository, upsert builder, is_active rules + is_active_cli.py
+├── run_logs/, run_state/            batch run log and cutoff state repositories
+├── llm/                             LlmClient, providers, factory, TracedLlmClient
+├── observability/                   Langfuse tracing
+├── server_dependencies/             the MongoDB connection provider and collection names
+├── languages/                       language registry, one config module per language
+└── config.py, job_context.py, translation.py, logging_config.py
+utils/                               pure helpers: classifier entities, ESCO–Tabiya mapping
+resources/<lang>/, resources/        language packs (taxonomy CSVs, prompts, job attributes); whitening artifact
+```
+
+### Reusable classes
+
+| Concern | Classes | Module |
+|---|---|---|
+| Ranking steps | `SkillRankerStep`, `JobAttributesStep`, `OccupationTaxonomyStep`, `OccupationSkillsRelevanceStep` | `app/job_ranking/<pass>/…step.py` |
+| Prompt building | `SkillRankerPromptBuilder`, `JobAttributesPromptBuilder`, `OccupationSkillsRelevancePromptBuilder` | `app/job_ranking/<pass>/prompt.py` |
+| Response parsing | `SkillRankerResponseParser`, `JobAttributesResponseParser`, `OccupationSkillsRelevanceResponseParser` | `app/job_ranking/<pass>/parser.py` |
+| Ranked document | `RankedJobDocumentAssembler` | `app/job_ranking/ranked_document.py` |
+| LLM | `LlmClient` (one per provider), wrapped by `TracedLlmClient` | `app/llm/` |
+| Embeddings | `EmbeddingClient`, `GeminiEmbeddingClient`, `ConcatWhitener` | `app/job_embedding/` |
+
+Each LLM step takes a `TracedLlmClient`, a prompt builder and a parser. The same step therefore
+runs on any configured model, and a test can swap one step for a stub (see
+`tests/ranking_fakes.py`).
+
+### Where new code goes
+
+| You are adding… | Put it in… |
+|---|---|
+| A new use case | A new module `app/<use_case>/` with its `routes.py`, `service.py`, `repository.py`, `types.py` and `get_<x>_service.py`; register its routes in `api.py` |
+| An HTTP endpoint for ranking | `app/job_ranking/routes/`, taking `JobRankingServiceFactory` from `get_job_ranking_services` |
+| A pipeline stage | A new sub-module of `app/job_ranking/` (prompt, parser, step, types), run by `JobRankingService` and wired in `JobRankingServiceFactory` |
+| A prompt change | The language pack under `resources/<lang>/`, or the pass's `prompt.py` |
+| A field on the ranked document | `app/job_ranking/ranked_document.py` (and `routes/types.py`, `PIPELINE_SCHEMA_VERSION`) |
+| A batch flag | `main.py` (argument) → `BatchOptions` (`app/batch/service.py`) |
+| A post-step after the batch | A use-case module for the work, called from `BatchPostSteps` (`app/batch/post_steps.py`) |
+| A MongoDB query | The collection module's repository interface and Mongo implementation; see [Data access](#data-access) |
+| A new LLM provider | `app/llm/providers/`; see [Choosing the model](#choosing-the-model) |
+| A maintenance CLI | A `cli.py` (or `<x>_cli.py`) in the use-case module, run with `python -m app.<module>.cli`: parse arguments, build through the module's provider, call its service. It ships in the image; top-level `scripts/` is git-ignored and local-only |
 
 ## Prerequisites
 
@@ -53,7 +117,7 @@ Every variable is validated by `app.config.Settings` (a [pydantic-settings](http
 
 ## Choosing the model
 
-The LLM passes talk to a model only through `LlmClient` (`app/llm/base.py`), and configuration decides which implementation answers. Nothing in the grading or enrichment code — prompts, parsing, `pipeline.py`, `ranked_job_schema.py` — knows which provider is in use, so swapping models is an env change.
+The LLM passes talk to a model only through `LlmClient` (`app/llm/base.py`), and configuration decides which implementation answers. Nothing in the grading or enrichment code — the prompts, parsers and steps in `app/job_ranking/` — knows which provider is in use: the services receive one `TracedLlmClient` built by the module's `get_*` provider, so swapping models is an env change.
 
 **Default (unchanged).** Set nothing and the reranker runs on Gemini from `GEMINI_API_KEY` / `GEMINI_MODEL`, with the same temperature, JSON mode, and retry policy it always had.
 
@@ -163,6 +227,7 @@ python main.py
 | `--log-llm2-prompt` | Log job attributes prompt |
 | `--log-llm3-prompt` | Log occupation–skills relevance prompt (only `RERANKER_LLM3_MODE=call` makes that call) |
 | `--bulk-batch-size N` | Flush MongoDB writes every N upserts |
+| `--skip-already-ranked` | Skip classified jobs already in the target collection (also `RERANKER_SKIP_ALREADY_RANKED=1`) |
 | `--language LANG` | Language pack to rank against (`en`, `es`, or a locale like `AR-es`). Default: from `TARGET_COUNTRY`. |
 
 ## Data access
@@ -180,7 +245,7 @@ lifecycle, the collections, and how to add a query.
 
 1. **`skill_groups_origin_uuids`** — After ranking, skill groups are derived from the skill hierarchy so each ranked job can carry the **origin UUIDs** of the relevant skill groups (see `.env` / `resources/` for the hierarchy CSV).
 2. **`onet_work_activities`** — Model output includes work-activity context; after a successful batch, optional enrichment can fill or adjust **ONET-style work activities** (importance/level) using the occupation taxonomy reference JSON, when enabled in `.env` (`RERANKER_RUN_WA_ENRICHMENT` and related variables in `.env.example`).
-3. **`is_active` and closing dates** — **`is_active`** can be synced from **`classifier_metadata.closing_date`** (open vs closed relative to today) after a successful batch when enabled in `.env`, or by running `python utils/update_is_active_from_closing_date.py` manually. No documents are deleted; only the flag is updated.
+3. **`is_active` and closing dates** — **`is_active`** can be synced from **`classifier_metadata.closing_date`** (open vs closed relative to today) after a successful batch when enabled in `.env`, or by running `python -m app.ranked_jobs.is_active_cli` manually (`--apply` to write). Work-activities enrichment can be run on its own with `python -m app.work_activities_enrichment.cli`. No documents are deleted; only the flag is updated.
 
 ## Countries and languages
 
@@ -369,7 +434,7 @@ Each batch run writes a document to the `reranker_logs` collection (`RERANKER_LO
 Every error `/rank` returns has one body: `ErrorResponse` (`app/constants/errors.py`), `{"detail": "..."}`.
 Routes declare their error statuses with this model, so it shows up in `/docs` and `/openapi.json`.
 A global handler in `api.py` flattens FastAPI's request-validation errors (422) to one string;
-`/rank`'s own `except` ladder maps the three LLM failure categories to distinct `detail` prefixes.
+`/rank`'s own `except` ladder (`app/job_ranking/routes/routes.py`) maps the three LLM failure categories to distinct `detail` prefixes.
 In every case, `detail` carries a category label and the exception's **class name**, never the raw
 exception message — the full message is logged server-side via `logger.exception`, not returned to
 the caller.
@@ -381,7 +446,7 @@ the caller.
 | 500 | `LlmInvocationError` — a configured provider was called and the call failed | `"LLM invocation error: LlmInvocationError"` |
 | 500 | `LlmParseError` — the model responded, but its JSON didn't parse or match the expected shape | `"LLM response parse error: LlmParseError"` |
 | 500 | Any other unexpected error | `"Internal server error: RuntimeError"` |
-| 503 | The service has not finished loading its taxonomy data | `"Service not ready — taxonomy not loaded."` |
+| 503 | The ranking services could not be built (model or default language pack) | `"Service not ready: FileNotFoundError"` |
 
 See [Choosing the model](#choosing-the-model) for what each `LlmError` subclass means and where
 providers raise them.
@@ -413,7 +478,7 @@ Call sites may add their own fields via `extra={"fields": {...}}`; they appear a
 alongside the ones above, e.g.:
 
 ```json
-{"timestamp": "2026-10-15T09:14:03.120+00:00", "severity": "INFO", "logger": "app.batch_rank_one",
+{"timestamp": "2026-10-15T09:14:03.120+00:00", "severity": "INFO", "logger": "app.batch.job_ranker",
  "message": "  step | LLM call 1 — skill ranker (anthropic/claude-opus-5) | 2.103s | menu=12 essential=5 optional=4"}
 ```
 

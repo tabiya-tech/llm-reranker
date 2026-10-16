@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
+from app.classified_jobs.types import ClassifiedJobsFilter
+
 
 class IClassifiedJobsRepository(ABC):
     """
@@ -19,10 +21,10 @@ class IClassifiedJobsRepository(ABC):
         skip: int = 0,
         sort_field: str = "_id",
         sort_direction: int = -1,
-        query: dict[str, Any] | None = None,
+        job_filter: ClassifiedJobsFilter | None = None,
     ) -> Iterator[dict[str, Any]]:
         """
-        Stream classified job documents matching ``query``, newest first by default.
+        Stream classified job documents matching ``job_filter``, newest first by default.
 
         ``limit`` <= 0 means no limit (entire collection). Results are streamed one document at a time.
         """
@@ -37,7 +39,7 @@ class IClassifiedJobsRepository(ABC):
         skip: int = 0,
         sort_field: str = "_id",
         sort_direction: int = -1,
-        query: dict[str, Any] | None = None,
+        job_filter: ClassifiedJobsFilter | None = None,
     ) -> Iterator[list[dict[str, Any]]]:
         """
         Yield lists of documents in the same order as ``iter_jobs``.

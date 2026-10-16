@@ -17,7 +17,7 @@ Typical use::
 
 Nesting follows the current context. Threads do **not** inherit it: work submitted to a
 ``ThreadPoolExecutor`` must be run through ``contextvars.copy_context().run`` to stay
-attached to its parent (see ``app.pipeline.run_llm1_llm2_phase``).
+attached to its parent (see ``JobRankingService._run_llm1_llm2`` in ``app.job_ranking.service``).
 """
 
 from __future__ import annotations

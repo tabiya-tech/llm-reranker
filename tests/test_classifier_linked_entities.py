@@ -407,9 +407,7 @@ class TestGroupLinkedEntitiesByType:
 
 class TestExtractEscoSkillCandidates:
     def test_returns_only_skill_entries(self, make_settings):
-        # extract_esco_skill_candidates calls get_settings() internally, so we
-        # rely on isolated_env via make_settings to clear caches & env.
-        make_settings()
+        s = make_settings()
         doc = _doc_with_entities(
             [
                 {
@@ -431,7 +429,7 @@ class TestExtractEscoSkillCandidates:
                 },
             ]
         )
-        out = extract_esco_skill_candidates(doc)
+        out = extract_esco_skill_candidates(doc, s)
         assert len(out) == 1
         assert isinstance(out[0], EscoSkillCandidate)
         assert out[0].uri == ESCO_URI

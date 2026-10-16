@@ -144,6 +144,22 @@ def language_resource_dirs(resources_dir: Path, language: str) -> tuple[Path, ..
     return tuple(d.resolve() for d in dirs)
 
 
+def find_language_resource(resources_dir: Path, language: str, name: str | Path) -> Path | None:
+    """First existing ``name`` across :func:`language_resource_dirs`, or ``None``."""
+    for directory in language_resource_dirs(resources_dir, language):
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def language_resource_path(resources_dir: Path, language: str, name: str | Path) -> Path:
+    """Like :func:`find_language_resource`, but when nothing exists returns the path inside the
+    *language's own* pack, so a "not found" error names the file the pack is missing."""
+    found = find_language_resource(resources_dir, language, name)
+    return found if found is not None else language_resource_dirs(resources_dir, language)[0] / name
+
+
 def _resolve_language_resource_path(
     repo_root_dir: Path,
     resources_dir: Path,
@@ -177,10 +193,9 @@ def _resolve_language_resource_path(
             return under_root
         return (candidates[0] / p).resolve()
 
-    for directory in candidates:
-        candidate = (directory / default_name).resolve()
-        if candidate.is_file():
-            return candidate
+    found = find_language_resource(resources_dir, language, default_name)
+    if found is not None:
+        return found.resolve()
     for fallback in extra_fallbacks:
         if fallback.is_file():
             return fallback.resolve()
@@ -582,7 +597,7 @@ class Settings(BaseSettings):
     reranker_fail_on_wa_enrichment_error: bool = False
     reranker_sync_is_active_from_closing_date: bool = True
 
-    # Folded in from utils/work_activities_enrichment.py's own Config.
+    # Work-activities enrichment (app/work_activities_enrichment/); read by its service.
     enrich_wa_database_raw: str = Field(default="", validation_alias="ENRICH_WA_DATABASE")
     enrich_wa_target_collection_raw: str = Field(
         default="", validation_alias="ENRICH_WA_TARGET_COLLECTION"
@@ -904,10 +919,8 @@ class Settings(BaseSettings):
         if occ_db_raw:
             p = Path(occ_db_raw)
             return (p if p.is_absolute() else (self._repo_root_path / p)).resolve()
-        name = "combined_occupation_database_with_wa.json"
-        candidates = language_resource_dirs(self.resources_dir, self.language)
-        return next(
-            (d / name for d in candidates if (d / name).is_file()), candidates[0] / name
+        return language_resource_path(
+            self.resources_dir, self.language, "combined_occupation_database_with_wa.json"
         ).resolve()
 
     # Private attribute, not a field — set in __init__, never bound from the environment.

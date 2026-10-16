@@ -23,8 +23,12 @@ import httpx
 import numpy as np
 import pytest
 
-from app.job_context import JobDescriptionContext
-from app.llm import LlmClient, LlmConfig
+from app.job_embedding.gemini_client import GeminiEmbeddingClient
+from app.job_embedding.service import JobEmbeddingService
+from app.job_embedding.whitening_repository import WhiteningArtifactRepository
+from app.job_ranking.job_attributes.step import PURPOSE_JOB_ATTRIBUTES
+from app.job_ranking.skill_ranker.step import PURPOSE_SKILL_RANKER
+from app.llm import LlmClient, LlmConfig, build_traced_llm_client
 from app.llm.providers.anthropic import AnthropicLlmClient
 from app.llm.providers.gemini import GeminiLlmClient
 from app.llm.providers.ollama import OllamaLlmClient
@@ -42,6 +46,14 @@ from app.observability import (
 )
 from app.observability.masking import REDACTED_EMAIL, REDACTED_PHONE, mask_value
 from app.observability.testing import TEST_TRACING_CONFIG, RecordedSpans, in_memory_tracing
+from tests.ranking_fakes import (
+    StubJobAttributes,
+    StubSkillRanker,
+    build_ranking_service,
+    classified_doc,
+    job_attributes_result,
+    rank_all_essential,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -166,11 +178,11 @@ def test_helpers_are_no_ops_when_tracing_is_off():
 
 
 def test_llm_call_is_recorded_as_generation_with_usage(make_settings):
-    from app.llm_service import PURPOSE_SKILL_RANKER, call_skill_ranker_model
-
     settings = _stub_settings(make_settings, "tests.test_observability:UsageReportingLlmClient")
     with in_memory_tracing() as spans:
-        out = call_skill_ranker_model("rank these skills", settings=settings)
+        out = build_traced_llm_client(settings.llm).generate_json(
+            "rank these skills", purpose=PURPOSE_SKILL_RANKER
+        )
 
     gen = spans.by_name(PURPOSE_SKILL_RANKER)
     assert gen is not None
@@ -182,12 +194,12 @@ def test_llm_call_is_recorded_as_generation_with_usage(make_settings):
 
 
 def test_failed_llm_call_marks_generation_as_error(make_settings):
-    from app.llm_service import PURPOSE_JOB_ATTRIBUTES, call_job_attributes_model
-
     settings = _stub_settings(make_settings, "tests.test_observability:FailingLlmClient")
     with in_memory_tracing() as spans:
         with pytest.raises(RuntimeError):
-            call_job_attributes_model("prompt", settings=settings)
+            build_traced_llm_client(settings.llm).generate_json(
+                "prompt", purpose=PURPOSE_JOB_ATTRIBUTES
+            )
 
     gen = spans.by_name(PURPOSE_JOB_ATTRIBUTES)
     assert gen is not None
@@ -265,19 +277,14 @@ def test_gemini_reports_usage_including_thinking_tokens(monkeypatch):
 
 
 def test_embed_call_is_recorded_as_embedding_without_vectors(monkeypatch):
-    from utils import gemini_embeddings
-
     models = _FakeEmbedModels(dim=8, token_count=6)
     monkeypatch.setattr("google.genai.Client", lambda **_: SimpleNamespace(models=models))
+    client = GeminiEmbeddingClient(
+        api_key="k", model="gemini-embedding-001", dim=8, task_type="SEMANTIC_SIMILARITY"
+    )
 
     with in_memory_tracing() as spans:
-        out = gemini_embeddings.embed_text_list(
-            ["welding; metal fabrication"],
-            api_key="k",
-            model="gemini-embedding-001",
-            embedding_dim=8,
-            task_type="SEMANTIC_SIMILARITY",
-        )
+        out = client.embed(["welding; metal fabrication"])
 
     assert out.shape == (1, 8)
     (emb,) = _spans_by_type(spans, "embedding")
@@ -291,13 +298,11 @@ def test_embed_call_is_recorded_as_embedding_without_vectors(monkeypatch):
 
 
 def test_embed_call_without_reported_tokens_records_no_usage(monkeypatch):
-    from utils import gemini_embeddings
-
     models = _FakeEmbedModels(dim=4)
     monkeypatch.setattr("google.genai.Client", lambda **_: SimpleNamespace(models=models))
 
     with in_memory_tracing() as spans:
-        gemini_embeddings.embed_text_list(["a", "b"], api_key="k", embedding_dim=4)
+        GeminiEmbeddingClient(api_key="k", dim=4).embed(["a", "b"])
 
     (emb,) = _spans_by_type(spans, "embedding")
     assert USAGE not in emb.attributes
@@ -305,7 +310,7 @@ def test_embed_call_without_reported_tokens_records_no_usage(monkeypatch):
 
 
 def test_failed_embed_call_is_recorded_as_error(monkeypatch):
-    from utils import gemini_embeddings
+    from app.job_embedding import gemini_client as gemini_embeddings
 
     models = _FakeEmbedModels(dim=4, fail_times=99)
     monkeypatch.setattr("google.genai.Client", lambda **_: SimpleNamespace(models=models))
@@ -313,23 +318,24 @@ def test_failed_embed_call_is_recorded_as_error(monkeypatch):
 
     with in_memory_tracing() as spans:
         with pytest.raises(RuntimeError):
-            gemini_embeddings.embed_text_list(["a"], api_key="k", embedding_dim=4)
+            GeminiEmbeddingClient(api_key="k", dim=4).embed(["a"])
 
     (emb,) = _spans_by_type(spans, "embedding")
     assert emb.attributes[LEVEL] == "ERROR"
 
 
 def test_job_embedding_step_nests_under_the_job_trace(make_settings, monkeypatch):
-    from utils.job_embedding import attach_job_embedding_to_payload
-
     settings = make_settings(GEMINI_API_KEY="k", RERANKER_JOB_EMBEDDING_DIM="4")
     models = _FakeEmbedModels(dim=4)
     monkeypatch.setattr("google.genai.Client", lambda **_: SimpleNamespace(models=models))
     payload = {"job_id": "job-42", "llm_classified_skills": {"essential": ["welding"]}}
+    service = JobEmbeddingService(
+        settings, GeminiEmbeddingClient.from_settings(settings), WhiteningArtifactRepository()
+    )
 
     with in_memory_tracing() as spans:
         with job_trace({"job_id": "job-42"}, settings=settings, invocation="batch"):
-            attach_job_embedding_to_payload(payload, settings=settings)
+            service.attach(payload)
 
     (emb,) = _spans_by_type(spans, "embedding")
     root = spans.by_name("rank_job")
@@ -346,51 +352,34 @@ def test_job_embedding_step_nests_under_the_job_trace(make_settings, monkeypatch
 
 def test_overlapped_llm1_llm2_nest_under_the_job_trace(make_settings, monkeypatch):
     """LLM1 and LLM2 run on a thread pool; their generations must not become orphan traces."""
-    from app import pipeline
-    from app.pipeline import TaxonomyContext
-    from utils.classifier_linked_entities import EscoSkillCandidate
-
     settings = make_settings(
+        TARGET_COUNTRY="kenya",
+        RERANKER_OVERLAP_LLM1_LLM2="1",
         RERANKER_LLM_CLIENT_CLASS="tests.test_observability:UsageReportingLlmClient",
         RERANKER_LLM_MODEL="m",
     )
 
-    def _fake_llm1(*_a, **_k):
+    def _llm1(candidates):
         with traced_observation(name="skill_ranker", as_type="generation"):
             pass
-        return [], [], None, ""
+        return rank_all_essential(candidates)
 
-    def _fake_llm2(*_a, **_k):
+    def _llm2():
         with traced_observation(name="job_attributes", as_type="generation"):
             pass
-        return None
+        return job_attributes_result()
 
-    monkeypatch.setattr(pipeline, "run_skill_ranker_for_job", _fake_llm1)
-    monkeypatch.setattr(pipeline, "run_job_attributes_for_job", _fake_llm2)
-    monkeypatch.setattr(pipeline, "build_occupation_prompt_enrichment", lambda *a, **k: None)
-    # Doubles: run_llm1_llm2_phase only reads these specific attributes once llm1/llm2
-    # and the occupation-enrichment call are monkeypatched above, so a full
-    # TaxonomyContext / JobDescriptionContext is unneeded ceremony here.
-    taxonomy = cast(
-        TaxonomyContext,
-        SimpleNamespace(
-            skill_desc_by_esco={},
-            occ_bridge={},
-            occ_all_ids=frozenset(),
-            occ_label_by_esco={},
-            occ_desc_by_esco={},
-        ),
+    ranking = build_ranking_service(
+        settings,
+        skill_ranker=StubSkillRanker(_llm1),
+        job_attributes=StubJobAttributes(_llm2),
     )
-    ctx = cast(JobDescriptionContext, SimpleNamespace(title="Welder"))
-    base_skills = cast(list[EscoSkillCandidate], [object()])
 
     with in_memory_tracing() as spans:
         with job_trace(
             {"job_id": "job-7"}, settings=settings, invocation="batch", session_id="run-1"
         ):
-            pipeline.run_llm1_llm2_phase(
-                ctx, {}, settings, taxonomy, base_skills, overlap_llm12=True
-            )
+            ranking.rank(classified_doc())
 
     root = spans.by_name("rank_job")
     assert root is not None
@@ -447,11 +436,11 @@ def test_masking_redacts_contacts_and_truncates():
 
 
 def test_exported_generation_input_is_masked(make_settings):
-    from app.llm_service import PURPOSE_SKILL_RANKER, call_skill_ranker_model
-
     settings = _stub_settings(make_settings, "tests.test_observability:UsageReportingLlmClient")
     with in_memory_tracing() as spans:
-        call_skill_ranker_model("Contact hr@example.com for details", settings=settings)
+        build_traced_llm_client(settings.llm).generate_json(
+            "Contact hr@example.com for details", purpose=PURPOSE_SKILL_RANKER
+        )
 
     exported = RecordedSpans.json_attribute(spans.by_name(PURPOSE_SKILL_RANKER), INPUT)
     assert isinstance(exported, str)
@@ -462,7 +451,7 @@ def test_embedding_vectors_are_float_arrays():
     """Guard: the embedding observation must not change what the caller gets back."""
     from google.genai import Client
 
-    from utils.gemini_embeddings import _embed_chunk
+    from app.job_embedding.gemini_client import _embed_chunk
 
     client = cast(Client, SimpleNamespace(models=_FakeEmbedModels(dim=3)))
     mat = _embed_chunk(client, ["a"], model="m", embedding_dim=3, task_type="T")

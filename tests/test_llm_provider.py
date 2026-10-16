@@ -26,9 +26,7 @@ from app.llm import (
     LlmConfigurationError,
     LlmInvocationError,
     build_llm_client,
-    get_llm_client,
     load_llm_client_class,
-    reset_llm_clients,
 )
 from app.llm.providers.anthropic import AnthropicLlmClient
 from app.llm.providers.gemini import GeminiLlmClient
@@ -344,25 +342,11 @@ class TestClassLoading:
         assert "generate_json" in str(exc.value)
 
 
-class TestClientCache:
-    def test_same_config_returns_the_same_instance(self):
-        reset_llm_clients()
+class TestClientConstruction:
+    def test_each_build_is_a_fresh_instance(self):
+        # No process-wide cache: the composition root builds one client and passes it on.
         cfg = _config()
-        assert get_llm_client(cfg) is get_llm_client(cfg)
-
-    def test_different_config_builds_a_separate_instance(self):
-        reset_llm_clients()
-        a = get_llm_client(_config(model="a"))
-        b = get_llm_client(_config(model="b"))
-        assert a is not b
-        assert (a.model, b.model) == ("a", "b")
-
-    def test_reset_drops_the_cache(self):
-        reset_llm_clients()
-        cfg = _config()
-        first = get_llm_client(cfg)
-        reset_llm_clients()
-        assert get_llm_client(cfg) is not first
+        assert build_llm_client(cfg) is not build_llm_client(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -372,44 +356,23 @@ class TestClientCache:
 
 class TestGradingCodeUsesTheConfiguredModel:
     def test_skill_ranker_call_reaches_a_custom_client(self, make_settings):
-        """``call_skill_ranker_model`` is provider-agnostic — no Gemini import involved."""
-        from app.llm_service import PURPOSE_SKILL_RANKER, call_skill_ranker_model
+        """The configured client is provider-agnostic — no Gemini import involved."""
+        from app.job_ranking.skill_ranker.step import PURPOSE_SKILL_RANKER
+        from app.llm import build_traced_llm_client
 
         RecordingLlmClient.seen = []
         s = make_settings(
             RERANKER_LLM_CLIENT_CLASS="tests.test_llm_provider:RecordingLlmClient",
             RERANKER_LLM_MODEL="my-model",
         )
-        out = call_skill_ranker_model("rank these skills", settings=s)
+        out = build_traced_llm_client(s.llm).generate_json(
+            "rank these skills", purpose=PURPOSE_SKILL_RANKER
+        )
         assert json.loads(out)["essential_skills"] == ["welding"]
         assert RecordingLlmClient.seen == [(PURPOSE_SKILL_RANKER, "rank these skills")]
 
-    def test_each_pass_labels_itself(self, make_settings):
-        from app.llm_service import (
-            PURPOSE_JOB_ATTRIBUTES,
-            PURPOSE_OCCUPATION_SKILLS_RELEVANCE,
-            PURPOSE_SKILL_RANKER,
-            call_job_attributes_model,
-            call_occupation_skills_relevance_model,
-            call_skill_ranker_model,
-        )
-
-        RecordingLlmClient.seen = []
-        s = make_settings(
-            RERANKER_LLM_CLIENT_CLASS="tests.test_llm_provider:RecordingLlmClient",
-            RERANKER_LLM_MODEL="my-model",
-        )
-        call_skill_ranker_model("p1", settings=s)
-        call_job_attributes_model("p2", settings=s)
-        call_occupation_skills_relevance_model("p3", settings=s)
-        assert [p for p, _ in RecordingLlmClient.seen] == [
-            PURPOSE_SKILL_RANKER,
-            PURPOSE_JOB_ATTRIBUTES,
-            PURPOSE_OCCUPATION_SKILLS_RELEVANCE,
-        ]
-
     def test_ranked_document_metadata_records_the_configured_model(self, make_settings):
-        from app.ranked_job_schema import build_llm_reranker_meta
+        from app.job_ranking.ranked_document import build_llm_reranker_meta
 
         s = make_settings(
             RERANKER_LLM_PROVIDER="anthropic",
@@ -424,7 +387,7 @@ class TestGradingCodeUsesTheConfiguredModel:
 
     def test_gemini_metadata_is_unchanged_from_the_legacy_path(self, make_settings):
         """No-regression guard: the three model fields still carry the Gemini model id."""
-        from app.ranked_job_schema import build_llm_reranker_meta
+        from app.job_ranking.ranked_document import build_llm_reranker_meta
 
         s = make_settings(GEMINI_API_KEY="k", GEMINI_MODEL="gemini-2.5-flash")
         meta = build_llm_reranker_meta(s)

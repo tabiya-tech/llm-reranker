@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.translation import overlay_translation_listing_fields
 
 
@@ -122,14 +122,13 @@ def _multi_key_top_or_metadata(doc: dict[str, Any], *keys: str) -> str | None:
 def build_job_description_context(
     classified_doc: dict[str, Any],
     *,
-    settings: Settings | None = None,
+    settings: Settings,
 ) -> JobDescriptionContext:
     """
     Extract listing fields from a classified_jobs document.
 
     All Mongo field names are configured via ``Settings`` / environment variables.
     """
-    settings = settings or get_settings()
     fp = _first_str(classified_doc, *settings.keys_fingerprint)
     job_id = classified_doc.get(settings.mongo_field_job_id)
 
