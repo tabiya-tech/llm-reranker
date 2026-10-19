@@ -17,6 +17,7 @@ from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
 from app.llm import LlmClient, get_llm_client
 from app.observability import traced_observation, update_observation
+from app.prompt_resources import prompt_provenance
 from app.prompts import (
     JobAttributesLlm2Extras,
     OccupationPromptEnrichment,
@@ -158,12 +159,12 @@ def build_job_attributes_prompt_for_job(
     onet: tuple[OnetWorkActivity, ...] | None = None,
     settings: Settings | None = None,
 ) -> str:
-    """LLM2: single-county occupation user block + ONET/JSON appendix; system from ``resources/prompts.py``."""
+    """LLM2: system + single-county occupation user block + ONET/JSON contract (``resources/<lang>/prompts/``)."""
     s = settings or get_settings()
     schema = schema or load_job_attributes_schema(settings=s)
     onet = onet or load_onet_work_activities(settings=s)
-    jd = build_job_attributes_jd_text(ctx)
-    meta = build_job_attributes_metadata_block(ctx)
+    jd = build_job_attributes_jd_text(ctx, settings=s)
+    meta = build_job_attributes_metadata_block(ctx, settings=s)
     return build_job_attributes_prompt(
         opening_line=llm2_opening_line_from_context(ctx, settings=s),
         occupation=occupation,
@@ -208,9 +209,10 @@ def run_job_attributes_for_job(
         resolved = resolve_llm2_single_county_user_fields(occupation, extras)
         logger.info("%s", sep)
         logger.info(
-            "LLM2 job attributes | job=%s | system=resources/prompts.py | user=client single-county | "
+            "LLM2 job attributes | job=%s | prompts=%s | user=client single-county | "
             "onet_rows=%s | schema_attrs=%s | county=%r | city=%r",
             label,
+            prompt_provenance(s)["prompt_version"],
             len(onet_resolved),
             len(schema_resolved.attributes),
             county or None,
@@ -237,8 +239,8 @@ def run_job_attributes_for_job(
                 indent=2,
             ),
         )
-        jd = build_job_attributes_jd_text(ctx)
-        meta = build_job_attributes_metadata_block(ctx)
+        jd = build_job_attributes_jd_text(ctx, settings=s)
+        meta = build_job_attributes_metadata_block(ctx, settings=s)
         logger.info("LLM2 `job_listing_body` (%s chars):\n%s", len(jd), jd)
         logger.info("LLM2 `job_listing_metadata` (%s chars):\n%s", len(meta), meta)
         logger.info("LLM2 assembled prompt (%s chars):\n%s", len(prompt), prompt)
@@ -272,7 +274,7 @@ def run_skill_ranker_for_job(
     s = settings or get_settings()
     full_details = full_details_from_context(ctx)
     skill_dicts = skills_to_prompt_dicts(candidates, description_by_esco=description_by_esco)
-    skills_text = format_skill_ranker_skills_text(skill_dicts)
+    skills_text = format_skill_ranker_skills_text(skill_dicts, settings=s)
     prompt = build_skill_ranker_prompt(full_details, skill_dicts, settings=s)
 
     if log_llm1_prompt:
@@ -280,8 +282,9 @@ def run_skill_ranker_for_job(
         label = (log_llm1_job_label or "").strip() or "(job)"
         logger.info("%s", sep)
         logger.info(
-            "LLM1 skill ranker | job=%s | template=resources/Skills_reranker_prompts.md | candidates=%s",
+            "LLM1 skill ranker | job=%s | prompts=%s | candidates=%s",
             label,
+            prompt_provenance(s)["prompt_version"],
             len(skill_dicts),
         )
         logger.info(

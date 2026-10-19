@@ -7,9 +7,13 @@ from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
 from app.languages import DEFAULT_LANGUAGE, language_setting
 from app.prompt_resources import (
-    load_job_attributes_system_prompt,
-    load_occupation_skills_relevance_system_prompt,
-    load_skills_ranker_prompt_template,
+    JOB_ATTRIBUTES_RESPONSE,
+    JOB_ATTRIBUTES_SYSTEM,
+    OCCUPATION_SKILLS_RELEVANCE_SYSTEM,
+    OCCUPATION_SKILLS_RELEVANCE_USER,
+    SKILL_RANKER,
+    country_field_template,
+    render_prompt,
 )
 from app.schemas import JobAttributesSchema, OnetWorkActivity
 from utils.classifier_linked_entities import group_linked_entities_by_type
@@ -18,7 +22,7 @@ from utils.uuid_to_tabiya_id import cell_to_esco_uuid
 
 
 def prompt_label(key: str, settings: Settings | None = None) -> str:
-    """One scaffolding string of the LLM2 user block, in the run's language.
+    """One scaffolding string assembled around the prompt templates, in the run's language.
 
     Falls back to English for a key a language has not translated, so adding a key here
     never breaks a language pack that predates it.
@@ -85,7 +89,7 @@ def build_occupation_prompt_enrichment(
     When there is no occupation entity, ``occupation_label`` is ``fallback_listing_title``.
     """
     occs = group_linked_entities_by_type(classified_doc, settings).get("occupation", [])
-    fb = (fallback_listing_title or "").strip() or "Unknown role"
+    fb = (fallback_listing_title or "").strip() or prompt_label("unknown_occupation", settings)
     if not occs:
         return OccupationPromptEnrichment(
             occupation_label=fb,
@@ -220,7 +224,7 @@ def build_single_county_job_attributes_user_prompt(
     block and before the attributes heading (job-ad context for the classifier).
     """
     s = settings or get_settings()
-    attr_desc = build_attribute_descriptions(schema)
+    attr_desc = build_attribute_descriptions(schema, settings=s)
     parts = [
         opening_line,
         "",
@@ -271,21 +275,26 @@ def build_single_county_job_attributes_user_prompt(
     return "\n".join(parts)
 
 
-def _format_labeled_list(potential_skills: list[dict[str, Any]]) -> str:
+def _format_labeled_list(
+    potential_skills: list[dict[str, Any]], *, settings: Settings | None = None
+) -> str:
     """Format skill menu for the ranker: label, optional description; model returns labels verbatim."""
+    description = prompt_label("skill_description", settings)
     lines: list[str] = []
     for i, s in enumerate(potential_skills, 1):
         label = s.get("label") or ""
         desc = (s.get("description") or "").strip()
         lines.append(f"{i}. {label}")
         if desc:
-            lines.append(f"   Description: {desc}")
+            lines.append(f"   {description}: {desc}")
     return "\n".join(lines)
 
 
-def format_skill_ranker_skills_text(potential_skills: list[dict[str, Any]]) -> str:
-    """The ``skills_text`` argument passed to ``str.format`` for ``Skills_reranker_prompts.md``."""
-    return _format_labeled_list(potential_skills)
+def format_skill_ranker_skills_text(
+    potential_skills: list[dict[str, Any]], *, settings: Settings | None = None
+) -> str:
+    """The ``{skills_text}`` placeholder of ``prompts/skill_ranker.md``."""
+    return _format_labeled_list(potential_skills, settings=settings)
 
 
 def build_skill_ranker_prompt(
@@ -295,69 +304,84 @@ def build_skill_ranker_prompt(
     settings: Settings | None = None,
 ) -> str:
     """
-    Skill ranker user message from ``resources/Skills_reranker_prompts.md``.
+    Skill ranker user message from ``resources/<lang>/prompts/skill_ranker.md``.
 
     ``potential_skills``: dicts with ``label`` and optional ``description`` (no URIs or scores).
     """
-    skills_text = _format_labeled_list(potential_skills)
-    template = load_skills_ranker_prompt_template(settings or get_settings())
-    return template.format(full_details=full_details, skills_text=skills_text)
+    s = settings or get_settings()
+    skills_text = _format_labeled_list(potential_skills, settings=s)
+    return render_prompt(SKILL_RANKER, s, full_details=full_details, skills_text=skills_text)
 
 
-def build_attribute_descriptions(schema: JobAttributesSchema) -> str:
+def build_attribute_descriptions(
+    schema: JobAttributesSchema, *, settings: Settings | None = None
+) -> str:
     """Markdown-style block listing each attribute and its allowed level ids."""
+    group = prompt_label("attribute_group", settings)
+    type_ = prompt_label("attribute_type", settings)
+    levels = prompt_label("attribute_levels", settings)
+    value = prompt_label("attribute_level_value", settings)
     lines: list[str] = []
     for attr in schema.attributes:
         lines.append(f"\n### {attr.label} ({attr.name})")
-        lines.append(f"Group: {attr.group} | Type: {attr.type}")
-        lines.append("Levels:")
+        lines.append(f"{group}: {attr.group} | {type_}: {attr.type}")
+        lines.append(f"{levels}:")
         for level in attr.levels:
             if level.value is not None:
-                lines.append(f"  - `{level.id}`: {level.label} (value: {level.value})")
+                lines.append(f"  - `{level.id}`: {level.label} ({value}: {level.value})")
             else:
                 lines.append(f"  - `{level.id}`: {level.label}")
     return "\n".join(lines)
 
 
-def _format_onet_work_activity_menu(onet: Sequence[OnetWorkActivity]) -> str:
+def _format_onet_work_activity_menu(
+    onet: Sequence[OnetWorkActivity], *, settings: Settings | None = None
+) -> str:
+    swahili = prompt_label("work_activity_swahili", settings)
     lines: list[str] = []
     for i, t in enumerate(onet, 1):
-        sw = f" | Swahili: {t.wa_element_name_swahili}" if t.wa_element_name_swahili else ""
+        sw = f" | {swahili}: {t.wa_element_name_swahili}" if t.wa_element_name_swahili else ""
         lines.append(
             f"{i}. `{t.wa_element_id}` — {t.wa_element_name_simplified} ({t.wa_element_name}){sw}"
         )
     return "\n".join(lines)
 
 
-def build_job_attributes_jd_text(ctx: JobDescriptionContext) -> str:
+def build_job_attributes_jd_text(
+    ctx: JobDescriptionContext, *, settings: Settings | None = None
+) -> str:
     """Raw job description + requirements for the attribute classifier."""
     parts: list[str] = []
     if ctx.raw_job_description:
         parts.append(ctx.raw_job_description.strip())
     if ctx.requirements_text:
-        parts.append("Requirements:\n" + ctx.requirements_text.strip())
-    return "\n\n".join(parts) if parts else "(no job description text provided)"
+        parts.append(
+            prompt_label("listing_requirements", settings) + "\n" + ctx.requirements_text.strip()
+        )
+    return "\n\n".join(parts) if parts else prompt_label("listing_no_description", settings)
 
 
-def build_job_attributes_metadata_block(ctx: JobDescriptionContext) -> str:
+def build_job_attributes_metadata_block(
+    ctx: JobDescriptionContext, *, settings: Settings | None = None
+) -> str:
     """Structured listing fields (salary, location, etc.) for LLM call 2."""
     rows: list[str] = []
-    for label, val in (
-        ("Title", ctx.title),
-        ("Employer", ctx.employer),
-        ("Category", ctx.category),
-        ("Salary", ctx.salary),
-        ("Location / city", ctx.city),
-        ("Region", ctx.county),
-        ("Employment type", ctx.employment_type),
-        ("Posted", ctx.posted_date),
-        ("Closing", ctx.closing_date),
-        ("Source platform", ctx.source_platform),
-        ("Application URL", ctx.application_url),
+    for key, val in (
+        ("listing_title", ctx.title),
+        ("listing_employer", ctx.employer),
+        ("listing_category", ctx.category),
+        ("listing_salary", ctx.salary),
+        ("listing_city", ctx.city),
+        ("listing_region", ctx.county),
+        ("listing_employment_type", ctx.employment_type),
+        ("listing_posted", ctx.posted_date),
+        ("listing_closing", ctx.closing_date),
+        ("listing_source_platform", ctx.source_platform),
+        ("listing_application_url", ctx.application_url),
     ):
         if val is not None and str(val).strip():
-            rows.append(f"- {label}: {val}")
-    return "\n".join(rows) if rows else "(no structured metadata fields available)"
+            rows.append(f"- {prompt_label(key, settings)}: {val}")
+    return "\n".join(rows) if rows else prompt_label("listing_no_metadata", settings)
 
 
 def build_occupation_skills_relevance_prompt(
@@ -371,15 +395,13 @@ def build_occupation_skills_relevance_prompt(
     (essential / optional only). Model returns JSON ``decisions`` with ``is_relevant`` per skill.
     """
     s = settings or get_settings()
-    system = load_occupation_skills_relevance_system_prompt(s)
-    jd = build_job_attributes_jd_text(ctx)
-    meta = build_job_attributes_metadata_block(ctx)
-
+    occupation = prompt_label("relevance_occupation", s)
+    unnamed = prompt_label("relevance_unnamed_occupation", s)
     menu_lines: list[str] = []
     for block in occupation_to_skills_items:
         tid = block.get("tabiya_occupation_id")
-        o_lab = (block.get("occupation_label") or "").strip() or "(occupation)"
-        menu_lines.append(f"### Occupation: {o_lab}")
+        o_lab = (block.get("occupation_label") or "").strip() or unnamed
+        menu_lines.append(f"### {occupation}: {o_lab}")
         menu_lines.append(f"- tabiya_occupation_id: `{tid}`")
         for sk in block.get("skills") or []:
             if not isinstance(sk, dict):
@@ -394,116 +416,45 @@ def build_occupation_skills_relevance_prompt(
             menu_lines.append(f"- skill_id: `{sid}` | label: {lab} | taxonomy_role: {rt}")
         menu_lines.append("")
 
-    menu = "\n".join(menu_lines).strip() or "(no essential or optional occupation skills to judge)"
+    menu = "\n".join(menu_lines).strip() or prompt_label("relevance_no_skills", s)
 
-    user = f"""## Job listing (description and requirements)
-
-{jd}
-
-## Listing metadata
-
-{meta}
-
-## Occupation-linked skills to judge
-
-Each line below is one taxonomy skill tied to an occupation classified on this posting.
-Decide whether it is **relevant to this specific job advertisement** (not only whether it belongs to the occupation in general).
-
-{menu}
-
-## Required response format
-
-Respond with **only** a single JSON object (no markdown fences, no other text).
-
-- `decisions`: array with **exactly one object per skill** listed under "Occupation-linked skills" above that has `taxonomy_role` **essential** or **optional**. Each object must have:
-  - `skill_id` (string, must match exactly)
-  - `tabiya_occupation_id` (string, must match exactly)
-  - `is_relevant` (boolean)
-
-Do not include `summary`, `reason`, or any other top-level keys.
-
-**JSON shape:**
-{{
-  "decisions": [
-    {{"skill_id": "<uuid>", "tabiya_occupation_id": "<id>", "is_relevant": true}}
-  ]
-}}"""
+    system = render_prompt(OCCUPATION_SKILLS_RELEVANCE_SYSTEM, s)
+    user = render_prompt(
+        OCCUPATION_SKILLS_RELEVANCE_USER,
+        s,
+        job_description=build_job_attributes_jd_text(ctx, settings=s),
+        listing_metadata=build_job_attributes_metadata_block(ctx, settings=s),
+        skills_menu=menu,
+    )
     return f"{system}\n\n---\n\n{user}"
 
 
-def _kenya_requires_post_secondary_prompt_block() -> str:
-    """LLM2 JSON contract addendum: Kenya education eligibility (stored on ranked job documents)."""
-    return """
-- `requires_post_secondary` (boolean): whether this **specific job advertisement** requires
-  education **beyond Kenya secondary school** (KCSE / Form 4 / O-Level completion).
-
-  Set **`true`** when the listing explicitly requires any of:
-  - Certificate, diploma, higher diploma, or degree from a college, university, or TVET institution
-  - Named professional qualifications (e.g. CPA, ACCA, nursing registration, teaching certificate
-    from a post-secondary institution)
-  - "Graduate", "bachelor's", "master's", or equivalent post-secondary credentials
-
-  Set **`false`** when:
-  - Only KCSE, O-Level, Form 4, or "secondary education" is required or mentioned
-  - Only a KCSE grade is specified (e.g. "KCSE C+", "D plain and above") with no college/university qualification
-  - No education requirement is stated, or requirements are experience/skills only
-  - Requirements are unclear or ambiguous — prefer **`false`** rather than guessing
-
-  Do **not** treat generic phrases like "minimum qualification" or "relevant qualification" as post-secondary
-  unless the ad clearly points to certificate/diploma/degree-level study after secondary school."""
-
-
-def _job_attributes_onet_and_json_appendix(
+def _job_attributes_response_contract(
     onet_work_activities: Sequence[OnetWorkActivity],
     *,
     settings: Settings | None = None,
 ) -> str:
-    """Append ONET work-activity menu and required JSON response shape."""
+    """ONET work-activity menu and required JSON response shape, plus the country's fields.
+
+    Each of :attr:`Settings.job_attributes_country_fields` adds its instructions from
+    ``prompts/countries/<country>/<field>.md`` and a boolean key to the JSON shape.
+    """
     s = settings or get_settings()
-    task_menu = _format_onet_work_activity_menu(onet_work_activities)
-    kenya_postsec = (
-        _kenya_requires_post_secondary_prompt_block() if s.target_country == "kenya" else ""
+    fields = s.job_attributes_country_fields
+    instructions = "".join(
+        "\n" + render_prompt(country_field_template(s.target_country, f), s) for f in fields
     )
-    kenya_json_field = ',\n  "requires_post_secondary": true' if s.target_country == "kenya" else ""
-    # Must be the same heading text the user block emitted, or the model is pointed at a
-    # section that does not exist in its prompt.
-    attributes_heading = prompt_label("attributes_heading", s)
-    return f"""
-
----
-
-## Work activities (ONET Work Activity questionnaires)
-
-Select **3 to 10** distinct `WA_Element_ID` values that best describe day-to-day tasks for this role.
-Use **only** ids from this list (no invented ids):
-
-{task_menu}
-
-## Required response format
-
-Respond with **only** a single JSON object (no markdown fences, no text before or after).
-
-- `attributes`: **array**; include **one object per** attribute from "{attributes_heading}", each with:
-  - `attribute_name` (string, must match the attribute's `name`),
-  - `selected_level_id` (string, must be a listed level `id` for that attribute),
-  - `confidence`: `high`, `medium`, or `low`,
-  - `reasoning` (short string).
-- `summary`: brief synthesis of the overall attribute profile (string).
-- `work_activities`: array of `WA_Element_ID` strings from the ONET list above, no duplicates, ordered most central to the role first.{kenya_postsec}
-
-**JSON shape:**
-{{
-  "attributes": [
-    {{
-      "attribute_name": "<name>",
-      "selected_level_id": "<level_id>",
-      "confidence": "high",
-      "reasoning": "..."
-    }}
-  ],
-  "summary": "...",
-  "work_activities": ["<WA_Element_ID>", "..."]{kenya_json_field}
-}}"""
+    json_keys = "".join(f',\n  "{f}": true' for f in fields)
+    return render_prompt(
+        JOB_ATTRIBUTES_RESPONSE,
+        s,
+        work_activities_menu=_format_onet_work_activity_menu(onet_work_activities, settings=s),
+        # Must be the same heading text the user block emitted, or the model is pointed at
+        # a section that does not exist in its prompt.
+        attributes_heading=prompt_label("attributes_heading", s),
+        country_field_instructions=instructions,
+        country_field_json=json_keys,
+    )
 
 
 def build_job_attributes_prompt(
@@ -518,12 +469,12 @@ def build_job_attributes_prompt(
     settings: Settings | None = None,
 ) -> str:
     """
-    LLM call 2: system text from ``resources/prompts.py`` (:data:`resources.prompts.JOB_ATTRIBUTES_SYSTEM_PROMPT`),
-    then this module's single-county-style user block, optional job-listing context, attribute menu,
-    then ONET + JSON contract.
+    LLM call 2: ``prompts/job_attributes_system.md``, then this module's single-county-style
+    user block, optional job-listing context, attribute menu, then
+    ``prompts/job_attributes_response.md`` (ONET menu + JSON contract).
     """
     s = settings or get_settings()
-    system = load_job_attributes_system_prompt(s)
+    system = render_prompt(JOB_ATTRIBUTES_SYSTEM, s)
     fields = resolve_llm2_single_county_user_fields(occupation, extras)
     user = build_single_county_job_attributes_user_prompt(
         opening_line,
@@ -534,5 +485,5 @@ def build_job_attributes_prompt(
         settings=s,
         **fields,
     )
-    appendix = _job_attributes_onet_and_json_appendix(onet_work_activities, settings=s)
-    return f"{system}\n\n---\n\n{user}{appendix}"
+    response = _job_attributes_response_contract(onet_work_activities, settings=s)
+    return f"{system}\n\n---\n\n{user}\n\n---\n\n{response}"

@@ -116,7 +116,7 @@ the embedding fields:
 | `llm_classified_skills` | LLM1's ranking: `essential`, `optional`, `discarded`, plus `unmatched_*` labels that matched no candidate |
 | `llm_job_attributes` | LLM2's `summary`, its `estimates`, and an `attributes` map from attribute name to level |
 | `classifier_metadata` | Listing fields copied from the source document, plus any scraper enrichment fields (`province`, `sector`, `isco_*`, `zqf_*`) |
-| `llm_reranker_meta` | `schema_version`, `llm_provider`, and the model behind each pass. `occupation_skills_relevance_model` is recorded even when no LLM3 call ran, because the matching service reads this shape. Use `llm3_outcome` to tell whether the call happened. |
+| `llm_reranker_meta` | `schema_version`, `llm_provider`, the model behind each pass, and the prompts it was given (`prompt_version`, e.g. `en/1`, and `prompt_digest`). `occupation_skills_relevance_model` is recorded even when no LLM3 call ran, because the matching service reads this shape. Use `llm3_outcome` to tell whether the call happened. |
 
 Optional keys the pipeline did not write are left out of the response rather than sent as
 `null`.

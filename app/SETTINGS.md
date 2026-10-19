@@ -159,8 +159,14 @@ outside `[0, 1]` is accepted but logged and ignored (falls back to "no threshold
 | `RERANKER_LANGUAGE` / `TARGET_LANGUAGE` | `language` | registered language code | derived from `target_country`, else `en` |
 | — | `language_name` | str | `English` |
 | — | `language_resources_dir` | path | `resources/en/` |
+| — | `job_attributes_country_fields` | tuple[str, ...] | from `TARGET_COUNTRY`: `("requires_post_secondary",)` for `kenya`, else `()` |
 
 An unrecognised `TARGET_COUNTRY` falls back to `zambia` rather than failing a batch.
+
+`job_attributes_country_fields` lists the extra boolean fields LLM2 is asked for in this
+country. It comes from `_JOB_ATTRIBUTES_COUNTRY_FIELDS` in `app/config.py`, and each field's
+prompt block is in `resources/<lang>/prompts/countries/<country>/<field>.md` (see
+`resources/README.md`).
 
 ## Data files / resource resolution
 

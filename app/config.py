@@ -67,6 +67,15 @@ _COUNTRY_NAME_BY_SLUG: dict[str, str] = {
 }
 
 
+# Extra LLM2 response fields a country asks for, beyond the shared JSON contract. Each is
+# a boolean the model returns at the top level of its JSON, stored on
+# ``llm_job_attributes.attributes``; its prompt instructions live in the language pack at
+# ``prompts/countries/<country>/<field>.md`` (see resources/README.md).
+_JOB_ATTRIBUTES_COUNTRY_FIELDS: dict[str, tuple[str, ...]] = {
+    "kenya": ("requires_post_secondary",),
+}
+
+
 def _country_name_from_slug(slug: str) -> str:
     """Human-readable country name derived from ``TARGET_COUNTRY`` only."""
     if slug in _COUNTRY_NAME_BY_SLUG:
@@ -628,6 +637,11 @@ class Settings(BaseSettings):
     @cached_property
     def country_name(self) -> str:
         return _country_name_from_slug(self.target_country)
+
+    @cached_property
+    def job_attributes_country_fields(self) -> tuple[str, ...]:
+        """Extra boolean fields LLM2 must return for this country (may be empty)."""
+        return _JOB_ATTRIBUTES_COUNTRY_FIELDS.get(self.target_country, ())
 
     @cached_property
     def language(self) -> str:

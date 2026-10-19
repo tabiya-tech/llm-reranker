@@ -41,6 +41,7 @@ from app.observability import (
     update_observation,
 )
 from app.pipeline import load_taxonomy_context
+from app.prompt_resources import prompt_provenance
 from app.ranked_jobs.mongo_repository import MongoRankedJobsRepository
 from app.run_logs.mongo_repository import MongoRunLogsRepository
 from app.run_logs.repository import RunStats
@@ -188,13 +189,16 @@ def run() -> None:
     pending: list[UpdateOne] = []
 
     t_startup = time.perf_counter()
+    # Resolves every prompt template now: a pack missing one fails the run here, not
+    # each job in turn.
+    prompts = prompt_provenance(settings)
     taxonomy = load_taxonomy_context(settings)
     startup_s = _elapsed_s(t_startup)
 
     limit_log = "all" if args.limit <= 0 else str(args.limit)
     logger.info(
         "Batch start | db=%s | limit=%s | target_collection=%s bulk_batch_size=%s | "
-        "startup_load_s=%.3f | taxonomy_relation_occupations=%s | llm=%s",
+        "startup_load_s=%.3f | taxonomy_relation_occupations=%s | llm=%s | prompts=%s (%s)",
         settings.mongodb_database,
         limit_log,
         settings.mongodb_target_collection,
@@ -202,6 +206,8 @@ def run() -> None:
         startup_s,
         len(taxonomy.occ_map),
         settings.llm.describe(),
+        prompts["prompt_version"],
+        prompts["prompt_digest"],
     )
     logger.debug(
         "Batch config detail | job_attributes_schema=%s occupation_relations_csv=%s "

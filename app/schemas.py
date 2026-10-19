@@ -206,8 +206,9 @@ def _json_bool(v: object, default: bool = True) -> bool:
     return default
 
 
-def parse_requires_post_secondary(raw: object) -> bool:
-    """Kenya eligibility flag from LLM2 JSON; omitted or unparseable -> ``false``."""
+def parse_country_field_flag(raw: object) -> bool:
+    """A country's extra LLM2 boolean (e.g. Kenya's ``requires_post_secondary``); omitted or
+    unparseable -> ``false``."""
     if raw is None:
         return False
     return _json_bool(raw, default=False)
@@ -262,8 +263,9 @@ def parse_job_attributes_response(
 
     ``summary`` is optional text; ``work_activities`` is a list of allowed ONET ids.
 
-    When present, ``requires_post_secondary`` (boolean) is stored on the flat ``attributes`` map
-    under that key for downstream matching eligibility (Kenya pipeline).
+    Each of the country's extra fields (:attr:`Settings.job_attributes_country_fields`, e.g.
+    Kenya's ``requires_post_secondary``) is stored as a boolean on the flat ``attributes``
+    map under its own key, for downstream matching eligibility.
     """
     cleaned = strip_json_fence(raw_text)
     try:
@@ -315,10 +317,8 @@ def parse_job_attributes_response(
     estimates = tuple(by_name[a.name] for a in schema.attributes if a.name in by_name)
     flat: dict[str, str | bool] = {e.attribute_name: e.selected_level_id for e in estimates}
     s = settings or get_settings()
-    if s.target_country == "kenya":
-        flat["requires_post_secondary"] = parse_requires_post_secondary(
-            data.get("requires_post_secondary")
-        )
+    for field in s.job_attributes_country_fields:
+        flat[field] = parse_country_field_flag(data.get(field))
     summary_raw = data.get("summary")
     summary = str(summary_raw).strip() if summary_raw is not None else ""
 

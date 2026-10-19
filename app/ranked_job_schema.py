@@ -9,6 +9,7 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.job_context import JobDescriptionContext
+from app.prompt_resources import prompt_provenance
 from app.schemas import (
     JobAttributesResult,
     OccupationSkillsRelevanceResult,
@@ -579,12 +580,14 @@ def occupation_to_skills_with_meta(items: list[dict[str, Any]]) -> dict[str, Any
 
 
 def build_llm_reranker_meta(settings: Settings) -> dict[str, Any]:
-    """``classifier_metadata`` block: schema version plus the model behind each pass.
+    """``llm_reranker_meta`` block: schema version, the model behind each pass, and the
+    prompts it was given.
 
     All three passes share one configured client, so the three model fields are equal;
     they stay separate because the shape is a published contract read by the matching
     service. ``llm_provider`` is additive — a Gemini deployment still writes the same
-    model string it always did.
+    model string it always did. ``prompt_version`` / ``prompt_digest`` identify the
+    language pack's prompt templates (:func:`app.prompt_resources.prompt_provenance`).
     """
     return {
         "schema_version": PIPELINE_SCHEMA_VERSION,
@@ -592,6 +595,7 @@ def build_llm_reranker_meta(settings: Settings) -> dict[str, Any]:
         "skill_ranker_model": settings.llm.model,
         "occupation_skills_relevance_model": settings.llm.model,
         "job_attributes_model": settings.llm.model,
+        **prompt_provenance(settings),
         "classified_linked_entity_types": list(settings.classified_linked_entity_types),
     }
 

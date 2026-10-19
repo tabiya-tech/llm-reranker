@@ -28,9 +28,9 @@ from app.schemas import (
     load_job_attributes_schema,
     load_onet_work_activities,
     onet_work_activities_path,
+    parse_country_field_flag,
     parse_job_attributes_response,
     parse_occupation_skills_relevance_response,
-    parse_requires_post_secondary,
 )
 
 # ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ class TestParseRequiresPostSecondary:
         ],
     )
     def test_kenya_eligibility_flag(self, raw, expected):
-        assert parse_requires_post_secondary(raw) == expected
+        assert parse_country_field_flag(raw) == expected
 
 
 class TestAllowedLevelIdsByAttribute:

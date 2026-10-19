@@ -335,6 +335,14 @@ class LlmRerankerMeta(_PassThrough):
         "`llm3_outcome` on the response."
     )
     job_attributes_model: str = Field(description="Model behind LLM2.")
+    prompt_version: str = Field(
+        description="Language pack and its prompt version, `<language>/<VERSION>`.",
+        examples=["en/1"],
+    )
+    prompt_digest: str = Field(
+        description="Hash of the prompt templates the run resolved, country blocks included. "
+        "Changes with any prompt edit, versioned or not."
+    )
     classified_linked_entity_types: list[str] = Field(
         description="Entity types read from `classification.entities`."
     )

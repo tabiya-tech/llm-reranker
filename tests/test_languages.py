@@ -112,13 +112,15 @@ class TestSettingsLanguage:
 class TestPrompts:
     def test_spanish_prompts_come_from_the_spanish_pack(self, make_settings):
         from app.prompt_resources import (
-            load_job_attributes_system_prompt,
-            load_skills_ranker_prompt_template,
+            JOB_ATTRIBUTES_SYSTEM,
+            SKILL_RANKER,
+            load_prompt_template,
+            render_prompt,
         )
 
         s = make_settings(RERANKER_LANGUAGE="es", TARGET_COUNTRY="argentina")
-        system = load_job_attributes_system_prompt(s)
-        skills = load_skills_ranker_prompt_template(s)
+        system = render_prompt(JOB_ATTRIBUTES_SYSTEM, s)
+        skills = load_prompt_template(s, SKILL_RANKER)
 
         # Spanish text, with the country substituted and the language stated.
         assert "analista experto del mercado laboral" in system
@@ -130,10 +132,10 @@ class TestPrompts:
         assert "{full_details}" in skills and "{skills_text}" in skills
 
     def test_english_prompts_are_unchanged(self, make_settings):
-        from app.prompt_resources import load_job_attributes_system_prompt
+        from app.prompt_resources import JOB_ATTRIBUTES_SYSTEM, render_prompt
 
         s = make_settings(TARGET_COUNTRY="kenya")
-        system = load_job_attributes_system_prompt(s)
+        system = render_prompt(JOB_ATTRIBUTES_SYSTEM, s)
         assert system.startswith("You are an expert labor market analyst")
         assert "Kenya" in system
 

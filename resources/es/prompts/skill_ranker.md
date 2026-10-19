@@ -1,25 +1,4 @@
-```python
-from typing import List, Dict
-
-def create_skills_prompt_combined(
-    full_details: str,
-    potential_skills: List[Dict[str, str]]
-) -> str:
-    """
-    Prompt de habilidades (LLM1), versión en español.
-
-    Traducción de ``en/Skills_reranker_prompts.md``. El cargador
-    (``app/prompt_resources.py``) extrae el texto que está dentro de
-    ``return f\"\"\" … }}\"\"\"``, así que hay que mantener esa estructura y los
-    marcadores ``{full_details}`` / ``{skills_text}`` tal como están.
-
-    Las etiquetas del menú de habilidades vienen del paquete de recursos en español
-    (``resources/es/skills.csv``), por eso el modelo debe devolverlas en español y
-    copiadas de forma literal.
-    """
-    skills_text = _format_labeled_list(potential_skills)
-
-    return f"""Eres un reclutador técnico experto con amplio conocimiento del mercado laboral. Tu tarea es analizar una oferta de trabajo y clasificar las habilidades relevantes de una lista dada en categorías específicas.
+Eres un reclutador técnico experto con amplio conocimiento del mercado laboral. Tu tarea es analizar una oferta de trabajo y clasificar las habilidades relevantes de una lista dada en categorías específicas.
 
 **Detalles de la oferta:**
 ---
@@ -44,6 +23,4 @@ def create_skills_prompt_combined(
 {{
   "essential_skills": ["...", "..."],
   "optional_skills": ["...", "...", "..."]
-}}"""
-
-```
+}}

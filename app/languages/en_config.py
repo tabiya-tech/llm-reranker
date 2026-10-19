@@ -20,10 +20,11 @@ LANGUAGE_CONFIG = {
     # Prefer `translation.text_en` / `fields_en` on classified_jobs for prompt text.
     # Irrelevant for English documents, which carry no `translation` field.
     "prefer_translation": True,
-    # Human-facing scaffolding of the LLM2 user block (app/prompts.py). These are the
-    # English strings the prompts have always used — changing them changes English
-    # prompts. The JSON response contract stays in English for every language: its keys
-    # and level ids are English identifiers the model must copy verbatim.
+    # Human-facing scaffolding app/prompts.py assembles around the prompt templates in
+    # resources/en/prompts/. These are the English strings the prompts have always used —
+    # changing them changes English prompts. Other languages fall back to these per key.
+    # The JSON response contract stays in English for every language: its keys and level
+    # ids are English identifiers the model must copy verbatim.
     "prompt_labels": {
         "opening_with_region": (
             "Estimate job attributes for the following occupation in {region}, {country}:"
@@ -51,5 +52,35 @@ LANGUAGE_CONFIG = {
         "attributes_instruction": (
             "For each attribute, select the most appropriate level_id and provide brief reasoning."
         ),
+        # Occupation line when the classifier linked no occupation and the listing has no title.
+        "unknown_occupation": "Unknown role",
+        # Attribute menu (LLM2).
+        "attribute_group": "Group",
+        "attribute_type": "Type",
+        "attribute_levels": "Levels",
+        "attribute_level_value": "value",
+        # ONET work-activity menu (LLM2).
+        "work_activity_swahili": "Swahili",
+        # Skill menu (LLM1).
+        "skill_description": "Description",
+        # Job listing text and metadata, shared by LLM2 and LLM3.
+        "listing_requirements": "Requirements:",
+        "listing_no_description": "(no job description text provided)",
+        "listing_no_metadata": "(no structured metadata fields available)",
+        "listing_title": "Title",
+        "listing_employer": "Employer",
+        "listing_category": "Category",
+        "listing_salary": "Salary",
+        "listing_city": "Location / city",
+        "listing_region": "Region",
+        "listing_employment_type": "Employment type",
+        "listing_posted": "Posted",
+        "listing_closing": "Closing",
+        "listing_source_platform": "Source platform",
+        "listing_application_url": "Application URL",
+        # Skill menu of LLM3 (resources/<lang>/prompts/occupation_skills_relevance_user.md).
+        "relevance_occupation": "Occupation",
+        "relevance_unnamed_occupation": "(occupation)",
+        "relevance_no_skills": "(no essential or optional occupation skills to judge)",
     },
 }

@@ -122,7 +122,7 @@ The contract is in `app/llm/base.py`: return raw text (fenced ```json is tolerat
 
 **Not covered by this setting:** the job-embedding step (`RERANKER_JOB_EMBEDDING_MODEL`) stays on `gemini-embedding-001` and still needs `GEMINI_API_KEY` when enabled. It writes into match_v4's stage-1 vector space, whose whitening artifact was fitted on that model — a different embedding model would not be a swap but a re-fit across two repos.
 
-The model that actually ran is recorded per document in `classifier_metadata` (`llm_provider`, `skill_ranker_model`, `job_attributes_model`, `occupation_skills_relevance_model`) and in each run log.
+The model that actually ran is recorded per document in `llm_reranker_meta` (`llm_provider`, `skill_ranker_model`, `job_attributes_model`, `occupation_skills_relevance_model`), together with the prompts it was given (`prompt_version`, `prompt_digest` — see [`resources/README.md`](resources/README.md#versioning)), and in each run log.
 
 ## API — single job
 
@@ -207,12 +207,17 @@ resources/
   concat_whitening_gemini.npz     language-neutral (embeddings, not text)
   en/                             English pack
     occupations.csv  skills.csv  occupation_to_skill_relations.csv  skill_hierarchy.csv
-    prompts.py  Skills_reranker_prompts.md  job_attributes_reduced.json
+    prompts/  job_attributes_reduced.json
     ONET_tasks_WAs_translated.json  combined_occupation_database_with_wa.json
   es/                             Argentine Spanish pack (Tabiya ESCO 1.1.1, locale AR-es)
     occupations.csv  skills.csv  occupation_to_skill_relations.csv  skill_hierarchy.csv
-    prompts.py  Skills_reranker_prompts.md  job_attributes_reduced.json  model_info.csv
+    prompts/  job_attributes_reduced.json  model_info.csv
 ```
+
+`prompts/` holds every prompt the model is sent, as plain templates; `app/prompts.py` only
+fills them in. [`resources/README.md`](resources/README.md) lists the files and their
+placeholders, explains prompt versioning, and covers adding a country-specific prompt
+block (e.g. Kenya's `requires_post_secondary`).
 
 Each file is looked up in `resources/<language>/`, then `resources/en/`, then `resources/`.
 A language therefore only ships what actually differs — `es` ships no ONET reference data
@@ -245,9 +250,11 @@ python scripts/build_language_resources.py --taxonomy-dir <export-dir> --languag
    The script validates the columns each loader reads by name and reports which prompt
    files still need translating.
 
-4. Translate `prompts.py`, `Skills_reranker_prompts.md` and `job_attributes_reduced.json`
-   from `resources/en/`. Until you do, that language falls back to the English prompts —
-   the model would be instructed in English over a non-English skill menu.
+4. Translate `job_attributes_reduced.json` and the templates in `prompts/` from
+   `resources/en/`, and give the pack its own `prompts/VERSION`
+   ([`resources/README.md`](resources/README.md#adding-a-languages-prompts)). Until you do,
+   that language falls back to the English prompts — the model would be instructed in
+   English over a non-English skill menu.
 5. If the language belongs to a new country, add it to `LANGUAGE_BY_COUNTRY`.
 
 ### Argentina

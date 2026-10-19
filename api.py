@@ -29,6 +29,7 @@ from app.observability import (
     update_observation,
 )
 from app.pipeline import TaxonomyContext, load_taxonomy_context, process_single_job
+from app.prompt_resources import prompt_provenance
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -82,15 +83,20 @@ async def lifespan(application: FastAPI):
     # container's startup probe, not the first request that reaches it. This also
     # warms the process-wide client that every request will reuse.
     llm = get_llm_client(settings.llm)
+    # Same for the prompt templates: resolving them all now fails a pack missing one.
+    prompts = prompt_provenance(settings)
     init_tracing(tracing_config_from_env())
     logger.info("Loading taxonomy data (CSV lookups)…")
     _taxonomy = load_taxonomy_context(settings)
     _taxonomies[settings.language] = _taxonomy
     logger.info(
-        "API ready | llm=%s (%s) | language=%s | taxonomy_occupations=%s | supported_languages=%s",
+        "API ready | llm=%s (%s) | language=%s | prompts=%s (%s) | taxonomy_occupations=%s | "
+        "supported_languages=%s",
         llm.model,
         settings.llm.provider,
         settings.language,
+        prompts["prompt_version"],
+        prompts["prompt_digest"],
         len(_taxonomy.occ_map),
         ",".join(LANGUAGE_REGISTRY),
     )
