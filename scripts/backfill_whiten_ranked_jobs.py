@@ -33,12 +33,12 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -46,9 +46,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from app.config import Settings  # noqa: E402
 from app.job_embedding.whitening import CONCAT_WHITENING_ARTIFACT_SHA256, ConcatWhitener
+from app.job_embedding.whitening_repository import WhiteningArtifactRepository
 from app.ranked_jobs.mongo_repository import MongoRankedJobsRepository
 from app.ranked_jobs.repository import IRankedJobsRepository
-from app.job_embedding.whitening_repository import WhiteningArtifactRepository
 from app.server_dependencies.db_dependencies import standalone_db  # noqa: E402
 
 DEFAULT_COLLECTION = "ranked_jobs"
@@ -57,15 +57,26 @@ DEFAULT_BATCH_SIZE = 200
 log = logging.getLogger("backfill_whiten_ranked_jobs")
 
 
-@dataclass
-class BackfillStats:
-    scanned: int = 0
-    skipped_already_migrated: int = 0
-    skipped_missing_embedding: int = 0
-    skipped_wrong_dim: int = 0
-    whitened: int = 0
-    written: int = 0
-    dry_run_would_write: int = 0
+class BackfillStats(BaseModel):
+    """Per-run counters for one ``run_backfill`` invocation."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    scanned: int = Field(default=0, description="Candidate documents read from the cursor.")
+    skipped_already_migrated: int = Field(
+        default=0, description="Documents that already have whitening provenance."
+    )
+    skipped_missing_embedding: int = Field(
+        default=0, description="Documents with no usable raw `job_embedding`."
+    )
+    skipped_wrong_dim: int = Field(
+        default=0, description="Documents whose `job_embedding` length doesn't match expected_dim."
+    )
+    whitened: int = Field(default=0, description="Documents successfully whitened in-memory.")
+    written: int = Field(default=0, description="Documents actually written back to MongoDB.")
+    dry_run_would_write: int = Field(
+        default=0, description="Documents that would have been written, in `--dry-run` mode."
+    )
 
 
 def _already_migrated(doc: dict[str, Any]) -> bool:
@@ -75,7 +86,9 @@ def _already_migrated(doc: dict[str, Any]) -> bool:
     return bool(whitening.get("enabled")) and isinstance(doc.get("raw_embedding"), list)
 
 
-def _build_whitening_provenance(*, whitener: ConcatWhitener, applied_at: datetime) -> dict[str, Any]:
+def _build_whitening_provenance(
+    *, whitener: ConcatWhitener, applied_at: datetime
+) -> dict[str, Any]:
     return {
         "enabled": True,
         "artifact_sha256": whitener.artifact_sha256,
@@ -122,6 +135,7 @@ def run_backfill(
     dry_run: bool,
     expected_artifact_sha256: str | None,
 ) -> BackfillStats:
+    """Scan the target collection, whiten each candidate's ``job_embedding``, and write it back."""
     whitener = ConcatWhitener(WhiteningArtifactRepository().load(settings))
     if expected_artifact_sha256:
         whitener.assert_sha256(expected_artifact_sha256)
@@ -163,7 +177,9 @@ def run_backfill(
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--mongodb-uri", default=os.environ.get("MONGODB_URI", ""))
     p.add_argument("--db", required=True, help="MongoDB database name (e.g. ZambiaJobs_V2)")
     p.add_argument("--collection", default=DEFAULT_COLLECTION)
@@ -172,16 +188,21 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument(
         "--expected-artifact-sha256",
-        default=os.environ.get("RERANKER_CONCAT_WHITENING_EXPECTED_SHA256", CONCAT_WHITENING_ARTIFACT_SHA256),
+        default=os.environ.get(
+            "RERANKER_CONCAT_WHITENING_EXPECTED_SHA256", CONCAT_WHITENING_ARTIFACT_SHA256
+        ),
     )
     p.add_argument(
         "--concat-whitening-path",
-        default=os.environ.get("RERANKER_CONCAT_WHITENING_PATH", "resources/concat_whitening_gemini.npz"),
+        default=os.environ.get(
+            "RERANKER_CONCAT_WHITENING_PATH", "resources/concat_whitening_gemini.npz"
+        ),
     )
     return p.parse_args()
 
 
 def main() -> int:
+    """CLI entry point: parse args, run the backfill, log a summary."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = _parse_args()
     if not args.mongodb_uri.strip():

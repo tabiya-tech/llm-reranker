@@ -33,6 +33,7 @@ from app.job_ranking.occupation_skills.parser import OccupationSkillsRelevanceRe
 from app.job_ranking.occupation_skills.prompt import OccupationSkillsRelevancePromptBuilder
 from app.job_ranking.occupation_skills.relevance_step import OccupationSkillsRelevanceStep
 from app.job_ranking.prompts.repository import PromptRepository
+from app.job_ranking.routes.types import RankedJobDocument
 from app.job_ranking.service import JobRankingService
 from app.job_ranking.types import NO_PROMPT_LOGGING, Llm3Outcome, PromptLogging
 from app.llm import LlmClient, build_traced_llm_client
@@ -93,15 +94,17 @@ class TestJobRankingService:
         assert "total_s" in result.timings
         # Ranked document carries the ESCO skill from LLM1.
         ranked = result.ranked_document
-        ess = ranked["llm_classified_skills"]["essential"]
+        assert ranked is not None
+        ess = ranked.llm_classified_skills.essential
         assert len(ess) == 1
-        assert ess[0]["uri"].startswith("http://data.europa.eu/esco/skill/")
+        assert ess[0].uri is not None
+        assert ess[0].uri.startswith("http://data.europa.eu/esco/skill/")
         # Top-level identifiers and metadata are populated from the source doc.
-        assert ranked["job_id"] == "jid-1"
-        assert ranked["job_fingerprint"] == "fp-1"
-        assert ranked["source_classified_id"] == "src-doc-1"
-        assert ranked["classifier_metadata"]["title"] == "Software Engineer"
-        assert ranked["llm_job_attributes"]["summary"] == "stubbed"
+        assert ranked.job_id == "jid-1"
+        assert ranked.job_fingerprint == "fp-1"
+        assert ranked.source_classified_id == "src-doc-1"
+        assert ranked.classifier_metadata.title == "Software Engineer"
+        assert ranked.llm_job_attributes.summary == "stubbed"
 
     def test_overlap_llm12_path(self, make_settings):
         # When RERANKER_OVERLAP_LLM1_LLM2=1, LLM1 and LLM2 run concurrently.
@@ -167,9 +170,9 @@ class TestLlm3MenuFoldedIntoLlm1:
         assert result.stats.llm3_added_llm1_candidates == 1
         assert "llm3_s" not in result.timings
         assert result.ranked_document is not None
-        llm_skills = result.ranked_document["llm_classified_skills"]
-        assert [r["label"] for r in llm_skills["essential"]] == ["Python", "Weld metal"]
-        assert llm_skills["discarded"] == []
+        llm_skills = result.ranked_document.llm_classified_skills
+        assert [r.label for r in llm_skills.essential] == ["Python", "Weld metal"]
+        assert llm_skills.discarded == []
 
     def test_menu_not_added_when_llm3_disabled(self, make_settings):
         s = make_settings(GEMINI_API_KEY="dummy", TARGET_COUNTRY="kenya", RERANKER_ENABLE_LLM3="0")
@@ -229,9 +232,9 @@ class TestLlm3StandaloneCall:
         assert result.stats.llm3_decisions == 2
         assert "llm3_s" in result.timings
         assert result.ranked_document is not None
-        block = result.ranked_document["occupation_to_skills"]["items"][0]
-        assert [sk["llm_is_relevant"] for sk in block["skills"]] == [True, False]
-        assert block["skill_counts"]["relevant_total"] == 1
+        block = result.ranked_document.occupation_to_skills.items[0]
+        assert [sk.llm_is_relevant for sk in block.skills] == [True, False]
+        assert block.skill_counts.relevant_total == 1
 
     def test_batch_counts_the_call(self, make_settings):
         s = self._settings(make_settings, RERANKER_ENABLE_JOB_EMBEDDING="0")
@@ -265,7 +268,7 @@ class TestBatchRunsTheSharedPipeline:
             GEMINI_API_KEY="dummy", TARGET_COUNTRY="kenya", RERANKER_ENABLE_JOB_EMBEDDING="0"
         )
         ranking = build_ranking_service(s)
-        ranked: list[dict[str, Any] | None] = []
+        ranked: list[RankedJobDocument | None] = []
         real = ranking.rank
 
         def _spy(doc, **kwargs):
@@ -278,7 +281,8 @@ class TestBatchRunsTheSharedPipeline:
 
         assert len(ranked) == 1
         assert r.upsert is not None
-        assert r.upsert.document is ranked[0]
+        assert ranked[0] is not None
+        assert r.upsert.document == ranked[0].model_dump(mode="python", by_alias=True)
         assert (r.upsert.key, r.upsert.key_value) == (RankedJobKey.JOB_ID, "jid-1")
         assert (r.llm1_inc, r.llm2_inc, r.llm3_inc, r.upsert_increment) == (1, 1, 0, 1)
 
@@ -357,18 +361,18 @@ class TestPipelineOverAConfiguredModel:
         ranked = result.ranked_document
         assert ranked is not None
         # LLM1's answer survived parsing and label→URI mapping.
-        essential = ranked["llm_classified_skills"]["essential"]
-        assert [sk["uri"] for sk in essential] == [
+        essential = ranked.llm_classified_skills.essential
+        assert [sk.uri for sk in essential] == [
             "http://data.europa.eu/esco/skill/5247a6ce-6ed0-4fb3-b121-758921dcc44e"
         ]
         # LLM2's answer landed in the attributes block.
-        assert ranked["llm_job_attributes"]["summary"] == "ranked by a configured non-Gemini model"
-        assert ranked["llm_job_attributes"]["attributes"]["earnings_per_month"] == "earn_15k"
+        assert ranked.llm_job_attributes.summary == "ranked by a configured non-Gemini model"
+        assert ranked.llm_job_attributes.attributes["earnings_per_month"] == "earn_15k"
         # The document records which model produced it.
-        meta = ranked["llm_reranker_meta"]
-        assert meta["skill_ranker_model"] == "scripted-model-v1"
-        assert meta["job_attributes_model"] == "scripted-model-v1"
-        assert meta["llm_provider"] == "custom"
+        meta = ranked.llm_reranker_meta
+        assert meta.skill_ranker_model == "scripted-model-v1"
+        assert meta.job_attributes_model == "scripted-model-v1"
+        assert meta.llm_provider == "custom"
         # Both passes went through the configured client, with real assembled prompts.
         purposes = [p for p, _ in ScriptedLlmClient.calls]
         assert sorted(purposes) == ["job_attributes", "skill_ranker"]

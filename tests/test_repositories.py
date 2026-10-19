@@ -117,7 +117,7 @@ class TestClassifiedJobsRepository:
         repo, coll = self._repo(settings)
         since = datetime(2026, 1, 2, tzinfo=timezone.utc)
         docs = list(repo.iter_jobs(job_filter=ClassifiedJobsFilter(classified_since=since)))
-        assert [d["_id"] for d in docs] == [4, 3, 2, 1, 0]
+        assert [d.id for d in docs] == [4, 3, 2, 1, 0]
         assert coll.find_calls == [
             ({"classified_at": {"$gte": since}}, {"no_cursor_timeout": True})
         ]
@@ -154,12 +154,26 @@ class TestClassifiedJobsRepository:
     def test_iter_jobs_chunks(self, settings):
         repo, _ = self._repo(settings)
         chunks = list(repo.iter_jobs_chunks(2))
-        assert [[d["_id"] for d in c] for c in chunks] == [[4, 3], [2, 1], [0]]
+        assert [[d.id for d in c] for c in chunks] == [[4, 3], [2, 1], [0]]
 
     def test_iter_jobs_chunks_rejects_zero(self, settings):
         repo, _ = self._repo(settings)
         with pytest.raises(ValueError, match="chunk_size"):
             list(repo.iter_jobs_chunks(0))
+
+    def test_invalid_document_is_skipped_not_raised(self, settings, caplog):
+        """A document that fails ``RankRequest`` validation is logged and skipped, not raised,
+        so one malformed document can't abort an entire batch run."""
+        good = {"_id": "ok-1", "job_id": "jid-1"}
+        bad = {"_id": "bad-1", "classification": "not-an-object"}
+        db = FakeDatabase({"src": FakeCollection([good, bad, good])})
+        repo = MongoClassifiedJobsRepository(db, settings)  # type: ignore[arg-type]
+
+        with caplog.at_level("WARNING"):
+            docs = list(repo.iter_jobs())
+
+        assert [d.id for d in docs] == ["ok-1", "ok-1"]
+        assert any("bad-1" in rec.message for rec in caplog.records)
 
 
 class TestRankedJobsRepository:
@@ -174,7 +188,9 @@ class TestRankedJobsRepository:
         db = FakeDatabase()
         repo = MongoRankedJobsRepository(db, settings)  # type: ignore[arg-type]
         repo.bulk_upsert([])
-        repo.bulk_upsert([RankedJobUpsert(RankedJobKey.JOB_ID, "a", {"x": 1})])
+        repo.bulk_upsert(
+            [RankedJobUpsert(key=RankedJobKey.JOB_ID, key_value="a", document={"x": 1})]
+        )
         ((ops, ordered),) = db.collections["dst"].bulk_write_calls
         assert ordered is False
         assert len(ops) == 1
@@ -188,14 +204,17 @@ class TestRankedJobsRepository:
         repo = MongoRankedJobsRepository(FakeDatabase(), s)  # type: ignore[arg-type]
 
         filters = [
-            repo.upsert_operation(RankedJobUpsert(key, "v", {}))._filter for key in RankedJobKey
+            repo.upsert_operation(RankedJobUpsert(key=key, key_value="v", document={}))._filter
+            for key in RankedJobKey
         ]
 
         assert filters == [{"jid": "v"}, {"fp": "v"}, {"source_classified_id": "v"}]
 
     def test_upsert_sets_the_document_and_drops_legacy_fields(self, settings):
         repo = MongoRankedJobsRepository(FakeDatabase(), settings)  # type: ignore[arg-type]
-        op = repo.upsert_operation(RankedJobUpsert(RankedJobKey.JOB_ID, "a", {"x": 1}))
+        op = repo.upsert_operation(
+            RankedJobUpsert(key=RankedJobKey.JOB_ID, key_value="a", document={"x": 1})
+        )
         update = op._doc
         assert isinstance(update, dict)
         assert update["$set"] == {"x": 1}

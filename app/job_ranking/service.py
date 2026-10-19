@@ -27,6 +27,7 @@ from app.job_ranking.occupation_skills.relevance_step import OccupationSkillsRel
 from app.job_ranking.occupation_skills.taxonomy_step import OccupationTaxonomyStep
 from app.job_ranking.prompts.repository import PromptRepository
 from app.job_ranking.ranked_document import RankedJobDocumentAssembler
+from app.job_ranking.routes.types import OccupationSkillsBlock
 from app.job_ranking.skill_ranker.parser import SkillRankerResponseParser
 from app.job_ranking.skill_ranker.prompt import SkillRankerPromptBuilder
 from app.job_ranking.skill_ranker.step import SkillRankerStep
@@ -35,6 +36,7 @@ from app.job_ranking.types import (
     NO_PROMPT_LOGGING,
     HealthStatus,
     JobResult,
+    Llm1Llm2Result,
     Llm3Outcome,
     PromptLogging,
 )
@@ -117,6 +119,9 @@ class JobRankingService:
         t_total = time.perf_counter()
 
         ctx = build_job_description_context(classified_doc, settings=settings)
+        from app.job_ranking.routes.types import RankedJobDocument  # noqa: F401
+
+        JobResult.model_rebuild()
         result = JobResult(ranked_document=None, ctx=ctx)
         stats = result.stats
         flags = prompt_logging or NO_PROMPT_LOGGING
@@ -139,11 +144,11 @@ class JobRankingService:
         if taxonomy.stats is not None:
             stats.taxonomy_detail = taxonomy.stats.format_log_lines()
 
-        llm3_menu: list[dict[str, Any]] = []
+        llm3_menu: list[OccupationSkillsBlock] = []
         if settings.reranker_enable_llm3 and stats.taxonomy_menu_skills > 0:
-            llm3_menu, _, stats.llm3_prompt_skills = build_llm3_occupation_menu(
-                occupation_to_skills, base_skills, settings
-            )
+            llm3_subset = build_llm3_occupation_menu(occupation_to_skills, base_skills, settings)
+            llm3_menu = llm3_subset.items
+            stats.llm3_prompt_skills = llm3_subset.subset_menu_count
 
         llm1_candidates = base_skills
         if not settings.reranker_enable_llm3:
@@ -171,9 +176,10 @@ class JobRankingService:
             result.ran_llm3 = True
             result.llm3_outcome = Llm3Outcome.CALLED
 
-        skill_ranker, job_attributes = self._run_llm1_llm2(
+        llm12 = self._run_llm1_llm2(
             ctx, classified_doc, llm1_candidates, logging_for_job, result.timings
         )
+        skill_ranker, job_attributes = llm12.skill_ranker, llm12.job_attributes
         stats.llm1_menu = len(llm1_candidates)
         if skill_ranker is not None:
             result.ran_llm1 = True
@@ -206,7 +212,7 @@ class JobRankingService:
         candidates: list[EscoSkillCandidate],
         prompt_logging: PromptLogging,
         timings: dict[str, float],
-    ) -> tuple[SkillRankerResult | None, JobAttributesResult]:
+    ) -> Llm1Llm2Result:
         """
         Run the skill ranker (LLM1, only with candidates) and job attributes (LLM2).
 
@@ -237,12 +243,12 @@ class JobRankingService:
                 f2 = pool.submit(contextvars.copy_context().run, _timed, llm2)
                 timings["llm1_s"], skill_ranker = f1.result()
                 timings["llm2_s"], job_attributes = f2.result()
-            return skill_ranker, job_attributes
+            return Llm1Llm2Result(skill_ranker=skill_ranker, job_attributes=job_attributes)
 
         if candidates:
             timings["llm1_s"], skill_ranker = _timed(llm1)
         timings["llm2_s"], job_attributes = _timed(llm2)
-        return skill_ranker, job_attributes
+        return Llm1Llm2Result(skill_ranker=skill_ranker, job_attributes=job_attributes)
 
 
 class JobRankingServiceFactory:

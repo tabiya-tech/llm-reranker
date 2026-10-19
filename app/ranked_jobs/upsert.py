@@ -21,12 +21,20 @@ def ranked_job_upsert(
     :raises ValueError: the classified document has none of the three.
     """
     if ctx.job_id is not None:
-        return RankedJobUpsert(RankedJobKey.JOB_ID, ctx.job_id, ranked_document)
+        return RankedJobUpsert(
+            key=RankedJobKey.JOB_ID, key_value=ctx.job_id, document=ranked_document
+        )
     if ctx.job_fingerprint:
-        return RankedJobUpsert(RankedJobKey.JOB_FINGERPRINT, ctx.job_fingerprint, ranked_document)
+        return RankedJobUpsert(
+            key=RankedJobKey.JOB_FINGERPRINT,
+            key_value=ctx.job_fingerprint,
+            document=ranked_document,
+        )
     oid = classified_doc.get("_id")
     if oid is not None:
-        return RankedJobUpsert(RankedJobKey.SOURCE_CLASSIFIED_ID, oid, ranked_document)
+        return RankedJobUpsert(
+            key=RankedJobKey.SOURCE_CLASSIFIED_ID, key_value=oid, document=ranked_document
+        )
     raise ValueError(
         "Cannot upsert LLM results: document has no job id, fingerprint, or source _id"
     )

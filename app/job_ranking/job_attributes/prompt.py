@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Sequence
 
+from pydantic import Field
+
 from app.config import Settings
+from app.domain_base import DomainModel
 from app.job_context import JobDescriptionContext
 from app.job_ranking.job_attributes.types import (
     JobAttributesSchema,
@@ -16,6 +18,7 @@ from app.job_ranking.prompts.job_listing import (
     build_job_attributes_metadata_block,
 )
 from app.job_ranking.prompts.templates import PromptTemplates
+from app.job_ranking.routes.types import RankRequest
 from app.languages import DEFAULT_LANGUAGE, language_setting
 from utils.classifier_linked_entities import (
     group_linked_entities_by_type,
@@ -63,19 +66,24 @@ def llm2_opening_line_from_context(ctx: JobDescriptionContext, *, settings: Sett
     return prompt_label("opening_no_region", settings).format(country=country)
 
 
-@dataclass(frozen=True)
-class OccupationPromptEnrichment:
+class OccupationPromptEnrichment(DomainModel):
     """Primary occupation slice for the job-attributes (LLM2) prompt; CSV-backed when resolvable."""
 
-    occupation_label: str
-    csv_definition: str | None
-    tabiya_occupation_id: str | None
-    esco_uuid: str | None
-    classifier_label: str | None
+    occupation_label: str = Field(description="Occupation label shown in the LLM2 prompt.")
+    csv_definition: str | None = Field(
+        description="`occupations.csv` description for this ESCO uuid, when present."
+    )
+    tabiya_occupation_id: str | None = Field(
+        description="Tabiya occupation id from `occupations.csv`, when resolved."
+    )
+    esco_uuid: str | None = Field(description="ESCO occupation uuid, lowercased.")
+    classifier_label: str | None = Field(
+        description="Classifier label for the first deduped occupation hit, when there is one."
+    )
 
 
 def build_occupation_prompt_enrichment(
-    classified_doc: dict[str, Any],
+    classified_doc: RankRequest | dict[str, Any],
     settings: Settings,
     *,
     fallback_listing_title: str,
@@ -128,8 +136,7 @@ def build_occupation_prompt_enrichment(
     )
 
 
-@dataclass(frozen=True)
-class JobAttributesLlm2Extras:
+class JobAttributesLlm2Extras(DomainModel):
     """
     Optional user-message fields for :func:`build_single_county_job_attributes_user_prompt`.
 
@@ -140,14 +147,28 @@ class JobAttributesLlm2Extras:
     (those are chosen from the ONET appendix).
     """
 
-    alt_labels: tuple[str, ...] | None = None
-    description: str | None = None
-    code: str | None = None
-    context_str: str | None = None
-    included_occupations: str | None = None
-    included_tasks: str | None = None
-    excluded_occupations: str | None = None
-    notes: str | None = None
+    alt_labels: tuple[str, ...] | None = Field(
+        default=None, description="Override for alternate occupation labels shown in the prompt."
+    )
+    description: str | None = Field(
+        default=None, description="Override for the occupation description."
+    )
+    code: str | None = Field(default=None, description="Override for the occupation code shown.")
+    context_str: str | None = Field(
+        default=None, description="Extra free-text context appended to the prompt (e.g. earnings)."
+    )
+    included_occupations: str | None = Field(
+        default=None, description="Override for the included-occupations prompt field."
+    )
+    included_tasks: str | None = Field(
+        default=None,
+        description="Override for included-tasks text (classifier/ESCO task text, not "
+        "ONET work-activity ids).",
+    )
+    excluded_occupations: str | None = Field(
+        default=None, description="Override for the excluded-occupations prompt field."
+    )
+    notes: str | None = Field(default=None, description="Override for the notes prompt field.")
 
 
 def _extra_field(extras: JobAttributesLlm2Extras | None, name: str) -> str | None:

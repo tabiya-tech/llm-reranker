@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections import defaultdict
-from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from pydantic import Field
 
 from app.config import Settings
-from app.job_context import JobDescriptionContext
+from app.domain_base import DomainModel
 from app.llm.errors import LlmParseError
+from app.llm_models import SkillRankerResponse, parse_llm_json_response
+
+if TYPE_CHECKING:
+    # Deferred: app.job_context imports app.job_ranking.routes.types -> app.job_ranking.ranked_document,
+    # which imports this module — a real top-level import here would be a circular import.
+    from app.job_context import JobDescriptionContext
+    from app.job_ranking.routes.types import RankRequest
 
 # Linked entities always use ESCO taxonomy in classifier output.
 LINKED_ENTITY_TAXONOMY_ESCO = "esco"
@@ -77,36 +84,57 @@ def _esco_concept_uuid_from_uri(uri: str) -> str | None:
     return None
 
 
-@dataclass(frozen=True)
-class LinkedEntityCandidate:
+class LinkedEntityCandidate(DomainModel):
     """One linked taxonomy hit from classifier ``classification.entities[].linked_entities``."""
 
-    entity_type: str
-    label: str
-    uri: str
-    similarity_score: float | None = None
-    # Parsed from ``uri`` last segment when it looks like a concept UUID (e.g. ESCO).
-    concept_uuid: str | None = None
+    entity_type: str = Field(description="Normalized entity type (`skill`, `occupation`, …).")
+    label: str = Field(description="Classifier label for the linked concept.")
+    uri: str = Field(description="Concept URI.")
+    similarity_score: float | None = Field(
+        default=None, description="Classifier similarity score, when present."
+    )
+    concept_uuid: str | None = Field(
+        default=None,
+        description="Parsed from `uri`'s last segment when it looks like a concept UUID (e.g. ESCO).",
+    )
 
 
-@dataclass(frozen=True)
-class EscoSkillCandidate:
-    label: str
-    uri: str
-    similarity_score: float | None = None
-    # Parsed from ``uri`` only (ESCO concept UUID).
-    esco_uuid: str | None = None
+class EscoSkillCandidate(DomainModel):
+    """One ESCO-linked skill candidate offered to the skill ranker."""
+
+    label: str = Field(description="Classifier label for the skill.")
+    uri: str = Field(description="ESCO skill URI.")
+    similarity_score: float | None = Field(
+        default=None, description="Classifier similarity score, when present."
+    )
+    esco_uuid: str | None = Field(
+        default=None, description="ESCO concept UUID, parsed from `uri` only."
+    )
 
 
-@dataclass
-class MappedEscoSkills:
-    essential_uris: list[str] = field(default_factory=list)
-    optional_uris: list[str] = field(default_factory=list)
-    # Parallel to essential_uris / optional_uris — ESCO UUIDs from each uri (empty string if unparseable).
-    essential_skills_uuids: list[str] = field(default_factory=list)
-    optional_skills_uuids: list[str] = field(default_factory=list)
-    unmatched_essential: list[str] = field(default_factory=list)
-    unmatched_optional: list[str] = field(default_factory=list)
+class MappedEscoSkills(DomainModel):
+    """LLM1's essential/optional skill labels, mapped back to ESCO URIs and UUIDs."""
+
+    essential_uris: list[str] = Field(
+        default_factory=list, description="ESCO URIs matched from LLM1's essential labels."
+    )
+    optional_uris: list[str] = Field(
+        default_factory=list, description="ESCO URIs matched from LLM1's optional labels."
+    )
+    essential_skills_uuids: list[str] = Field(
+        default_factory=list,
+        description="ESCO UUIDs parallel to `essential_uris` (empty string if unparseable).",
+    )
+    optional_skills_uuids: list[str] = Field(
+        default_factory=list,
+        description="ESCO UUIDs parallel to `optional_uris` (empty string if unparseable).",
+    )
+    unmatched_essential: list[str] = Field(
+        default_factory=list, description="Essential labels LLM1 returned that match no candidate."
+    )
+    unmatched_optional: list[str] = Field(
+        default_factory=list, description="Optional labels LLM1 returned that match no candidate."
+    )
 
 
 def _pick_best_linked_entity_by_score(items: list[LinkedEntityCandidate]) -> LinkedEntityCandidate:
@@ -144,7 +172,7 @@ def _dedupe_linked_entities_by_label(
 
 
 def extract_linked_entity_candidates(
-    classified_doc: dict[str, Any],
+    classified: RankRequest | dict[str, Any],
     settings: Settings,
 ) -> list[LinkedEntityCandidate]:
     """
@@ -157,32 +185,35 @@ def extract_linked_entity_candidates(
     ``label`` (per type), preferring highest score.
     Dedupes by (entity_type, uri), keeping best similarity_score; then applies label dedupe if configured.
     """
-    wanted = frozenset(settings.classified_linked_entity_types)
+    from app.job_ranking.routes.types import RankRequest
+
+    s = settings
+    wanted = frozenset(s.classified_linked_entity_types)
     by_key: dict[tuple[str, str], LinkedEntityCandidate] = {}
-    cls = classified_doc.get("classification") or {}
-    entities = cls.get("entities") or []
+    doc = (
+        classified
+        if isinstance(classified, RankRequest)
+        else RankRequest.model_validate(classified)
+    )
+    entities = doc.classification.entities if doc.classification else []
     for ent in entities:
-        et_raw = ent.get("entity_type")
-        if not isinstance(et_raw, str) or not et_raw.strip():
+        et_raw = ent.entity_type
+        if not et_raw or not et_raw.strip():
             continue
         et = normalize_linked_entity_type(et_raw)
         if et not in wanted:
             continue
-        for le in ent.get("linked_entities") or []:
-            if (le.get("taxonomy") or "").lower() != LINKED_ENTITY_TAXONOMY_ESCO:
+        for le in ent.linked_entities:
+            if (le.taxonomy or "").lower() != LINKED_ENTITY_TAXONOMY_ESCO:
                 continue
-            label = (le.get("label") or "").strip()
-            uri = (le.get("uri") or "").strip()
+            label = (le.label or "").strip()
+            uri = (le.uri or "").strip()
             if not label or not uri:
                 continue
-            raw_score = le.get("similarity_score")
-            try:
-                score = float(raw_score) if raw_score is not None else None
-            except (TypeError, ValueError):
-                score = None
-            min_sim = settings.classified_linked_entity_min_similarity
+            score = le.similarity_score
+            min_sim = s.classified_linked_entity_min_similarity
             if min_sim is not None:
-                if settings.classified_linked_entity_min_similarity_strict and score is None:
+                if s.classified_linked_entity_min_similarity_strict and score is None:
                     continue
                 if score is not None and score < min_sim:
                     continue
@@ -203,24 +234,23 @@ def extract_linked_entity_candidates(
             ):
                 by_key[key] = cand
     merged = list(by_key.values())
-    return _dedupe_linked_entities_by_label(
-        merged, settings.classified_linked_entity_label_dedupe_types
-    )
+    return _dedupe_linked_entities_by_label(merged, s.classified_linked_entity_label_dedupe_types)
 
 
 def group_linked_entities_by_type(
-    classified_doc: dict[str, Any],
+    classified: RankRequest | dict[str, Any],
     settings: Settings,
 ) -> dict[str, list[LinkedEntityCandidate]]:
     """Candidates grouped by ``entity_type`` (lowercase keys)."""
     out: dict[str, list[LinkedEntityCandidate]] = {}
-    for c in extract_linked_entity_candidates(classified_doc, settings):
+    for c in extract_linked_entity_candidates(classified, settings):
         out.setdefault(c.entity_type, []).append(c)
     return out
 
 
 def extract_esco_skill_candidates(
-    classified_doc: dict[str, Any], settings: Settings
+    classified: RankRequest | dict[str, Any],
+    settings: Settings,
 ) -> list[EscoSkillCandidate]:
     """
     ESCO-linked **skills** only (``entity_type`` skill), for the skill ranker.
@@ -228,7 +258,7 @@ def extract_esco_skill_candidates(
     Delegates to :func:`extract_linked_entity_candidates` and maps to ``EscoSkillCandidate``.
     """
     out: list[EscoSkillCandidate] = []
-    for c in extract_linked_entity_candidates(classified_doc, settings):
+    for c in extract_linked_entity_candidates(classified, settings):
         if c.entity_type != "skill":
             continue
         out.append(
@@ -242,35 +272,49 @@ def extract_esco_skill_candidates(
     return out
 
 
-def job_identifier(ctx: JobDescriptionContext, doc: dict[str, Any]) -> str:
+def job_identifier(ctx: JobDescriptionContext, doc: dict[str, Any] | None = None) -> str:
     """Stable id for logging: fingerprint, job id, or Mongo ``_id``."""
     if ctx.job_fingerprint:
         return ctx.job_fingerprint
     if ctx.job_id is not None:
         return str(ctx.job_id)
-    return str(doc.get("_id", ""))
+    if ctx.classified.id is not None:
+        return str(ctx.classified.id)
+    if doc is not None:
+        return str(doc.get("_id", ""))
+    return ""
+
+
+class SkillPromptEntry(DomainModel):
+    """One skill-ranker menu row, as sent to the LLM1 prompt (label + optional description only)."""
+
+    label: str = Field(description="Classifier label for the skill.")
+    description: str | None = Field(
+        default=None, description="`skills.csv` description for this ESCO uuid, when present."
+    )
 
 
 def skills_to_prompt_dicts(
     candidates: list[EscoSkillCandidate],
     *,
     description_by_esco: dict[str, str] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[SkillPromptEntry]:
     """
     Serialize candidates for :func:`app.job_ranking.skill_ranker.prompt.build_skill_ranker_prompt`.
 
     ``description_by_esco``: optional lowercase ESCO uuid → text from ``skills.csv`` (see
-    :func:`app.taxonomy.csv_loaders.load_skill_description_by_esco`). URIs and classifier scores are omitted from the prompt.
+    :func:`app.taxonomy.csv_loaders.load_skill_description_by_esco`). URIs and classifier scores
+    are omitted from the prompt.
     """
-    out: list[dict[str, Any]] = []
+    out: list[SkillPromptEntry] = []
     for c in candidates:
-        d: dict[str, Any] = {"label": c.label}
+        description: str | None = None
         u = (c.esco_uuid or "").strip().lower()
         if description_by_esco and u:
             desc = description_by_esco.get(u)
             if desc and str(desc).strip():
-                d["description"] = str(desc).strip()
-        out.append(d)
+                description = str(desc).strip()
+        out.append(SkillPromptEntry(label=c.label, description=description))
     return out
 
 
@@ -310,42 +354,16 @@ def json_bool(v: object, default: bool = True) -> bool:
     return default
 
 
-def strip_json_fence(text: str) -> str:
-    t = text.strip()
-    if not t.startswith("```"):
-        return t
-    t = re.sub(r"^```(?:json)?\s*", "", t, flags=re.IGNORECASE)
-    t = re.sub(r"\s*```\s*$", "", t)
-    return t.strip()
-
-
-def _repair_json_common_llm_errors(s: str) -> str:
-    """Strip trailing commas before ``}``/``]`` (frequent invalid JSON from models)."""
-    t = s.strip()
-    t = re.sub(r",(\s*[\]}])", r"\1", t)
-    return t
-
-
-def parse_skill_ranker_json(raw_text: str) -> tuple[list[str], list[str]]:
+def parse_skill_ranker_json(raw_text: str) -> SkillRankerResponse:
     """Parse ``essential_skills`` and ``optional_skills`` from model output (JSON object)."""
-    cleaned = strip_json_fence(raw_text)
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        repaired = _repair_json_common_llm_errors(cleaned)
-        try:
-            data = json.loads(repaired)
-        except json.JSONDecodeError:
-            raise LlmParseError(f"Skill ranker JSON could not be parsed: {e}") from e
-    if not isinstance(data, dict):
-        raise LlmParseError("Skill ranker JSON must be an object")
-    ess = data.get("essential_skills")
-    opt = data.get("optional_skills")
-    if not isinstance(ess, list) or not isinstance(opt, list):
+    data = parse_llm_json_response(raw_text)
+    ess_raw = data.get("essential_skills")
+    opt_raw = data.get("optional_skills")
+    if not isinstance(ess_raw, list) or not isinstance(opt_raw, list):
         raise LlmParseError("essential_skills and optional_skills must be lists")
-    essential = [str(x) for x in ess if isinstance(x, str) and x.strip()]
-    optional = [str(x) for x in opt if isinstance(x, str) and x.strip()]
-    return essential, optional
+    essential = [str(x) for x in ess_raw if isinstance(x, str) and x.strip()]
+    optional = [str(x) for x in opt_raw if isinstance(x, str) and x.strip()]
+    return SkillRankerResponse(essential_skills=essential, optional_skills=optional)
 
 
 # Minimum similarity for fuzzy label match (0–1)

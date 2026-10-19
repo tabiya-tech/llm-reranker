@@ -5,6 +5,7 @@ from typing import Any, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
+from app.domain_base import DomainModel
 from app.job_ranking.types import HealthStatus, JobResult, Llm3Outcome
 
 JsonValue = Union[str, int, float, bool, None, dict[str, "JsonValue"], list["JsonValue"]]
@@ -172,62 +173,79 @@ class RankRequest(_PassThrough):
 # ---------------------------------------------------------------------------
 
 
-class ClassifiedSkill(_PassThrough):
+class ClassifiedSkill(DomainModel):
+    """One classifier ESCO skill link, deduplicated and resolved against ``skills.csv``."""
+
     label: str = Field(description="Classifier label.")
     uri: str = Field(description="ESCO skill URI.")
-    esco_uuid: str | None = Field(description="ESCO skill UUID, lowercased.")
-    similarity_score: float | None = Field(description="Classifier similarity score.")
-    tabiya_skill_id: str | None = Field(description="Tabiya skill id, when `skills.csv` maps it.")
-
-
-class ClassifiedOccupation(_PassThrough):
-    label: str = Field(description="Classifier label.")
-    uri: str = Field(description="ESCO occupation URI.")
-    esco_uuid: str | None = Field(description="ESCO occupation UUID, lowercased.")
-    similarity_score: float | None = Field(description="Classifier similarity score.")
-    tabiya_occupation_id: str | None = Field(
-        description="Tabiya occupation id, when `occupations.csv` maps it."
+    esco_uuid: str | None = Field(default=None, description="ESCO skill UUID, lowercased.")
+    similarity_score: float | None = Field(default=None, description="Classifier similarity score.")
+    tabiya_skill_id: str | None = Field(
+        default=None, description="Tabiya skill id, when `skills.csv` maps it."
     )
 
 
-class SkillCounts(_PassThrough):
+class ClassifiedOccupation(DomainModel):
+    """One classifier ESCO occupation link, deduplicated and resolved against `occupations.csv`."""
+
+    label: str = Field(description="Classifier label.")
+    uri: str = Field(description="ESCO occupation URI.")
+    esco_uuid: str | None = Field(default=None, description="ESCO occupation UUID, lowercased.")
+    similarity_score: float | None = Field(default=None, description="Classifier similarity score.")
+    tabiya_occupation_id: str | None = Field(
+        default=None, description="Tabiya occupation id, when `occupations.csv` maps it."
+    )
+
+
+class SkillCounts(DomainModel):
+    """Taxonomy skill counts for one occupation block, or summed across all blocks."""
+
     total: int = Field(description="Taxonomy skills listed.")
     essential: int = Field(description="Skills with relation type `essential`.")
     optional: int = Field(description="Skills with relation type `optional`.")
     unspecified: int = Field(description="Skills with no relation type.")
     relevant_total: int | None = Field(
-        None,
+        default=None,
         description="Skills the LLM3 relevance call kept. Present on an occupation block only in "
         "`RERANKER_LLM3_MODE=call`; in `occupation_to_skills.meta` always present, and 0 "
         "when no call ran.",
     )
 
 
-class OccupationSkill(_PassThrough):
+class OccupationSkill(DomainModel):
+    """One taxonomy skill row under an occupation block."""
+
     skill_id: str = Field(description="ESCO skill UUID.")
     tabiya_skill_id: str = Field(description="Tabiya skill id from the relations CSV.")
     label: str = Field(description="Skill label in the request's language pack.")
     uri: str = Field(description="ESCO skill URI.")
     relation_type: str = Field(
-        description="`essential`, `optional`, or `unspecified` — the taxonomy relation."
+        description="`essential`, `optional`, or `unspecified` - the taxonomy relation."
     )
     signalling_value: str | None = Field(
-        None, description="Relations-CSV signalling value, when the CSV has one."
+        default=None, description="Relations-CSV signalling value, when the CSV has one."
     )
     signalling_label: str | None = Field(
-        None, description="Relations-CSV signalling tier (`high`, `medium`, `low`), when present."
+        default=None,
+        description="Relations-CSV signalling tier (`high`, `medium`, `low`), when present.",
     )
     llm_is_relevant: bool | None = Field(
-        None,
+        default=None,
         description="LLM3 relevance verdict. Present only in `RERANKER_LLM3_MODE=call`.",
     )
 
 
-class OccupationSkillsBlock(_PassThrough):
+class OccupationSkillsBlock(DomainModel):
+    """Taxonomy skills for one classified occupation."""
+
     occupation_label: str = Field(description="Classifier occupation label.")
-    occupation_esco_uuid: str | None = Field(description="ESCO occupation UUID.")
+    occupation_esco_uuid: str | None = Field(default=None, description="ESCO occupation UUID.")
     occupation_uri: str = Field(description="ESCO occupation URI.")
-    tabiya_occupation_id: str = Field(description="Tabiya occupation id the skills come from.")
+    tabiya_occupation_id: str | None = Field(
+        default=None,
+        description="Tabiya occupation id the skills come from. `None` when the classifier "
+        "occupation did not resolve to an `occupations.csv` row (block has no skills).",
+    )
     skill_counts: SkillCounts = Field(description="Counts over this block's `skills`.")
     skills: list[OccupationSkill] = Field(
         description="Taxonomy skills for the occupation, essential first, after "
@@ -235,38 +253,53 @@ class OccupationSkillsBlock(_PassThrough):
     )
 
 
-class OccupationToSkillsMeta(_PassThrough):
+class OccupationToSkillsMeta(DomainModel):
+    """Totals across every occupation block."""
+
     occupation_count: int = Field(description="Number of occupation blocks.")
     skill_counts: SkillCounts = Field(description="Counts summed over every block.")
 
 
-class OccupationToSkills(_PassThrough):
+class OccupationToSkills(DomainModel):
+    """Taxonomy skills of every classified occupation, with roll-up totals."""
+
     meta: OccupationToSkillsMeta = Field(description="Totals across all blocks.")
     items: list[OccupationSkillsBlock] = Field(
         description="One block per classifier occupation found in the taxonomy."
     )
 
 
-class WorkActivity(_PassThrough):
+class WorkActivity(DomainModel):
+    """One ONET work activity LLM2 picked for the job."""
+
     id: str = Field(description="ONET work activity element id.", examples=["4.A.3.b.1"])
     name: str = Field(description="Work activity name (simplified label when available).")
 
 
-class WorkActivities(_PassThrough):
+class WorkActivities(DomainModel):
+    """ONET work activities LLM2 picked for the job."""
+
     items: list[WorkActivity] = Field(description="Work activities LLM2 picked for the job.")
 
 
-class RankedSkill(_PassThrough):
+class RankedSkill(DomainModel):
+    """One skill row under LLM1's essential/optional/discarded lists."""
+
     label: str = Field(description="Skill label as offered to LLM1.")
-    uri: str | None = Field(description="ESCO skill URI.")
-    esco_uuid: str | None = Field(description="ESCO skill UUID, lowercased.")
-    tabiya_skill_id: str | None = Field(description="Tabiya skill id, when `skills.csv` maps it.")
+    uri: str | None = Field(default=None, description="ESCO skill URI.")
+    esco_uuid: str | None = Field(default=None, description="ESCO skill UUID, lowercased.")
+    tabiya_skill_id: str | None = Field(
+        default=None, description="Tabiya skill id, when `skills.csv` maps it."
+    )
     similarity_score: float | None = Field(
-        None, description="Classifier similarity score. Only on `discarded` rows that have one."
+        default=None,
+        description="Classifier similarity score. Only on `discarded` rows that have one.",
     )
 
 
-class LlmClassifiedSkills(_PassThrough):
+class LlmClassifiedSkills(DomainModel):
+    """LLM1's skill ranking: essential, optional, discarded, and unmatched labels."""
+
     essential: list[RankedSkill] = Field(description="Skills LLM1 ranked essential.")
     optional: list[RankedSkill] = Field(description="Skills LLM1 ranked optional.")
     discarded: list[RankedSkill] = Field(
@@ -280,7 +313,9 @@ class LlmClassifiedSkills(_PassThrough):
     )
 
 
-class AttributeEstimateOut(_PassThrough):
+class AttributeEstimateOut(DomainModel):
+    """One persisted job-attribute estimate."""
+
     attribute_name: str = Field(
         description="Attribute from the job-attribute schema.", examples=["earnings_per_month"]
     )
@@ -293,45 +328,86 @@ class AttributeEstimateOut(_PassThrough):
     reasoning: str = Field(description="LLM2's reasoning for the level.")
 
 
-class LlmJobAttributes(_PassThrough):
+class LlmJobAttributes(DomainModel):
+    """LLM2's job attributes: summary, per-attribute estimates, and a flat lookup map."""
+
     summary: str = Field(description="LLM2's one-paragraph summary of the job.")
     estimates: list[AttributeEstimateOut] = Field(
         description="One estimate per attribute in the language pack's job-attribute schema."
     )
     attributes: dict[str, str | bool] = Field(
-        description="`attribute_name` → selected level id (or flag), for direct lookup."
+        description="`attribute_name` -> selected level id (or flag), for direct lookup."
     )
 
 
-class ClassifierMetadata(_PassThrough):
+class ClassifierMetadata(DomainModel):
     """Listing fields read from the source document (top level, then ``metadata``).
 
     Scraper enrichment fields (``province``, ``sector``, ``isco_major_group``, ``zqf_min``, …)
-    are added as extra keys when the source document has them.
+    are named fields below, populated only when the source document has them.
     """
 
-    title: str | None = Field(None, description="Listing title (translated when preferred).")
-    employer: str | None = Field(None, description="Employer name.")
-    category: str | None = Field(None, description="Listing category.")
-    application_url: str | None = Field(None, description="Where to apply.")
-    posted_date: str | None = Field(None, description="Posting date, as the source wrote it.")
-    closing_date: str | None = Field(
-        None, description="Closing date, as the source wrote it. Drives `is_active` in the batch."
+    title: str | None = Field(
+        default=None, description="Listing title (translated when preferred)."
     )
-    source_platform: str | None = Field(None, description="Job board the listing came from.")
-    city: str | None = Field(None, description="City; a list in the source is joined with `, `.")
-    salary: str | None = Field(None, description="Salary text.")
-    employment_type: str | None = Field(None, description="Employment type text.")
-    job_description: str | None = Field(None, description="Description text given to the LLMs.")
-    requirements: str | None = Field(None, description="Requirements text given to the LLMs.")
+    employer: str | None = Field(default=None, description="Employer name.")
+    category: str | None = Field(default=None, description="Listing category.")
+    application_url: str | None = Field(default=None, description="Where to apply.")
+    posted_date: str | None = Field(
+        default=None, description="Posting date, as the source wrote it."
+    )
+    closing_date: str | None = Field(
+        default=None,
+        description="Closing date, as the source wrote it. Drives `is_active` in the batch.",
+    )
+    source_platform: str | None = Field(
+        default=None, description="Job board the listing came from."
+    )
+    city: str | None = Field(
+        default=None, description="City; a list in the source is joined with `, `."
+    )
+    salary: str | None = Field(default=None, description="Salary text.")
+    employment_type: str | None = Field(default=None, description="Employment type text.")
+    job_description: str | None = Field(
+        default=None, description="Description text given to the LLMs."
+    )
+    requirements: str | None = Field(
+        default=None, description="Requirements text given to the LLMs."
+    )
+
+    # Scraper/classifier enrichment fields (Kenya + Zambia post-processing). See
+    # ``utils.scraper_enrichment_fields.SCRAPER_ENRICHMENT_FIELD_NAMES`` — this field list
+    # must stay in sync with that tuple.
+    province: str | None = Field(default=None, description="Province / admin region.")
+    sector: str | None = Field(default=None, description="Sector, when the source classifies it.")
+    domain: str | None = Field(default=None, description="Domain, when the source classifies it.")
+    isco_major_group: str | None = Field(default=None, description="ISCO major group code.")
+    isco_major_group_label: str | None = Field(default=None, description="ISCO major group label.")
+    isco_sub_major_group: str | None = Field(default=None, description="ISCO sub-major group code.")
+    isco_sub_major_group_label: str | None = Field(
+        default=None, description="ISCO sub-major group label."
+    )
+    is_priority_sector: bool | None = Field(
+        default=None, description="Whether the source flagged this as a priority sector."
+    )
+    zqf_min: int | None = Field(
+        default=None, description="Minimum Zambia Qualifications Framework level."
+    )
+    zqf_max: int | None = Field(
+        default=None, description="Maximum Zambia Qualifications Framework level."
+    )
+    zqf_min_label: str | None = Field(default=None, description="Label of `zqf_min`.")
+    zqf_max_label: str | None = Field(default=None, description="Label of `zqf_max`.")
 
 
-class LlmRerankerMeta(_PassThrough):
+class LlmRerankerMeta(DomainModel):
+    """Run metadata: which schema version and which models produced this ranked document."""
+
     schema_version: str = Field(description="Ranked-document schema version.", examples=["32"])
     llm_provider: str = Field(description="Provider alias that served the LLM calls.")
     skill_ranker_model: str = Field(description="Model behind LLM1.")
     occupation_skills_relevance_model: str = Field(
-        description="Model configured for LLM3. Recorded whether or not the call ran — see "
+        description="Model configured for LLM3. Recorded whether or not the call ran - see "
         "`llm3_outcome` on the response."
     )
     job_attributes_model: str = Field(description="Model behind LLM2.")
@@ -340,8 +416,8 @@ class LlmRerankerMeta(_PassThrough):
     )
 
 
-class RankedJobDocument(_PassThrough):
-    """The ranked job — the document the batch upserts into the target collection,
+class RankedJobDocument(DomainModel):
+    """The ranked job - the document the batch upserts into the target collection,
     minus the job embedding, which only the batch computes."""
 
     job_id: str | int | None = Field(description="Job id from the source document.")
@@ -378,6 +454,8 @@ class RankedJobDocument(_PassThrough):
 
 
 class RankResponse(BaseModel):
+    """The ``POST /rank`` response: the ranked job, step timings, and which LLM steps ran."""
+
     ranked_document: RankedJobDocument | None = Field(
         description="The ranked job, or null if LLM2 produced no job attributes (nothing to rank)."
     )
@@ -417,6 +495,8 @@ class RankResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    """The ``GET /health`` response: readiness and which language packs are loaded."""
+
     status: str = Field(description="Always `ok` once the process answers.", examples=["ok"])
     taxonomy_loaded: bool = Field(description="The default language's taxonomy is loaded.")
     default_language: str = Field(description="Language used when a request names none.")

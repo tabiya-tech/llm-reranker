@@ -20,9 +20,11 @@ from __future__ import annotations
 import json
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Any
 
+from pydantic import Field
+
+from app.domain_base import DomainModel
 from app.llm.errors import LlmConfigurationError
 
 # Short ``RERANKER_LLM_PROVIDER`` names → dotted path of the shipped implementation.
@@ -130,8 +132,7 @@ def resolve_provider_class_path(provider: str, *, raw: str | None = None) -> str
         ) from None
 
 
-@dataclass(frozen=True)
-class LlmConfig:
+class LlmConfig(DomainModel):
     """Resolved, provider-agnostic model selection for one run.
 
     Built once by :meth:`app.config.Settings.from_env` and carried on
@@ -143,30 +144,49 @@ class LlmConfig:
     exactly as that provider's implementation intends.
     """
 
-    # Alias the deployment asked for, or ``custom`` when only a class path was given.
-    provider: str
-    # Dotted path (``module:Class`` or ``module.Class``) of the LlmClient to load.
-    client_class: str
-    # Provider-specific model id, e.g. ``gemini-2.5-flash``, ``claude-opus-5``, ``qwen3:32b``.
-    model: str
-    api_key: str = ""
-    # Override the provider's API host — required for self-hosted / OpenAI-compatible servers.
-    base_url: str = ""
-    temperature: float = DEFAULT_TEMPERATURE
-    # ``0`` = provider default (Gemini has none; Anthropic requires a value, see its client).
-    max_output_tokens: int = 0
-    # ``0`` = provider/SDK default request timeout.
-    timeout_s: float = 0.0
-    # Total attempts per call, including the first, for retryable transport failures.
-    max_attempts: int = 5
-    # Provider-specific extras as a JSON object string (e.g. ``{"top_p": 0.9}``).
-    options_json: str = ""
-    # Reasoning depth for models that take a level (``THINKING_LEVELS``); ``""`` = the
-    # model's own default. Only the Gemini client reads it.
-    thinking_level: str = ""
-    # Send each pass's JSON Schema to clients that support structured output
-    # (``LlmClient.supports_response_schema``). Off = prose contract + JSON mode only.
-    response_schema: bool = True
+    provider: str = Field(
+        description="Alias the deployment asked for, or `custom` when only a class path was given."
+    )
+    client_class: str = Field(
+        description="Dotted path (`module:Class` or `module.Class`) of the LlmClient to load."
+    )
+    model: str = Field(
+        description="Provider-specific model id, e.g. `gemini-2.5-flash`, `claude-opus-5`, `qwen3:32b`."
+    )
+    api_key: str = Field(default="", description="API key for the provider, when required.")
+    base_url: str = Field(
+        default="",
+        description="Override the provider's API host — required for self-hosted servers.",
+    )
+    temperature: float = Field(
+        default=DEFAULT_TEMPERATURE, description="Sampling temperature for all calls."
+    )
+    max_output_tokens: int = Field(
+        default=0,
+        description="Max output tokens; `0` = provider default (Gemini has none; Anthropic requires "
+        "a value, see its client).",
+    )
+    timeout_s: float = Field(
+        default=0.0, description="Request timeout in seconds; `0` = provider/SDK default."
+    )
+    max_attempts: int = Field(
+        default=5,
+        description="Total attempts per call, including the first, for retryable transport failures.",
+    )
+    options_json: str = Field(
+        default="",
+        description='Provider-specific extras as a JSON object string (e.g. `{"top_p": 0.9}`).',
+    )
+    thinking_level: str = Field(
+        default="",
+        description="Reasoning depth for models that take a level (`THINKING_LEVELS`); `\"\"` = the "
+        "model's own default. Only the Gemini client reads it.",
+    )
+    response_schema: bool = Field(
+        default=True,
+        description="Send each pass's JSON Schema to clients that support structured output "
+        "(`LlmClient.supports_response_schema`). Off = prose contract + JSON mode only.",
+    )
 
     def options(self) -> dict[str, Any]:
         """Parse ``options_json`` into a dict; a malformed value is a configuration error."""

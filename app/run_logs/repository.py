@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 
 from bson import ObjectId
+from pydantic import Field
+
+from app.domain_base import DomainModel
 
 
-@dataclass(frozen=True)
-class RunStats:
+class RunStats(DomainModel):
     """Counters a batch run reports on its log document."""
 
-    jobs_processed: int
-    upserts_queued: int
-    llm1_calls: int
-    llm2_calls: int
-    llm3_calls: int
+    jobs_processed: int = Field(description="Jobs processed so far.")
+    upserts_queued: int = Field(description="MongoDB upserts queued so far.")
+    llm1_calls: int = Field(description="LLM1 (skill ranker) calls made so far.")
+    llm2_calls: int = Field(description="LLM2 (job attributes) calls made so far.")
+    llm3_calls: int = Field(description="LLM3 (occupation-skills relevance) calls made so far.")
 
 
 class IRunLogsRepository(ABC):

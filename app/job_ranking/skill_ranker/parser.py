@@ -14,7 +14,8 @@ class SkillRankerResponseParser:
     """LLM call 1: essential / optional label lists, mapped back onto the candidate menu."""
 
     def parse(self, raw: str, candidates: list[EscoSkillCandidate]) -> SkillRankerResult:
-        essential, optional = parse_skill_ranker_json(raw)
+        parsed = parse_skill_ranker_json(raw)
+        essential, optional = parsed.essential_skills, parsed.optional_skills
         mapped = map_skill_labels_to_esco_uris(essential, optional, candidates)
         return SkillRankerResult(
             essential=essential, optional=optional, mapped=mapped, raw_response=raw

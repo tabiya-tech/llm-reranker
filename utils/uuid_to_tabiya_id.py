@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+
+from pydantic import Field
+
+from app.domain_base import DomainModel
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,7 @@ _ESCO_UUID = re.compile(
 
 
 def cell_to_esco_uuid(cell: str) -> str | None:
+    """Extract an ESCO concept uuid from a bare uuid or a URI ending in one, else ``None``."""
     s = (cell or "").strip()
     if not s:
         return None
@@ -40,6 +44,7 @@ def cell_to_esco_uuid(cell: str) -> str | None:
 
 
 def parse_uuid_history_cell(raw: str | None) -> list[str]:
+    """Split a ``UUIDHISTORY`` cell (newline-separated ESCO uuids/URIs) into parsed uuids."""
     if raw is None or not str(raw).strip():
         return []
     text = str(raw).replace("\r\n", "\n").replace("\r", "\n")
@@ -58,13 +63,18 @@ def parse_uuid_history_cell(raw: str | None) -> list[str]:
     return out
 
 
-@dataclass
-class SkillsUuidTabiyaMap:
-    """In-memory ESCO uuid ↔ Tabiya id maps built from one ``skills.csv`` pass."""
+class SkillsUuidTabiyaMap(DomainModel):
+    """In-memory ESCO uuid <-> Tabiya id maps built from one ``skills.csv`` pass."""
 
-    preferred_label: dict[str, str] = field(default_factory=dict)
-    primary_esco_by_tabiya: dict[str, str] = field(default_factory=dict)
-    tabiya_by_esco: dict[str, str] = field(default_factory=dict)
+    preferred_label: dict[str, str] = Field(
+        default_factory=dict, description="ESCO uuid or Tabiya id (lowercased) -> PREFERREDLABEL."
+    )
+    primary_esco_by_tabiya: dict[str, str] = Field(
+        default_factory=dict, description="Tabiya skill ID -> primary ESCO uuid."
+    )
+    tabiya_by_esco: dict[str, str] = Field(
+        default_factory=dict, description="ESCO uuid -> Tabiya ID (inverse; last row wins)."
+    )
 
     def skill_key_as_esco(self, raw: str) -> str | None:
         """

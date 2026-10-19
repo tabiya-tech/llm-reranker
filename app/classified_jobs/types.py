@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from pydantic import Field
 
-@dataclass(frozen=True)
-class ClassifiedJobsFilter:
+from app.domain_base import DomainModel
+
+
+class ClassifiedJobsFilter(DomainModel):
     """Which classified jobs a batch reads. The default matches the whole collection."""
 
-    # Only jobs first classified at or after this instant (the incremental cutoff).
-    classified_since: datetime | None = None
-    # Skip jobs whose job id is one of these (already ranked, for resume).
-    exclude_job_ids: tuple[Any, ...] = ()
+    classified_since: datetime | None = Field(
+        default=None,
+        description="Only jobs first classified at or after this instant (the incremental cutoff).",
+    )
+    exclude_job_ids: tuple[Any, ...] = Field(
+        default=(),
+        description="Skip jobs whose job id is one of these (already ranked, for resume).",
+    )

@@ -143,6 +143,7 @@ class TestPrompts:
             llm2_opening_line_from_context,
             prompt_label,
         )
+        from app.job_ranking.routes.types import RankRequest
 
         s = make_settings(RERANKER_LANGUAGE="es", TARGET_COUNTRY="argentina")
         ctx = JobDescriptionContext(
@@ -161,7 +162,7 @@ class TestPrompts:
             city="Buenos Aires",
             county=None,
             employment_type=None,
-            classified={},
+            classified=RankRequest.model_validate({}),
         )
         opening = llm2_opening_line_from_context(ctx, settings=s)
         assert opening == (

@@ -9,16 +9,19 @@ import time
 import traceback
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.batch.job_ranker import BatchJobOptions, BatchJobRanker, RankOneJobResult, elapsed_s
 from app.batch.post_steps import BatchPostSteps
 from app.classified_jobs.repository import IClassifiedJobsRepository
 from app.classified_jobs.types import ClassifiedJobsFilter
 from app.config import Settings, log_ranker_run_configuration
+from app.domain_base import DomainModel
 from app.job_embedding.service import JobEmbeddingService
+from app.job_ranking.routes.types import RankRequest
 from app.job_ranking.service import JobRankingServiceFactory
 from app.job_ranking.types import NO_PROMPT_LOGGING, PromptLogging
 from app.observability import job_trace, update_observation
@@ -30,28 +33,40 @@ from app.run_state.repository import IRunStateRepository
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class BatchOptions:
+class BatchOptions(DomainModel):
     """What the batch CLI asks for (``main.py --help``)."""
 
-    # Max documents from the source collection; 0 = the whole collection.
-    limit: int = 0
-    verbose: bool = False
-    prompt_logging: PromptLogging = NO_PROMPT_LOGGING
-    # Overrides ``BULK_WRITE_BATCH_SIZE`` when set.
-    bulk_batch_size: int | None = None
-    # ``--skip-already-ranked`` (``RERANKER_SKIP_ALREADY_RANKED`` also turns it on).
-    skip_already_ranked: bool = False
+    limit: int = Field(
+        default=0, description="Max documents from the source collection; 0 = the whole collection."
+    )
+    verbose: bool = Field(default=False, description="Log extra per-job counts.")
+    prompt_logging: PromptLogging = Field(
+        default=NO_PROMPT_LOGGING, description="Which assembled prompts to log."
+    )
+    bulk_batch_size: int | None = Field(
+        default=None, description="Overrides `BULK_WRITE_BATCH_SIZE` when set."
+    )
+    skip_already_ranked: bool = Field(
+        default=False,
+        description="`--skip-already-ranked` (`RERANKER_SKIP_ALREADY_RANKED` also turns it on).",
+    )
 
 
-@dataclass
-class _Counters:
-    jobs: int = 0
-    upserts: int = 0
-    llm1_calls: int = 0
-    llm2_calls: int = 0
-    llm3_calls: int = 0
-    job_errors: int = 0
+class _Counters(BaseModel):
+    """Per-run counters for one batch run.
+
+    Mutated field-by-field as jobs complete, so this is a plain ``BaseModel`` with
+    assignment validation, not the frozen :class:`~app.domain_base.DomainModel`.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid", validate_assignment=True)
+
+    jobs: int = Field(default=0, description="Jobs processed so far.")
+    upserts: int = Field(default=0, description="MongoDB upserts queued so far.")
+    llm1_calls: int = Field(default=0, description="LLM1 calls made so far.")
+    llm2_calls: int = Field(default=0, description="LLM2 calls made so far.")
+    llm3_calls: int = Field(default=0, description="LLM3 calls made so far.")
+    job_errors: int = Field(default=0, description="Jobs that raised an unhandled exception.")
 
     def run_stats(self) -> RunStats:
         return RunStats(
@@ -228,7 +243,7 @@ class BatchRankingService:
             if counters.jobs % 10 == 0:
                 self._run_logs.update_progress(run_id, counters.run_stats())
 
-        def rank_one(doc: dict[str, Any], job_label: str) -> RankOneJobResult:
+        def rank_one(doc: RankRequest | dict[str, Any], job_label: str) -> RankOneJobResult:
             # One Langfuse trace per job, grouped into a session per batch run.
             with job_trace(
                 doc,
@@ -308,7 +323,7 @@ class BatchRankingService:
         options: BatchOptions,
         job_filter: ClassifiedJobsFilter,
         workers: int,
-        rank_one: Callable[[dict[str, Any], str], RankOneJobResult],
+        rank_one: Callable[[RankRequest | dict[str, Any], str], RankOneJobResult],
         apply_result: Callable[[RankOneJobResult], None],
         counters: _Counters,
     ) -> None:
@@ -347,7 +362,7 @@ class BatchRankingService:
         self,
         options: BatchOptions,
         job_filter: ClassifiedJobsFilter,
-        rank_one: Callable[[dict[str, Any], str], RankOneJobResult],
+        rank_one: Callable[[RankRequest | dict[str, Any], str], RankOneJobResult],
         apply_result: Callable[[RankOneJobResult], None],
         counters: _Counters,
     ) -> None:

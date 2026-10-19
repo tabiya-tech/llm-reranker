@@ -420,10 +420,10 @@ class TestGradingCodeUsesTheConfiguredModel:
             ANTHROPIC_API_KEY="sk-ant",
         )
         meta = build_llm_reranker_meta(s)
-        assert meta["llm_provider"] == "anthropic"
-        assert meta["skill_ranker_model"] == "claude-opus-5"
-        assert meta["job_attributes_model"] == "claude-opus-5"
-        assert meta["occupation_skills_relevance_model"] == "claude-opus-5"
+        assert meta.llm_provider == "anthropic"
+        assert meta.skill_ranker_model == "claude-opus-5"
+        assert meta.job_attributes_model == "claude-opus-5"
+        assert meta.occupation_skills_relevance_model == "claude-opus-5"
 
     def test_gemini_metadata_is_unchanged_from_the_legacy_path(self, make_settings):
         """No-regression guard: the three model fields still carry the Gemini model id."""
@@ -431,9 +431,9 @@ class TestGradingCodeUsesTheConfiguredModel:
 
         s = make_settings(GEMINI_API_KEY="k", GEMINI_MODEL="gemini-2.5-flash")
         meta = build_llm_reranker_meta(s)
-        assert meta["skill_ranker_model"] == "gemini-2.5-flash"
-        assert meta["occupation_skills_relevance_model"] == "gemini-2.5-flash"
-        assert meta["job_attributes_model"] == "gemini-2.5-flash"
+        assert meta.skill_ranker_model == "gemini-2.5-flash"
+        assert meta.occupation_skills_relevance_model == "gemini-2.5-flash"
+        assert meta.job_attributes_model == "gemini-2.5-flash"
 
 
 class SchemaAwareLlmClient(LlmClient):
@@ -493,6 +493,7 @@ class TestResponseSchemaRouting:
     def test_skill_ranker_sends_the_candidate_labels_as_an_enum(self, make_settings, monkeypatch):
         from app.job_context import JobDescriptionContext
         from app.job_ranking.prompts.repository import PromptRepository
+        from app.job_ranking.routes.types import RankRequest
         from app.job_ranking.skill_ranker.parser import SkillRankerResponseParser
         from app.job_ranking.skill_ranker.prompt import SkillRankerPromptBuilder
         from app.job_ranking.skill_ranker.step import SkillRankerStep
@@ -530,7 +531,7 @@ class TestResponseSchemaRouting:
             city=None,
             county=None,
             employment_type=None,
-            classified={"_id": "doc-1"},
+            classified=RankRequest.model_validate({"_id": "doc-1"}),
         )
         result = step.run(
             ctx,

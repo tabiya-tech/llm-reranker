@@ -23,6 +23,7 @@ from app.job_ranking.occupation_skills.types import (
     OccupationTaxonomyOutcome,
 )
 from app.job_ranking.ranked_document import RankedJobDocumentAssembler
+from app.job_ranking.routes.types import OccupationSkill, OccupationSkillsBlock, SkillCounts
 from app.job_ranking.service import JobRankingService, JobRankingServiceFactory
 from app.job_ranking.skill_ranker.step import SkillRankerStep
 from app.job_ranking.skill_ranker.types import SkillRankerResult
@@ -88,38 +89,38 @@ def classified_doc() -> dict[str, Any]:
     }
 
 
-def occupation_menu() -> list[dict[str, Any]]:
+def occupation_menu() -> list[OccupationSkillsBlock]:
     """One occupation block with two taxonomy skills of different signalling strength."""
     return [
-        {
-            "occupation_label": "Welder",
-            "occupation_esco_uuid": "33333333-3333-3333-3333-333333333333",
-            "occupation_uri": (
+        OccupationSkillsBlock(
+            occupation_label="Welder",
+            occupation_esco_uuid="33333333-3333-3333-3333-333333333333",
+            occupation_uri=(
                 "http://data.europa.eu/esco/occupation/33333333-3333-3333-3333-333333333333"
             ),
-            "tabiya_occupation_id": "occ-1",
-            "skill_counts": {"total": 2, "essential": 1, "optional": 1, "unspecified": 0},
-            "skills": [
-                {
-                    "skill_id": "11111111-1111-1111-1111-111111111111",
-                    "tabiya_skill_id": "tskill-1",
-                    "label": "Weld metal",
-                    "uri": "http://data.europa.eu/esco/skill/11111111-1111-1111-1111-111111111111",
-                    "relation_type": "essential",
-                    "signalling_label": "high",
-                    "signalling_value": "0.9",
-                },
-                {
-                    "skill_id": "22222222-2222-2222-2222-222222222222",
-                    "tabiya_skill_id": "tskill-2",
-                    "label": "Paint surfaces",
-                    "uri": "http://data.europa.eu/esco/skill/22222222-2222-2222-2222-222222222222",
-                    "relation_type": "optional",
-                    "signalling_label": "low",
-                    "signalling_value": "0.1",
-                },
+            tabiya_occupation_id="occ-1",
+            skill_counts=SkillCounts(total=2, essential=1, optional=1, unspecified=0),
+            skills=[
+                OccupationSkill(
+                    skill_id="11111111-1111-1111-1111-111111111111",
+                    tabiya_skill_id="tskill-1",
+                    label="Weld metal",
+                    uri="http://data.europa.eu/esco/skill/11111111-1111-1111-1111-111111111111",
+                    relation_type="essential",
+                    signalling_label="high",
+                    signalling_value="0.9",
+                ),
+                OccupationSkill(
+                    skill_id="22222222-2222-2222-2222-222222222222",
+                    tabiya_skill_id="tskill-2",
+                    label="Paint surfaces",
+                    uri="http://data.europa.eu/esco/skill/22222222-2222-2222-2222-222222222222",
+                    relation_type="optional",
+                    signalling_label="low",
+                    signalling_value="0.1",
+                ),
             ],
-        }
+        )
     ]
 
 
@@ -231,18 +232,18 @@ class StubOccupationRelevance(OccupationSkillsRelevanceStep):
     def run(
         self,
         ctx: JobDescriptionContext,
-        menu_items: list[dict[str, Any]],
+        menu_items: list[OccupationSkillsBlock],
         *,
         prompt_logging: PromptLogging = NO_PROMPT_LOGGING,
     ) -> OccupationSkillsRelevanceResult:
-        self.menus.append([sk["label"] for block in menu_items for sk in block["skills"]])
+        self.menus.append([sk.label for block in menu_items for sk in block.skills])
         return self.answer()
 
 
 class FixedOccupationTaxonomy(OccupationTaxonomyStep):
     """The taxonomy step, answering every job with the same ``occupation_to_skills`` blocks."""
 
-    def __init__(self, blocks: list[dict[str, Any]]):
+    def __init__(self, blocks: list[OccupationSkillsBlock]):
         self.blocks = blocks
 
     def run(

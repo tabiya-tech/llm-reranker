@@ -9,12 +9,15 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from dataclasses import dataclass
 from typing import Any
 
+from pydantic import Field
+
 from app.config import Settings
+from app.domain_base import DomainModel
 from app.job_context import build_job_description_context
 from app.job_embedding.service import JobEmbeddingService
+from app.job_ranking.routes.types import RankRequest
 from app.job_ranking.service import JobRankingService
 from app.job_ranking.types import NO_PROMPT_LOGGING, JobResult, Llm3Outcome, PromptLogging
 from app.llm.base import LlmConfig
@@ -53,15 +56,14 @@ def _classified_occupation_labels_for_log(
     return "; ".join(parts)
 
 
-@dataclass(frozen=True)
-class RankOneJobResult:
+class RankOneJobResult(DomainModel):
     """Return value from :meth:`BatchJobRanker.rank`."""
 
-    upsert: RankedJobUpsert | None
-    upsert_increment: int
-    llm1_inc: int
-    llm2_inc: int
-    llm3_inc: int
+    upsert: RankedJobUpsert | None = Field(description="The queued Mongo upsert, if any.")
+    upsert_increment: int = Field(description="1 if an upsert was queued, else 0.")
+    llm1_inc: int = Field(description="1 if LLM1 (skill ranker) ran, else 0.")
+    llm2_inc: int = Field(description="1 if LLM2 (job attributes) ran, else 0.")
+    llm3_inc: int = Field(description="1 if the standalone LLM3 relevance call ran, else 0.")
 
 
 def _log_pipeline_steps(result: JobResult, *, llm: LlmConfig) -> None:
@@ -162,13 +164,13 @@ def _log_pipeline_steps(result: JobResult, *, llm: LlmConfig) -> None:
         )
 
 
-@dataclass(frozen=True)
-class BatchJobOptions:
+class BatchJobOptions(DomainModel):
     """Per-job switches from the batch CLI."""
 
-    prompt_logging: PromptLogging = NO_PROMPT_LOGGING
-    # ``--verbose``: extra per-job counts on stderr.
-    verbose: bool = False
+    prompt_logging: PromptLogging = Field(
+        default=NO_PROMPT_LOGGING, description="Which assembled prompts to log."
+    )
+    verbose: bool = Field(default=False, description="`--verbose`: extra per-job counts on stderr.")
 
 
 class BatchJobRanker:
@@ -191,7 +193,9 @@ class BatchJobRanker:
         self._embedding = embedding
         self._options = options
 
-    def rank(self, doc: dict[str, Any], *, job_label: str) -> RankOneJobResult:
+    def rank(self, doc: RankRequest | dict[str, Any], *, job_label: str) -> RankOneJobResult:
+        if isinstance(doc, RankRequest):
+            doc = doc.to_document()
         settings = self._settings
         prompt_logging = self._options.prompt_logging
         log_prompt_debug = prompt_logging.any
@@ -231,9 +235,8 @@ class BatchJobRanker:
         else:
             t0 = time.perf_counter()
             try:
-                upsert = ranked_job_upsert(
-                    doc, result.ctx, self._embedding.attach(result.ranked_document)
-                )
+                payload = result.ranked_document.model_dump(mode="python", by_alias=True)
+                upsert = ranked_job_upsert(doc, result.ctx, self._embedding.attach(payload))
             except ValueError as e:
                 logger.warning("Upsert skipped: %s", e)
             mongo_s = elapsed_s(t0)

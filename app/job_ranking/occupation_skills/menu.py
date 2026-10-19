@@ -1,35 +1,48 @@
-"""The occupation-skills menu: filtering, capping, folding into LLM1 and applying LLM3. No IO."""
+"""Builds and filters the occupation-skills menu sent to LLM3 (or folded into LLM1)."""
 
 from __future__ import annotations
 
 from collections import defaultdict
-from copy import deepcopy
-from typing import Any
+from typing import NamedTuple
+
+from pydantic import Field
 
 from app.config import Settings
+from app.domain_base import DomainModel
 from app.job_ranking.occupation_skills.types import OccupationSkillsRelevanceResult
+from app.job_ranking.routes.types import OccupationSkill, OccupationSkillsBlock, SkillCounts
 from utils.classifier_linked_entities import EscoSkillCandidate, _norm_label
-from utils.occupation_to_skills_mapping import (
-    esco_skill_uri_for_uuid,
-    occupation_block_skill_counts,
-)
+from utils.occupation_to_skills_mapping import esco_skill_uri_for_uuid
 
 
-def occupation_skills_relevance_menu_size(items: list[dict[str, Any]]) -> int:
+def occupation_block_skill_counts_from_models(skills: list[OccupationSkill]) -> SkillCounts:
+    """Count ``total``/``essential``/``optional``/``unspecified`` over a block's typed skill rows."""
+    essential = optional = unspecified = 0
+    for sk in skills:
+        if sk.relation_type == "essential":
+            essential += 1
+        elif sk.relation_type == "optional":
+            optional += 1
+        else:
+            unspecified += 1
+    return SkillCounts(
+        total=len(skills),
+        essential=essential,
+        optional=optional,
+        unspecified=unspecified,
+    )
+
+
+def occupation_skills_relevance_menu_size(items: list[OccupationSkillsBlock]) -> int:
     """How many taxonomy skills (essential + optional) LLM call 3 must judge."""
     n = 0
     for block in items:
-        tid = block.get("tabiya_occupation_id")
-        if tid is None or str(tid).strip() == "":
+        if not str(block.tabiya_occupation_id or "").strip():
             continue
-        for sk in block.get("skills") or []:
-            if not isinstance(sk, dict):
+        for sk in block.skills:
+            if sk.relation_type not in ("essential", "optional"):
                 continue
-            rt = (sk.get("relation_type") or "").strip().lower()
-            if rt not in ("essential", "optional"):
-                continue
-            sid = str(sk.get("skill_id") or "").strip()
-            if sid:
+            if sk.skill_id.strip():
                 n += 1
     return n
 
@@ -41,18 +54,18 @@ def classifier_skill_esco_uuids_lower(candidates: list[EscoSkillCandidate]) -> f
     )
 
 
-def occupation_skill_signal_tier(skill: dict[str, Any]) -> str:
+def occupation_skill_signal_tier(skill: OccupationSkill) -> str:
     """
     Normalized CSV ``SIGNALLINGVALUELABEL`` tier for one skill row: ``high``, ``medium``,
     ``low``, or ``unlabelled`` (empty / other).
     """
-    lab = (skill.get("signalling_label") or "").strip().lower()
+    lab = (skill.signalling_label or "").strip().lower()
     if lab in ("high", "medium", "low"):
         return lab
     return "unlabelled"
 
 
-def _llm3_signalling_label_rank(skill: dict[str, Any]) -> int:
+def _llm3_signalling_label_rank(skill: OccupationSkill) -> int:
     """
     Tier for CSV ``SIGNALLINGVALUELABEL`` (lower = stronger).
 
@@ -64,78 +77,86 @@ def _llm3_signalling_label_rank(skill: dict[str, Any]) -> int:
 
 
 def filter_occupation_skills_nested_by_signal_include(
-    items: list[dict[str, Any]],
+    items: list[OccupationSkillsBlock],
     *,
     include_tiers: frozenset[str] | None,
-) -> list[dict[str, Any]]:
+) -> list[OccupationSkillsBlock]:
     """
     Drop essential/optional skills whose signalling tier is not in ``include_tiers``.
 
-    Non–essential/optional rows in a block's ``skills`` list are kept unchanged.
+    Non-essential/optional rows in a block's ``skills`` list are kept unchanged.
     Blocks that end up with no skills are removed.
 
-    ``include_tiers``: ``None`` → return ``items`` unchanged (no copy).
+    ``include_tiers``: ``None`` -> return ``items`` unchanged (no copy).
     Otherwise use names ``high``, ``medium``, ``low``, ``unlabelled`` (see
     ``RERANKER_OCCUPATION_SKILLS_SIGNAL_INCLUDE``).
     """
     if not include_tiers:
         return items
-    out: list[dict[str, Any]] = []
+    out: list[OccupationSkillsBlock] = []
     for block in items:
-        skills = block.get("skills") or []
-        if not isinstance(skills, list):
-            continue
-        kept: list[dict[str, Any]] = []
-        for sk in skills:
-            if not isinstance(sk, dict):
-                continue
-            rt = (sk.get("relation_type") or "").strip().lower()
-            if rt not in ("essential", "optional"):
-                kept.append(deepcopy(sk))
+        kept: list[OccupationSkill] = []
+        for sk in block.skills:
+            if sk.relation_type not in ("essential", "optional"):
+                kept.append(sk)
                 continue
             if occupation_skill_signal_tier(sk) in include_tiers:
-                kept.append(deepcopy(sk))
+                kept.append(sk)
         if not kept:
             continue
-        nb = deepcopy(block)
-        nb["skills"] = kept
-        nb["skill_counts"] = occupation_block_skill_counts(kept)
+        nb = block.model_copy(
+            update={
+                "skills": kept,
+                "skill_counts": occupation_block_skill_counts_from_models(kept),
+            }
+        )
         out.append(nb)
     return out
 
 
 def _llm3_menu_skill_sort_tuple(
-    skill: dict[str, Any], bi: int, si: int
+    skill: OccupationSkill, bi: int, si: int
 ) -> tuple[int, float, int, int, int]:
     """
     Sort key for LLM3 menu rows: stronger CSV signalling first, then essential over optional,
     then document order. Ascending sort = higher priority first.
     """
     lab_rank = _llm3_signalling_label_rank(skill)
-    raw = (skill.get("signalling_value") or "").strip()
+    raw = (skill.signalling_value or "").strip()
     try:
         v = float(raw)
     except ValueError:
         v = float("-inf")
-    rt = (skill.get("relation_type") or "").strip().lower()
-    rt_rank = 0 if rt == "essential" else 1
+    rt_rank = 0 if skill.relation_type == "essential" else 1
     return (lab_rank, -v, rt_rank, bi, si)
 
 
+class Llm3MenuSubset(DomainModel):
+    """A (possibly capped/filtered) occupation-skills menu built for the LLM3 prompt."""
+
+    items: list[OccupationSkillsBlock] = Field(
+        description="Occupation blocks to send to LLM3, trimmed to the prompt budget."
+    )
+    full_menu_count: int = Field(
+        description="Essential+optional taxonomy skills in the untrimmed menu."
+    )
+    subset_menu_count: int = Field(description="Essential+optional taxonomy skills in `items`.")
+
+
 def subset_occupation_nested_for_llm3_prompt(
-    full_items: list[dict[str, Any]],
+    full_items: list[OccupationSkillsBlock],
     *,
     max_menu_skills: int,
     classifier_esco_lower: frozenset[str] | None,
     signal_menu_filter: str = "off",
-) -> tuple[list[dict[str, Any]], int, int]:
+) -> Llm3MenuSubset:
     """
-    Build a smaller occupation→skills nesting for the LLM3 prompt only.
+    Build a smaller occupation->skills nesting for the LLM3 prompt only.
 
-    Returns ``(subset_items, full_menu_count, subset_menu_count)``. Callers should pass
-    ``subset_items`` to the relevance model, then ``apply_occupation_skills_listing_relevance``
-    on the **original** ``full_items`` with the parsed result: skills omitted from the prompt
-    keep the default ``llm_is_relevant`` of ``True``.
+    Callers should pass the result's ``items`` to the relevance model, then
+    ``apply_occupation_skills_listing_relevance`` on the **original** ``full_items`` with the
+    parsed result: skills omitted from the prompt keep the default ``llm_is_relevant`` of
+    ``True``.
 
     When ``signal_menu_filter`` is ``high``, ``medium``, or ``low``, only relations whose
     CSV ``SIGNALLINGVALUELABEL`` is at least that strong are kept (empty labels are dropped).
@@ -145,7 +166,7 @@ def subset_occupation_nested_for_llm3_prompt(
     When ``max_menu_skills`` > 0, skills are chosen in **CSV signalling strength** order
     (``signalling_label`` high/medium/low, then numeric ``signalling_value``, then essential
     before optional, then listing order) so the cap favours taxonomy rows that are explicitly
-    weighted in the relations file—not the first rows in file order.
+    weighted in the relations file-not the first rows in file order.
 
     ``max_menu_skills`` <= 0: no numeric cap after the signal filter (classifier filter may
     still apply).
@@ -153,75 +174,68 @@ def subset_occupation_nested_for_llm3_prompt(
     """
     full_n = occupation_skills_relevance_menu_size(full_items)
     if full_n == 0:
-        return [], 0, 0
+        return Llm3MenuSubset(items=[], full_menu_count=0, subset_menu_count=0)
 
     budget = full_n if max_menu_skills <= 0 else min(max_menu_skills, full_n)
 
-    entries: list[dict[str, Any]] = []
+    class _MenuEntry(NamedTuple):
+        bi: int
+        si: int
+        skill: OccupationSkill
+        sort_key: tuple[int, float, int, int, int]
+
+    entries: list[_MenuEntry] = []
     for bi, block in enumerate(full_items):
-        tid = block.get("tabiya_occupation_id")
-        if tid is None or str(tid).strip() == "":
+        if not str(block.tabiya_occupation_id or "").strip():
             continue
-        skills = block.get("skills") or []
-        if not isinstance(skills, list):
-            continue
-        for si, sk in enumerate(skills):
-            if not isinstance(sk, dict):
+        for si, sk in enumerate(block.skills):
+            if sk.relation_type not in ("essential", "optional"):
                 continue
-            rt = (sk.get("relation_type") or "").strip().lower()
-            if rt not in ("essential", "optional"):
-                continue
-            sid = str(sk.get("skill_id") or "").strip()
+            sid = sk.skill_id.strip()
             if not sid:
                 continue
             if classifier_esco_lower is not None and sid.lower() not in classifier_esco_lower:
                 continue
             entries.append(
-                {
-                    "bi": bi,
-                    "si": si,
-                    "skill": deepcopy(sk),
-                    "_sort": _llm3_menu_skill_sort_tuple(sk, bi, si),
-                }
+                _MenuEntry(bi=bi, si=si, skill=sk, sort_key=_llm3_menu_skill_sort_tuple(sk, bi, si))
             )
 
     filt = (signal_menu_filter or "off").strip().lower()
     if filt != "off":
         max_rank = {"high": 0, "medium": 1, "low": 2}.get(filt)
         if max_rank is not None:
-            entries = [e for e in entries if _llm3_signalling_label_rank(e["skill"]) <= max_rank]
+            entries = [e for e in entries if _llm3_signalling_label_rank(e.skill) <= max_rank]
 
-    entries.sort(key=lambda e: e["_sort"])
+    entries.sort(key=lambda e: e.sort_key)
     entries = entries[:budget]
-    entries.sort(key=lambda e: (e["bi"], e["si"]))
+    entries.sort(key=lambda e: (e.bi, e.si))
 
-    by_bi: dict[int, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+    by_bi: dict[int, list[tuple[int, OccupationSkill]]] = defaultdict(list)
     for e in entries:
-        by_bi[e["bi"]].append((e["si"], e["skill"]))
+        by_bi[e.bi].append((e.si, e.skill))
 
-    out_blocks: list[dict[str, Any]] = []
+    out_blocks: list[OccupationSkillsBlock] = []
     for bi in sorted(by_bi.keys()):
         block = full_items[bi]
         chunk = [sk for _, sk in sorted(by_bi[bi], key=lambda x: x[0])]
-        nb = deepcopy(block)
-        nb["skills"] = chunk
-        nb["skill_counts"] = occupation_block_skill_counts(chunk)
+        nb = block.model_copy(
+            update={
+                "skills": chunk,
+                "skill_counts": occupation_block_skill_counts_from_models(chunk),
+            }
+        )
         out_blocks.append(nb)
 
     subset_n = occupation_skills_relevance_menu_size(out_blocks)
-    return out_blocks, full_n, subset_n
+    return Llm3MenuSubset(items=out_blocks, full_menu_count=full_n, subset_menu_count=subset_n)
 
 
 def build_llm3_occupation_menu(
-    occupation_to_skills_nested: list[dict[str, Any]],
+    occupation_to_skills_nested: list[OccupationSkillsBlock],
     classifier_skill_candidates: list[EscoSkillCandidate],
     settings: Settings,
-) -> tuple[list[dict[str, Any]], int, int]:
-    """
-    Apply ``Settings`` LLM3 menu controls (signal tier filter, max size, classifier intersect).
-
-    Returns ``(menu_for_llm3, full_menu_count, prompt_menu_count)``.
-    """
+) -> Llm3MenuSubset:
+    """Apply ``Settings`` LLM3 menu controls (signal tier filter, max size, classifier intersect)."""
     clf: frozenset[str] | None = None
     if settings.reranker_llm3_classifier_intersect:
         s = classifier_skill_esco_uuids_lower(classifier_skill_candidates)
@@ -235,30 +249,26 @@ def build_llm3_occupation_menu(
 
 
 def llm3_menu_skill_candidates(
-    menu_items: list[dict[str, Any]],
+    menu_items: list[OccupationSkillsBlock],
     existing: list[EscoSkillCandidate],
 ) -> list[EscoSkillCandidate]:
     """
     LLM3 menu skills (essential/optional) as extra LLM1 candidates, in menu order.
 
     Skips skills whose ESCO uuid or normalized label is already in ``existing`` (or was added
-    from an earlier block), so a classifier candidate is never shadowed in label→URI mapping.
+    from an earlier block), so a classifier candidate is never shadowed in label->URI mapping.
     """
     seen_uuids = {(c.esco_uuid or "").strip().lower() for c in existing if c.esco_uuid}
     seen_labels = {_norm_label(c.label) for c in existing}
     out: list[EscoSkillCandidate] = []
     for block in menu_items:
-        tid = block.get("tabiya_occupation_id")
-        if tid is None or str(tid).strip() == "":
+        if not str(block.tabiya_occupation_id or "").strip():
             continue
-        for sk in block.get("skills") or []:
-            if not isinstance(sk, dict):
+        for sk in block.skills:
+            if sk.relation_type not in ("essential", "optional"):
                 continue
-            rt = (sk.get("relation_type") or "").strip().lower()
-            if rt not in ("essential", "optional"):
-                continue
-            sid = str(sk.get("skill_id") or "").strip().lower()
-            label = (sk.get("label") or "").strip()
+            sid = sk.skill_id.strip().lower()
+            label = sk.label.strip()
             if not sid or not label:
                 continue
             if sid in seen_uuids or _norm_label(label) in seen_labels:
@@ -268,7 +278,7 @@ def llm3_menu_skill_candidates(
             out.append(
                 EscoSkillCandidate(
                     label=label,
-                    uri=(sk.get("uri") or "").strip() or esco_skill_uri_for_uuid(sid),
+                    uri=(sk.uri or "").strip() or esco_skill_uri_for_uuid(sid),
                     esco_uuid=sid,
                 )
             )
@@ -276,9 +286,9 @@ def llm3_menu_skill_candidates(
 
 
 def apply_occupation_skills_listing_relevance(
-    items: list[dict[str, Any]],
+    items: list[OccupationSkillsBlock],
     result: OccupationSkillsRelevanceResult,
-) -> list[dict[str, Any]]:
+) -> list[OccupationSkillsBlock]:
     """
     Copy ``items``, set ``llm_is_relevant`` on each skill.
 
@@ -291,27 +301,25 @@ def apply_occupation_skills_listing_relevance(
             d.is_relevant
         )
 
-    out = deepcopy(items)
-    for block in out:
-        tid = str(block.get("tabiya_occupation_id") or "").strip().lower()
-        skills = block.get("skills")
-        if not isinstance(skills, list):
-            continue
-        for sk in skills:
-            if not isinstance(sk, dict):
-                continue
-            sid = str(sk.get("skill_id") or "").strip().lower()
-            rt = (sk.get("relation_type") or "").strip().lower()
-            if rt in ("essential", "optional") and tid and sid:
-                sk["llm_is_relevant"] = decision_map.get((tid, sid), True)
+    out: list[OccupationSkillsBlock] = []
+    for block in items:
+        tid = str(block.tabiya_occupation_id or "").strip().lower()
+        new_skills: list[OccupationSkill] = []
+        for sk in block.skills:
+            sid = sk.skill_id.strip().lower()
+            if sk.relation_type in ("essential", "optional") and tid and sid:
+                is_relevant = decision_map.get((tid, sid), True)
             else:
-                sk["llm_is_relevant"] = True
-        rel_only = [
-            x for x in skills if isinstance(x, dict) and x.get("llm_is_relevant") is not False
-        ]
-        tax = occupation_block_skill_counts(skills)
-        block["skill_counts"] = {
-            **tax,
-            "relevant_total": len(rel_only),
-        }
+                is_relevant = True
+            new_skills.append(sk.model_copy(update={"llm_is_relevant": is_relevant}))
+        rel_only = [sk for sk in new_skills if sk.llm_is_relevant is not False]
+        tax = occupation_block_skill_counts_from_models(new_skills)
+        out.append(
+            block.model_copy(
+                update={
+                    "skills": new_skills,
+                    "skill_counts": tax.model_copy(update={"relevant_total": len(rel_only)}),
+                }
+            )
+        )
     return out

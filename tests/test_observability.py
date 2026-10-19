@@ -207,17 +207,19 @@ def test_failed_llm_call_marks_generation_as_error(make_settings):
 
 
 def test_http_providers_parse_usage():
-    openai = OpenAiLlmClient(LlmConfig("openai", "x", model="m", api_key="k"))
+    openai = OpenAiLlmClient(LlmConfig(provider="openai", client_class="x", model="m", api_key="k"))
     assert openai.extract_usage(
         {"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
     ) == {"input": 10, "output": 5, "total": 15}
 
-    anthropic = AnthropicLlmClient(LlmConfig("anthropic", "x", model="m", api_key="k"))
+    anthropic = AnthropicLlmClient(
+        LlmConfig(provider="anthropic", client_class="x", model="m", api_key="k")
+    )
     assert anthropic.extract_usage(
         {"usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100}}
     ) == {"input": 10, "output": 5, "cache_read_input_tokens": 100, "total": 115}
 
-    ollama = OllamaLlmClient(LlmConfig("ollama", "x", model="m"))
+    ollama = OllamaLlmClient(LlmConfig(provider="ollama", client_class="x", model="m"))
     assert ollama.extract_usage({"prompt_eval_count": 7, "eval_count": 3}) == {
         "input": 7,
         "output": 3,
@@ -227,7 +229,9 @@ def test_http_providers_parse_usage():
 
 
 def test_http_provider_reports_usage_onto_the_generation(monkeypatch):
-    client = OpenAiLlmClient(LlmConfig("openai", "x", model="gpt-x", api_key="k"))
+    client = OpenAiLlmClient(
+        LlmConfig(provider="openai", client_class="x", model="gpt-x", api_key="k")
+    )
 
     def _handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -250,7 +254,9 @@ def test_http_provider_reports_usage_onto_the_generation(monkeypatch):
 
 
 def test_gemini_reports_usage_including_thinking_tokens(monkeypatch):
-    client = GeminiLlmClient(LlmConfig("gemini", "x", model="gemini-2.5-flash", api_key="k"))
+    client = GeminiLlmClient(
+        LlmConfig(provider="gemini", client_class="x", model="gemini-2.5-flash", api_key="k")
+    )
     response = SimpleNamespace(
         text="{}",
         usage_metadata=SimpleNamespace(
@@ -413,9 +419,7 @@ def test_sampling_is_deterministic_and_respects_bounds():
 
 
 def test_unsampled_job_records_nothing_beneath_it():
-    from dataclasses import replace
-
-    config = replace(TEST_TRACING_CONFIG, batch_sample_rate=0.0)
+    config = TEST_TRACING_CONFIG.model_copy(update={"batch_sample_rate": 0.0})
     with in_memory_tracing(config) as spans:
         with start_trace(name="rank_job", tier=SamplingTier.BATCH, sampling_key="j") as root:
             with traced_observation(name="skill_ranker", as_type="generation") as gen:

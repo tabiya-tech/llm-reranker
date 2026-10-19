@@ -5,41 +5,71 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from bson import ObjectId
+from pydantic import Field
 
 from app.config import Settings
+from app.domain_base import DomainModel
 from app.translation import overlay_translation_listing_fields
 
+if TYPE_CHECKING:
+    # Deferred: app.job_ranking.routes.types -> app.job_ranking.types -> app.job_context
+    # (this module) — a real top-level import here would be a circular import.
+    from app.job_ranking.routes.types import RankRequest
 
-@dataclass(frozen=True)
-class JobDescriptionContext:
+
+def stringify_top_level_object_ids(doc: dict[str, Any]) -> dict[str, Any]:
+    """``ObjectId`` values at the top level -> ``str``, so ``RankRequest`` can validate raw
+    pymongo documents (which carry real BSON types, unlike the API's JSON/Extended-JSON input).
+    """
+    return {k: (str(v) if isinstance(v, ObjectId) else v) for k, v in doc.items()}
+
+
+class JobDescriptionContext(DomainModel):
     """
     Fields needed for downstream steps, sourced from classified job documents.
 
     Field names used to populate this object come from ``Settings`` (environment variables).
 
-    The full Mongo document is always available on ``classified`` (includes ``classification``,
-    ``metadata``, etc.).
+    The full source document is always available on ``classified`` (includes
+    ``classification``, scraper enrichment, etc.) as a validated, permissive-extra
+    :class:`~app.job_ranking.routes.types.RankRequest` — call ``.to_document()`` to get it
+    back as a plain dict, e.g. for dynamic/configured key lookups.
     """
 
-    job_id: Any | None
-    job_fingerprint: str | None
-    title: str | None
-    employer: str | None
-    category: str | None
-    application_url: str | None
-    posted_date: str | None
-    closing_date: str | None
-    source_platform: str | None
-    raw_job_description: str | None
-    requirements_text: str | None
-    salary: str | None
-    city: str | None
-    county: str | None
-    employment_type: str | None
-    classified: dict[str, Any]
+    job_id: str | int | None = Field(description="Job id, normalized from the source document.")
+    job_fingerprint: str | None = Field(description="Listing fingerprint.")
+    title: str | None = Field(description="Listing title.")
+    employer: str | None = Field(description="Employer name.")
+    category: str | None = Field(description="Listing category.")
+    application_url: str | None = Field(description="Where to apply.")
+    posted_date: str | None = Field(description="Posting date, as the source wrote it.")
+    closing_date: str | None = Field(description="Closing date, as the source wrote it.")
+    source_platform: str | None = Field(description="Job board the listing came from.")
+    raw_job_description: str | None = Field(description="Full job description text.")
+    requirements_text: str | None = Field(description="Requirements text.")
+    salary: str | None = Field(description="Salary text.")
+    city: str | None = Field(description="City; a list in the source is joined with `, `.")
+    county: str | None = Field(description="County/region (older documents; see `province`).")
+    employment_type: str | None = Field(description="Employment type text.")
+    classified: RankRequest = Field(description="The full source document, validated.")
+
+    @classmethod
+    def _ensure_rebuilt(cls) -> None:
+        """Resolve the deferred ``RankRequest`` forward ref, idempotently.
+
+        Call this before constructing a ``JobDescriptionContext`` directly (outside
+        ``build_job_description_context``, which already calls it) — e.g. in tests —
+        so construction doesn't depend on some other module having imported
+        ``app.job_ranking.routes.types`` first in this process.
+        """
+        if not cls.__pydantic_complete__:
+            from app.job_ranking.routes.types import RankRequest  # noqa: F401
+
+            cls.model_rebuild()
 
 
 def _metadata(doc: dict[str, Any]) -> dict[str, Any]:
@@ -119,8 +149,17 @@ def _multi_key_top_or_metadata(doc: dict[str, Any], *keys: str) -> str | None:
     return None
 
 
+def _normalize_job_id(raw: object) -> str | int | None:
+    """Mongo ``ObjectId`` -> ``str``; ``str``/``int`` pass through; anything else -> ``None``."""
+    if raw is None:
+        return None
+    if isinstance(raw, (str, int)):
+        return raw
+    return str(raw)
+
+
 def build_job_description_context(
-    classified_doc: dict[str, Any],
+    classified: RankRequest | dict[str, Any],
     *,
     settings: Settings,
 ) -> JobDescriptionContext:
@@ -129,8 +168,18 @@ def build_job_description_context(
 
     All Mongo field names are configured via ``Settings`` / environment variables.
     """
+    from app.job_ranking.routes.types import RankRequest
+
+    JobDescriptionContext._ensure_rebuilt()
+    classified = (
+        classified
+        if isinstance(classified, RankRequest)
+        else RankRequest.model_validate(stringify_top_level_object_ids(classified))
+    )
+    classified_doc = classified.to_document()
+
     fp = _first_str(classified_doc, *settings.keys_fingerprint)
-    job_id = classified_doc.get(settings.mongo_field_job_id)
+    job_id = _normalize_job_id(classified_doc.get(settings.mongo_field_job_id))
 
     title = _field_or_metadata(classified_doc, settings.field_title)
     employer = _field_or_metadata(classified_doc, settings.field_employer)
@@ -167,5 +216,5 @@ def build_job_description_context(
         city=city,
         county=county,
         employment_type=employment,
-        classified=dict(classified_doc),
+        classified=classified,
     )

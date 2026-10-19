@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from app.job_context import JobDescriptionContext
 from app.job_ranking.occupation_skills.menu import (
@@ -19,6 +18,7 @@ from app.job_ranking.occupation_skills.types import (
     OccupationSkillsRelevanceResult,
 )
 from app.job_ranking.response_schemas import occupation_skills_relevance_response_schema
+from app.job_ranking.routes.types import OccupationSkillsBlock
 from app.job_ranking.types import (
     NO_PROMPT_LOGGING,
     PROMPT_LOG_SEPARATOR,
@@ -48,7 +48,7 @@ class OccupationSkillsRelevanceStep:
     def run(
         self,
         ctx: JobDescriptionContext,
-        menu_items: list[dict[str, Any]],
+        menu_items: list[OccupationSkillsBlock],
         *,
         prompt_logging: PromptLogging = NO_PROMPT_LOGGING,
     ) -> OccupationSkillsRelevanceResult:

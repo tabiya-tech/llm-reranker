@@ -16,6 +16,13 @@ import csv
 import logging
 from pathlib import Path
 
+from pydantic import ValidationError
+
+from utils.occupation_csv_models import (
+    OccupationCsvRow,
+    OccupationSkillRelationCsvRow,
+    SkillsCsvRow,
+)
 from utils.occupation_to_skills_mapping import cell_to_taxonomy_id
 from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap, cell_to_esco_uuid, parse_uuid_history_cell
 
@@ -249,7 +256,7 @@ def load_occupation_skill_relations(
                 reader.fieldnames,
             )
             return empty
-        for row in reader:
+        for raw_row in reader:
             if accepted_occupation_types:
                 if not occ_type_col:
                     if not missing_occ_type_warned:
@@ -261,31 +268,36 @@ def load_occupation_skill_relations(
                         )
                         missing_occ_type_warned = True
                 else:
-                    ot = (row.get(occ_type_col) or "").strip().lower()
+                    ot = (raw_row.get(occ_type_col) or "").strip().lower()
                     if ot not in accepted_occupation_types:
                         continue
-            ou = cell_to_taxonomy_id(row.get(occ_col) or "")
-            su = cell_to_taxonomy_id(row.get(sk_col) or "")
+            row = OccupationSkillRelationCsvRow.model_validate(
+                {
+                    "occupation_id": raw_row.get(occ_col) or "",
+                    "skill_id": raw_row.get(sk_col) or "",
+                    "relation_type": raw_row.get(relation_col) if relation_col else None,
+                    "occupation_type": raw_row.get(occ_type_col) if occ_type_col else None,
+                    "skill_label": raw_row.get(label_col) if label_col else None,
+                    "signalling_value": raw_row.get(sig_val_col) if sig_val_col else None,
+                    "signalling_label": raw_row.get(sig_lab_col) if sig_lab_col else None,
+                }
+            )
+            ou = cell_to_taxonomy_id(row.occupation_id)
+            su = cell_to_taxonomy_id(row.skill_id)
             if not ou or not su:
                 continue
             occupation_to_skills.setdefault(ou, set()).add(su)
-            if label_col:
-                lab = (row.get(label_col) or "").strip()
-                if lab:
-                    skill_labels[su] = lab
-            if relation_col:
-                raw_rel = (row.get(relation_col) or "").strip().lower()
-                rel = raw_rel if raw_rel else "unspecified"
-            else:
-                rel = "unspecified"
+            lab = (row.skill_label or "").strip()
+            if lab:
+                skill_labels[su] = lab
+            rel = (row.relation_type or "").strip().lower() or "unspecified"
             inner = occ_skill_relation.setdefault(ou, {})
             inner[su] = _merge_relation_types(inner.get(su), rel)
-            if sig_val_col or sig_lab_col:
-                raw_v = (row.get(sig_val_col) or "").strip() if sig_val_col else ""
-                raw_l = (row.get(sig_lab_col) or "").strip() if sig_lab_col else ""
-                if raw_v or raw_l:
-                    sig_map = occ_skill_signalling.setdefault(ou, {})
-                    sig_map[su] = _merge_signalling_cells(sig_map.get(su), raw_v, raw_l)
+            raw_v = (row.signalling_value or "").strip()
+            raw_l = (row.signalling_label or "").strip()
+            if raw_v or raw_l:
+                sig_map = occ_skill_signalling.setdefault(ou, {})
+                sig_map[su] = _merge_signalling_cells(sig_map.get(su), raw_v, raw_l)
 
     occ_frozen = {k: frozenset(v) for k, v in occupation_to_skills.items()}
     if accepted_occupation_types:
@@ -338,17 +350,27 @@ def load_occupations_lookup(path_str: str) -> tuple[dict[str, str], frozenset[st
                 reader.fieldnames,
             )
             return {}, frozenset()
-        for row in reader:
-            raw_id = (row.get(id_col) or "").strip()
+        for raw_row in reader:
+            try:
+                row = OccupationCsvRow.model_validate(
+                    {
+                        "id": raw_row.get(id_col),
+                        "uuid_history": raw_row.get(hist_col),
+                        "origin_uri": raw_row.get(origin_col) if origin_col else None,
+                    }
+                )
+            except ValidationError:
+                continue
+            raw_id = row.id.strip()
             if not raw_id:
                 continue
             tid = raw_id.lower()
             all_ids.add(tid)
             bridge[tid] = tid
-            for esco_u in parse_uuid_history_cell(row.get(hist_col)):
+            for esco_u in parse_uuid_history_cell(row.uuid_history):
                 bridge[esco_u.lower()] = tid
-            if origin_col:
-                origin = (row.get(origin_col) or "").strip()
+            if row.origin_uri:
+                origin = row.origin_uri.strip()
                 if origin:
                     ou = cell_to_esco_uuid(origin)
                     if ou:
@@ -388,20 +410,30 @@ def load_skills_uuid_tabiya_map(path_str: str) -> SkillsUuidTabiyaMap:
             )
             return idx
 
-        for row in reader:
+        for raw_row in reader:
             n_rows += 1
-            raw_id = (row.get(id_col) or "").strip()
-            label = (row.get(pref_col) or "").strip()
+            canon = {
+                "id": raw_row.get(id_col),
+                "preferred_label": raw_row.get(pref_col),
+                "uuid_history": raw_row.get(hist_col) if hist_col else None,
+                "origin_uri": raw_row.get(origin_col) if origin_col else None,
+            }
+            try:
+                row = SkillsCsvRow.model_validate(canon)
+            except ValidationError:
+                continue
+            raw_id = row.id.strip()
+            label = row.preferred_label.strip()
             if not raw_id or not label:
                 continue
             tid = raw_id.lower()
             idx.preferred_label[tid] = label
 
             primary: str | None = None
-            if origin_col:
-                primary = cell_to_esco_uuid(row.get(origin_col) or "")
-            if not primary and hist_col:
-                hist = parse_uuid_history_cell(row.get(hist_col))
+            if row.origin_uri:
+                primary = cell_to_esco_uuid(row.origin_uri)
+            if not primary and row.uuid_history:
+                hist = parse_uuid_history_cell(row.uuid_history)
                 primary = hist[0] if hist else None
             if primary:
                 idx.primary_esco_by_tabiya[tid] = primary
@@ -409,13 +441,13 @@ def load_skills_uuid_tabiya_map(path_str: str) -> SkillsUuidTabiyaMap:
             else:
                 unmapped_primary += 1
 
-            if hist_col:
-                for esco_u in parse_uuid_history_cell(row.get(hist_col)):
+            if row.uuid_history:
+                for esco_u in parse_uuid_history_cell(row.uuid_history):
                     idx.preferred_label[esco_u.lower()] = label
                     if esco_u.lower() not in idx.tabiya_by_esco:
                         idx.tabiya_by_esco[esco_u.lower()] = tid
-            if origin_col:
-                origin = (row.get(origin_col) or "").strip()
+            if row.origin_uri:
+                origin = row.origin_uri.strip()
                 if origin:
                     ou = cell_to_esco_uuid(origin)
                     if ou:

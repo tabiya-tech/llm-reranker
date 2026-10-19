@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import json
-
 from app.job_ranking.occupation_skills.types import (
     OccupationSkillsRelevanceDecision,
     OccupationSkillsRelevanceResult,
 )
 from app.llm.errors import LlmParseError
-from utils.classifier_linked_entities import (
-    json_bool,
-    strip_json_fence,
-)
+from app.llm_models import RelevanceDecisionRaw, parse_llm_json_response, strip_json_fence
+from utils.classifier_linked_entities import json_bool
 
 
 def parse_occupation_skills_relevance_response(raw_text: str) -> OccupationSkillsRelevanceResult:
@@ -21,31 +17,28 @@ def parse_occupation_skills_relevance_response(raw_text: str) -> OccupationSkill
 
     Extra fields on objects are ignored. Duplicate (tabiya_occupation_id, skill_id) keys: last wins.
     """
-    cleaned = strip_json_fence(raw_text)
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        raise LlmParseError(f"Occupation skills relevance JSON could not be parsed: {e}") from e
-    if not isinstance(data, dict):
-        raise LlmParseError("Occupation skills relevance JSON must be an object")
+    data = parse_llm_json_response(raw_text)
     raw_list = data.get("decisions")
     if not isinstance(raw_list, list):
         raise LlmParseError("Occupation skills relevance JSON must contain a decisions array")
     merged: dict[tuple[str, str], OccupationSkillsRelevanceDecision] = {}
-    for item in raw_list:
-        if not isinstance(item, dict):
+    for raw_item in raw_list:
+        if not isinstance(raw_item, dict):
             continue
-        sid = str(item.get("skill_id") or "").strip()
-        tid = str(item.get("tabiya_occupation_id") or "").strip()
+        item = RelevanceDecisionRaw.model_validate(raw_item)
+        sid = item.skill_id.strip()
+        tid = item.tabiya_occupation_id.strip()
         if not sid or not tid:
             continue
         merged[(tid.lower(), sid.lower())] = OccupationSkillsRelevanceDecision(
             skill_id=sid,
             tabiya_occupation_id=tid,
-            is_relevant=json_bool(item.get("is_relevant")),
+            is_relevant=json_bool(item.is_relevant),
         )
     decisions = tuple(merged.values())
-    return OccupationSkillsRelevanceResult(decisions=decisions, raw_response=cleaned)
+    return OccupationSkillsRelevanceResult(
+        decisions=decisions, raw_response=strip_json_fence(raw_text)
+    )
 
 
 class OccupationSkillsRelevanceResponseParser:

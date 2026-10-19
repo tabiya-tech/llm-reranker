@@ -21,6 +21,7 @@ from app.job_ranking.response_schemas import (
     occupation_skills_relevance_response_schema,
     skill_ranker_response_schema,
 )
+from app.job_ranking.routes.types import OccupationSkill, OccupationSkillsBlock, SkillCounts
 from utils.classifier_linked_entities import parse_skill_ranker_json
 
 pytestmark = pytest.mark.unit
@@ -56,7 +57,14 @@ def _attrs_schema() -> JobAttributesSchema:
 
 
 def _onet() -> tuple[OnetWorkActivity, ...]:
-    return tuple(OnetWorkActivity(f"4.A.{i}", f"WA {i}", f"WA {i}") for i in range(5))
+    return tuple(
+        OnetWorkActivity(
+            wa_element_id=f"4.A.{i}",
+            wa_element_name=f"WA {i}",
+            wa_element_name_simplified=f"WA {i}",
+        )
+        for i in range(5)
+    )
 
 
 class TestSkillRankerSchema:
@@ -80,7 +88,8 @@ class TestSkillRankerSchema:
 
     def test_a_conforming_reply_parses(self):
         reply = json.dumps({"essential_skills": ["Python"], "optional_skills": ["Weld metal"]})
-        assert parse_skill_ranker_json(reply) == (["Python"], ["Weld metal"])
+        parsed = parse_skill_ranker_json(reply)
+        assert (parsed.essential_skills, parsed.optional_skills) == (["Python"], ["Weld metal"])
 
 
 class TestJobAttributesSchema:
@@ -147,17 +156,38 @@ class TestJobAttributesSchema:
             assert schema["properties"]["work_activities"]["items"]["enum"]
 
 
+def _skill(skill_id: str, relation_type: str) -> OccupationSkill:
+    return OccupationSkill(
+        skill_id=skill_id,
+        tabiya_skill_id=skill_id,
+        label=skill_id,
+        uri=f"http://data.europa.eu/esco/skill/{skill_id}",
+        relation_type=relation_type,
+    )
+
+
+def _block(tabiya_occupation_id: str, skills: list[OccupationSkill]) -> OccupationSkillsBlock:
+    return OccupationSkillsBlock(
+        occupation_label="Occupation",
+        occupation_esco_uuid=None,
+        occupation_uri="http://data.europa.eu/esco/occupation/occ",
+        tabiya_occupation_id=tabiya_occupation_id or None,
+        skill_counts=SkillCounts(total=len(skills), essential=0, optional=0, unspecified=0),
+        skills=skills,
+    )
+
+
 class TestOccupationSkillsRelevanceSchema:
     MENU = [
-        {
-            "tabiya_occupation_id": "occ-1",
-            "skills": [
-                {"skill_id": "s-1", "relation_type": "essential"},
-                {"skill_id": "s-2", "relation_type": "optional"},
-                {"skill_id": "s-3", "relation_type": "other"},
+        _block(
+            "occ-1",
+            [
+                _skill("s-1", "essential"),
+                _skill("s-2", "optional"),
+                _skill("s-3", "other"),
             ],
-        },
-        {"tabiya_occupation_id": "", "skills": [{"skill_id": "s-9", "relation_type": "essential"}]},
+        ),
+        _block("", [_skill("s-9", "essential")]),
     ]
 
     def test_ids_are_enums_over_the_judged_skills_only(self):
