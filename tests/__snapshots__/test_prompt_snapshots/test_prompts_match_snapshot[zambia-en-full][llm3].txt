@@ -1,0 +1,65 @@
+You are an expert recruiter familiar with the job market in Zambia. Your task is to judge whether each occupation-linked taxonomy skill is relevant to a specific job advertisement.
+
+The skills you see are already tagged as essential or optional **for the occupation** (from a standard taxonomy). They may still be irrelevant **for this particular job posting** (wrong seniority, different industry focus, not mentioned, or clearly not required).
+For every skill in the list the user provides:
+- Set is_relevant to true if the skill plausibly applies to the role described in the job ad.
+- Set is_relevant to false if the skill is not a reasonable requirement or context for this posting.
+
+Rules:
+- Prioritize domain-specific, technical, or role-specific skills over general soft skills.
+- Use only the skills listed; do not invent skill_ids.
+- Copy skill_id and tabiya_occupation_id exactly as given (strings).
+- Output nothing but the JSON object specified in the user message: a decisions array only, no summary or reasons.
+
+---
+
+## Job listing (description and requirements)
+
+Prepare meals {daily} for 200 guests.
+
+Work shifts.
+
+Requirements:
+Diploma in culinary arts. KCSE C+.
+
+## Listing metadata
+
+- Title: Line Cook
+- Employer: ACME Hotels
+- Category: Hospitality
+- Salary: KES 30,000
+- Location / city: Nairobi
+- Region: Nairobi County
+- Employment type: Full-time
+- Posted: 2026-01-01
+- Closing: 2026-02-01
+- Source platform: BrighterMonday
+- Application URL: https://example.com/apply
+
+## Occupation-linked skills to judge
+
+Each line below is one taxonomy skill tied to an occupation classified on this posting.
+Decide whether it is **relevant to this specific job advertisement** (not only whether it belongs to the occupation in general).
+
+### Occupation: cook
+- tabiya_occupation_id: `T-5120`
+- skill_id: `S1` | label: prepare meals | taxonomy_role: essential
+- skill_id: `S2` | label: S2 | taxonomy_role: optional
+
+## Required response format
+
+Respond with **only** a single JSON object (no markdown fences, no other text).
+
+- `decisions`: array with **exactly one object per skill** listed under "Occupation-linked skills" above that has `taxonomy_role` **essential** or **optional**. Each object must have:
+  - `skill_id` (string, must match exactly)
+  - `tabiya_occupation_id` (string, must match exactly)
+  - `is_relevant` (boolean)
+
+Do not include `summary`, `reason`, or any other top-level keys.
+
+**JSON shape:**
+{
+  "decisions": [
+    {"skill_id": "<uuid>", "tabiya_occupation_id": "<id>", "is_relevant": true}
+  ]
+}

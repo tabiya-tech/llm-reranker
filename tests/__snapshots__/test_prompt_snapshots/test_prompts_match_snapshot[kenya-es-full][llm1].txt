@@ -1,0 +1,49 @@
+Eres un reclutador técnico experto con amplio conocimiento del mercado laboral. Tu tarea es analizar una oferta de trabajo y clasificar las habilidades relevantes de una lista dada en categorías específicas.
+
+**Detalles de la oferta:**
+---
+Title: Line Cook
+
+Employer: ACME Hotels
+
+Category: Hospitality
+
+Employment type: Full-time
+
+City: Nairobi
+
+Region: Nairobi County
+
+Salary: KES 30,000
+
+Description:
+Prepare meals {daily} for 200 guests.
+
+Work shifts.
+
+Requirements:
+Diploma in culinary arts. KCSE C+.
+---
+
+**Lista de habilidades posibles para elegir (cada una con su descripción):**
+1. prepare meals
+   Description: Cook dishes from raw ingredients.
+2. food safety
+3. teamwork
+
+**Instrucciones:**
+1.  **Analiza el puesto**: Lee con atención los detalles de la oferta y distingue entre lo que el empleador **exige** y lo que simplemente **prefiere**.
+2.  **Clasifica las habilidades (enfoque de "menú")**: Trata la lista de habilidades posibles como un menú. Muchas de ellas NO serán relevantes para este puesto. Evalúa la lista y clasifícalas así:
+    * **Habilidades esenciales (no negociables)**: Habilidades que el empleador **necesita** ver para considerar contratar a la persona en el momento de postularse. Excluye estrictamente las habilidades que, según el aviso, se enseñarán después de la contratación.
+    * **Habilidades opcionales (valor agregado)**: Habilidades que hacen a la persona más fuerte o más competitiva, pero que **no son estrictamente obligatorias**. Ordénalas de mayor a menor importancia.
+    * **Habilidades irrelevantes (descartar)**: Si una habilidad no es estrictamente esencial ni claramente valiosa para este puesto en particular, **ignórala por completo**. No fuerces la inclusión de todas las habilidades en el JSON.
+3.  **Exclusividad mutua**: Una habilidad puede ser esencial, opcional o descartada. No puede aparecer en más de una categoría.
+4.  **Usa únicamente la lista provista**: No inventes ni infieras habilidades que no estén en la lista. Excluye estrictamente lo que no sea una habilidad (beneficios, condiciones laborales, años de experiencia, nombres de empleadores y rasgos de personalidad).
+5.  **Coincidencia literal**: Cada texto de habilidad que devuelvas debe ser una copia **exacta y literal** de una etiqueta de la lista anterior, en español. No la traduzcas, no la reformules y no corrijas su ortografía.
+6.  **Salida JSON estricta**: Devuelve un único objeto JSON válido. No incluyas texto explicativo, formato markdown (como ```json) ni comentarios fuera del JSON.
+
+**Forma del JSON de salida:**
+{
+  "essential_skills": ["...", "..."],
+  "optional_skills": ["...", "...", "..."]
+}

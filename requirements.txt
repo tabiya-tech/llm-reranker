@@ -11,3 +11,5 @@ pydantic-settings>=2.6.1,<3
 # LLM tracing (app/observability). v4 is the SDK compass-connect runs; it brings OpenTelemetry.
 langfuse>=4.14.3,<5
 pytest>=8.0.0
+# Snapshot tests (tests/test_prompt_snapshots.py); --snapshot-update regenerates.
+syrupy>=6.1,<7

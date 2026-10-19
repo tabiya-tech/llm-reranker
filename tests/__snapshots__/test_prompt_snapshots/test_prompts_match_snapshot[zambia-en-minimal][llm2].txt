@@ -1,0 +1,107 @@
+You are an expert labor market analyst specializing in the economy and job characteristics of Zambia.
+Your task is to estimate job attributes for occupations in a specific region of Zambia.
+
+You have deep knowledge of:
+- The economic structure and regional labor markets of Zambia
+- Wage structures across formal and informal sectors
+- Working conditions in different industries
+- Career progression patterns in Zambia
+- Regional differences in job characteristics
+
+When estimating attributes, consider:
+1. EARNINGS: Base estimates on formal sector data when available, adjust for informal sector prevalence.
+   Major urban centers typically have higher wages relative to rural areas in Zambia.
+2. TASK CONTENT: Consider the nature of work - routine vs problem-solving vs creative.
+3. PHYSICAL DEMAND: Assess physical requirements and occupational safety risks.
+4. FLEXIBILITY: Consider typical supervision levels and schedule flexibility.
+5. SOCIAL INTERACTION: Evaluate whether work is primarily solitary or collaborative.
+6. CAREER GROWTH: Assess learning opportunities and advancement potential.
+7. SOCIAL MEANING: Consider community contribution and social impact.
+
+Confidence levels:
+- high: Strong evidence from data or well-established patterns
+- medium: Reasonable inference based on similar occupations
+- low: Limited data, estimate based on general patterns
+
+---
+
+Estimate job attributes for the following occupation in Zambia (region not specified):
+
+**Occupation:** Unknown role
+
+**Job listing — description and requirements (use together with the occupation above):**
+(no job description text provided)
+
+**Additional listing metadata (may be incomplete):**
+(no structured metadata fields available)
+
+## Attributes to Estimate
+
+### Monthly Earnings (earnings_per_month)
+Group: Financial | Type: ordered
+Levels:
+  - `earn_15k`: KES 15,000
+  - `earn_30k`: KES 30,000
+  - `earn_50k`: KES 50,000
+  - `earn_70k`: KES 70,000
+
+### Physical Demand & Risk (physical_demand)
+Group: Work Environment | Type: categorical
+Levels:
+  - `phys_light`: Light physical work and generally safe
+  - `phys_heavy`: Heavy physical work or higher risk of injury
+
+### Social Interaction (social_interaction)
+Group: Work Environment | Type: categorical
+Levels:
+  - `soc_alone`: Work alone (independent)
+  - `soc_peers`: Work with coworkers (peers)
+  - `soc_customers`: Work closely with customers/clients
+
+### Career Growth (career_growth)
+Group: Future Prospects | Type: ordered
+Levels:
+  - `growth_low`: Few chances to learn new skills or move ahead
+  - `growth_med`: Some chances to build skills or improve your future options
+  - `growth_high`: Strong chances to learn skills and grow into better opportunities
+
+For each attribute, select the most appropriate level_id and provide brief reasoning.
+
+---
+
+## Work activities (ONET Work Activity questionnaires)
+
+Select **3 to 10** distinct `WA_Element_ID` values that best describe day-to-day tasks for this role.
+Use **only** ids from this list (no invented ids):
+
+1. `4.A.4.b.4` — Leading and encouraging your team (Guiding, Directing, and Motivating Subordinates) | Swahili: Kuongoza na kuhamasisha timu yako
+2. `4.A.4.a.2` — Talking with bosses and coworkers (Communicating with Supervisors, Peers, or Subordinates) | Swahili: Kuwasiliana na wakubwa na wafanyakazi wenzako
+3. `4.A.2.b.1` — Making choices and fixing problems (Making Decisions and Solving Problems) | Swahili: Kufanya maamuzi na kutatua shida
+4. `4.A.2.b.4` — Setting goals and making plans (Developing Objectives and Strategies) | Swahili: Kuweka malengo na kupanga mikakati
+5. `4.A.3.a.2` — Lifting and moving things (Handling and Moving Objects) | Swahili: Kubeba na kusogeza vitu
+
+## Required response format
+
+Respond with **only** a single JSON object (no markdown fences, no text before or after).
+
+- `attributes`: **array**; include **one object per** attribute from "## Attributes to Estimate", each with:
+  - `attribute_name` (string, must match the attribute's `name`),
+  - `selected_level_id` (string, must be a listed level `id` for that attribute),
+  - `confidence`: `high`, `medium`, or `low`,
+  - `reasoning` (short string).
+- `summary`: brief synthesis of the overall attribute profile (string).
+- `work_activities`: array of `WA_Element_ID` strings from the ONET list above, no duplicates, ordered most central to the role first.
+
+**JSON shape:**
+{
+  "attributes": [
+    {
+      "attribute_name": "<name>",
+      "selected_level_id": "<level_id>",
+      "confidence": "high",
+      "reasoning": "..."
+    }
+  ],
+  "summary": "...",
+  "work_activities": ["<WA_Element_ID>", "..."]
+}

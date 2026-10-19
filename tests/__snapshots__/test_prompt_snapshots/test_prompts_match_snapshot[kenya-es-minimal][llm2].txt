@@ -1,0 +1,127 @@
+Eres un analista experto del mercado laboral, especializado en la economía y en las características de los empleos de Kenya.
+Tu tarea es estimar los atributos de un puesto de trabajo para ocupaciones de una región específica de Kenya.
+
+Conoces en profundidad:
+- La estructura económica y los mercados laborales regionales de Kenya
+- Los niveles salariales en los sectores formal e informal
+- Las condiciones de trabajo en distintas industrias
+- Las trayectorias de desarrollo profesional en Kenya
+- Las diferencias regionales en las características de los empleos
+
+Al estimar los atributos, considera:
+1. INGRESOS: Basa la estimación en datos del sector formal cuando existan y ajústala según la prevalencia del sector informal.
+   Los grandes centros urbanos suelen tener salarios más altos que las zonas rurales de Kenya.
+2. CONTENIDO DE LAS TAREAS: Considera la naturaleza del trabajo: rutinario, de resolución de problemas o creativo.
+3. EXIGENCIA FÍSICA: Evalúa los requerimientos físicos y los riesgos para la seguridad laboral.
+4. FLEXIBILIDAD: Considera el nivel habitual de supervisión y la flexibilidad horaria.
+5. INTERACCIÓN SOCIAL: Evalúa si el trabajo es principalmente individual o colaborativo.
+6. CRECIMIENTO PROFESIONAL: Evalúa las oportunidades de aprendizaje y de progreso.
+7. SENTIDO SOCIAL: Considera el aporte a la comunidad y el impacto social.
+
+Niveles de confianza:
+- high: Evidencia sólida a partir de datos o de patrones bien establecidos
+- medium: Inferencia razonable basada en ocupaciones similares
+- low: Datos limitados; estimación basada en patrones generales
+
+Responde en Spanish. Copia los valores de level_id exactamente como se te entregan: son identificadores, no texto traducible.
+
+---
+
+Estimá los atributos del puesto para la siguiente ocupación en Kenya (región no especificada):
+
+**Ocupación:** Unknown role
+
+**Aviso de trabajo — descripción y requisitos (usalos junto con la ocupación anterior):**
+(no job description text provided)
+
+**Datos adicionales del aviso (pueden estar incompletos):**
+(no structured metadata fields available)
+
+## Atributos a estimar
+
+### Ingresos mensuales (earnings_per_month)
+Group: Financial | Type: ordered
+Levels:
+  - `earn_15k`: Alrededor del Salario Mínimo Vital y Móvil
+  - `earn_30k`: Aproximadamente 1,5 veces el Salario Mínimo Vital y Móvil
+  - `earn_50k`: Aproximadamente 2,5 veces el Salario Mínimo Vital y Móvil
+  - `earn_70k`: Aproximadamente 3,5 veces el Salario Mínimo Vital y Móvil o más
+
+### Exigencia física y riesgo (physical_demand)
+Group: Work Environment | Type: categorical
+Levels:
+  - `phys_light`: Trabajo físico liviano y en general seguro
+  - `phys_heavy`: Trabajo físico exigente o con mayor riesgo de lesiones
+
+### Interacción social (social_interaction)
+Group: Work Environment | Type: categorical
+Levels:
+  - `soc_alone`: Trabajar solo/a (de forma independiente)
+  - `soc_peers`: Trabajar con compañeros/as de trabajo (pares)
+  - `soc_customers`: Trabajar en contacto directo con clientes
+
+### Crecimiento profesional (career_growth)
+Group: Future Prospects | Type: ordered
+Levels:
+  - `growth_low`: Pocas oportunidades de aprender nuevas habilidades o de progresar
+  - `growth_med`: Algunas oportunidades de desarrollar habilidades o mejorar las opciones a futuro
+  - `growth_high`: Buenas oportunidades de aprender habilidades y acceder a mejores puestos
+
+Para cada atributo, elegí el level_id más apropiado y explicá brevemente por qué. Copiá los valores de level_id exactamente como figuran.
+
+---
+
+## Work activities (ONET Work Activity questionnaires)
+
+Select **3 to 10** distinct `WA_Element_ID` values that best describe day-to-day tasks for this role.
+Use **only** ids from this list (no invented ids):
+
+1. `4.A.4.b.4` — Leading and encouraging your team (Guiding, Directing, and Motivating Subordinates) | Swahili: Kuongoza na kuhamasisha timu yako
+2. `4.A.4.a.2` — Talking with bosses and coworkers (Communicating with Supervisors, Peers, or Subordinates) | Swahili: Kuwasiliana na wakubwa na wafanyakazi wenzako
+3. `4.A.2.b.1` — Making choices and fixing problems (Making Decisions and Solving Problems) | Swahili: Kufanya maamuzi na kutatua shida
+4. `4.A.2.b.4` — Setting goals and making plans (Developing Objectives and Strategies) | Swahili: Kuweka malengo na kupanga mikakati
+5. `4.A.3.a.2` — Lifting and moving things (Handling and Moving Objects) | Swahili: Kubeba na kusogeza vitu
+
+## Required response format
+
+Respond with **only** a single JSON object (no markdown fences, no text before or after).
+
+- `attributes`: **array**; include **one object per** attribute from "## Atributos a estimar", each with:
+  - `attribute_name` (string, must match the attribute's `name`),
+  - `selected_level_id` (string, must be a listed level `id` for that attribute),
+  - `confidence`: `high`, `medium`, or `low`,
+  - `reasoning` (short string).
+- `summary`: brief synthesis of the overall attribute profile (string).
+- `work_activities`: array of `WA_Element_ID` strings from the ONET list above, no duplicates, ordered most central to the role first.
+- `requires_post_secondary` (boolean): whether this **specific job advertisement** requires
+  education **beyond Kenya secondary school** (KCSE / Form 4 / O-Level completion).
+
+  Set **`true`** when the listing explicitly requires any of:
+  - Certificate, diploma, higher diploma, or degree from a college, university, or TVET institution
+  - Named professional qualifications (e.g. CPA, ACCA, nursing registration, teaching certificate
+    from a post-secondary institution)
+  - "Graduate", "bachelor's", "master's", or equivalent post-secondary credentials
+
+  Set **`false`** when:
+  - Only KCSE, O-Level, Form 4, or "secondary education" is required or mentioned
+  - Only a KCSE grade is specified (e.g. "KCSE C+", "D plain and above") with no college/university qualification
+  - No education requirement is stated, or requirements are experience/skills only
+  - Requirements are unclear or ambiguous — prefer **`false`** rather than guessing
+
+  Do **not** treat generic phrases like "minimum qualification" or "relevant qualification" as post-secondary
+  unless the ad clearly points to certificate/diploma/degree-level study after secondary school.
+
+**JSON shape:**
+{
+  "attributes": [
+    {
+      "attribute_name": "<name>",
+      "selected_level_id": "<level_id>",
+      "confidence": "high",
+      "reasoning": "..."
+    }
+  ],
+  "summary": "...",
+  "work_activities": ["<WA_Element_ID>", "..."],
+  "requires_post_secondary": true
+}
