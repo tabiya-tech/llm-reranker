@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+
+from pydantic import Field
+
+from app.domain_base import DomainModel
 
 
 class RankedJobKey(str, Enum):
@@ -13,10 +16,11 @@ class RankedJobKey(str, Enum):
     SOURCE_CLASSIFIED_ID = "source_classified_id"
 
 
-@dataclass(frozen=True)
-class RankedJobUpsert:
+class RankedJobUpsert(DomainModel):
     """One ranked document to write, matched on ``key`` = ``key_value``."""
 
-    key: RankedJobKey
-    key_value: Any
-    document: dict[str, Any]
+    key: RankedJobKey = Field(description="Which identity field `key_value` matches on.")
+    key_value: Any = Field(description="The value to match `key` against in the target collection.")
+    document: dict[str, Any] = Field(
+        description="The ranked document's `$set` payload, with the job embedding attached."
+    )

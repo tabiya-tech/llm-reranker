@@ -23,6 +23,15 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# app.job_context.JobDescriptionContext has a TYPE_CHECKING-only forward ref to
+# RankRequest (to dodge a circular import with app.job_ranking.routes.types) that only
+# gets resolved as a side effect of build_job_description_context() running. Tests that
+# construct JobDescriptionContext directly need it resolved up front, or they fail when
+# collected/run before anything has called that function — regardless of test file order.
+from app.job_context import JobDescriptionContext  # noqa: E402
+
+JobDescriptionContext._ensure_rebuilt()
+
 
 # Subset of env vars that ``app.config.Settings.from_env`` reads. We clear all of
 # them between tests so callers get a predictable baseline (defaults from code).

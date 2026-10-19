@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import itertools
+import logging
 from collections.abc import Iterator
 from typing import Any
 
+from pydantic import ValidationError
 from pymongo.database import Database
 
 from app.classified_jobs.repository import IClassifiedJobsRepository
 from app.classified_jobs.types import ClassifiedJobsFilter
 from app.config import Settings
+from app.job_context import stringify_top_level_object_ids
+from app.job_ranking.routes.types import RankRequest
 from app.server_dependencies.database_collections import Collections
+
+logger = logging.getLogger(__name__)
 
 
 class MongoClassifiedJobsRepository(IClassifiedJobsRepository):
@@ -44,7 +50,7 @@ class MongoClassifiedJobsRepository(IClassifiedJobsRepository):
         sort_field: str = "_id",
         sort_direction: int = -1,
         job_filter: ClassifiedJobsFilter | None = None,
-    ) -> Iterator[dict[str, Any]]:
+    ) -> Iterator[RankRequest]:
         # Long parallel batches can exceed MongoDB's default ~10m idle cursor timeout between chunk reads.
         cur = (
             self._collection.find(self.build_query(job_filter), no_cursor_timeout=True)
@@ -53,7 +59,13 @@ class MongoClassifiedJobsRepository(IClassifiedJobsRepository):
         )
         if limit > 0:
             cur = cur.limit(limit)
-        yield from cur
+        for raw_doc in cur:
+            try:
+                yield RankRequest.model_validate(stringify_top_level_object_ids(raw_doc))
+            except ValidationError as e:
+                logger.warning(
+                    "Skipping invalid classified document _id=%s: %s", raw_doc.get("_id"), e
+                )
 
     def iter_jobs_chunks(
         self,
@@ -64,7 +76,7 @@ class MongoClassifiedJobsRepository(IClassifiedJobsRepository):
         sort_field: str = "_id",
         sort_direction: int = -1,
         job_filter: ClassifiedJobsFilter | None = None,
-    ) -> Iterator[list[dict[str, Any]]]:
+    ) -> Iterator[list[RankRequest]]:
         if chunk_size < 1:
             raise ValueError("chunk_size must be >= 1")
         it = self.iter_jobs(

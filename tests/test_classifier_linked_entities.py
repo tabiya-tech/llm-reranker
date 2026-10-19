@@ -13,17 +13,19 @@ Tests pin the existing behavior; the implementation is the source of truth.
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from app.job_context import JobDescriptionContext
+from app.job_ranking.routes.types import RankRequest
 from app.llm.errors import LlmParseError
 from utils.classifier_linked_entities import (
     FUZZY_LABEL_MIN_RATIO,
     EscoSkillCandidate,
     LinkedEntityCandidate,
+    SkillPromptEntry,
     _esco_concept_uuid_from_uri,
     _norm_label,
     extract_esco_skill_candidates,
@@ -36,7 +38,6 @@ from utils.classifier_linked_entities import (
     normalize_linked_entity_type,
     parse_skill_ranker_json,
     skills_to_prompt_dicts,
-    strip_json_fence,
 )
 
 # ---------------------------------------------------------------------------
@@ -90,22 +91,6 @@ class TestEscoConceptUuidFromUri:
         assert _esco_concept_uuid_from_uri("   ") is None
 
 
-class TestStripJsonFence:
-    def test_no_fence_returns_stripped(self):
-        assert strip_json_fence('  {"a": 1}  ') == '{"a": 1}'
-
-    def test_strips_json_fence(self):
-        s = '```json\n{"a": 1}\n```'
-        assert strip_json_fence(s) == '{"a": 1}'
-
-    def test_strips_bare_fence(self):
-        s = '```\n{"a": 1}\n```'
-        assert strip_json_fence(s) == '{"a": 1}'
-
-    def test_case_insensitive_json_tag(self):
-        assert strip_json_fence('```JSON\n{"a":1}\n```') == '{"a":1}'
-
-
 # ---------------------------------------------------------------------------
 # Skill-ranker JSON parser (LLM1)
 # ---------------------------------------------------------------------------
@@ -114,21 +99,21 @@ class TestStripJsonFence:
 class TestParseSkillRankerJson:
     def test_happy_path(self):
         raw = '{"essential_skills": ["a", "b"], "optional_skills": ["c"]}'
-        ess, opt = parse_skill_ranker_json(raw)
-        assert ess == ["a", "b"]
-        assert opt == ["c"]
+        result = parse_skill_ranker_json(raw)
+        assert result.essential_skills == ["a", "b"]
+        assert result.optional_skills == ["c"]
 
     def test_handles_fence(self):
         raw = '```json\n{"essential_skills": ["a"], "optional_skills": []}\n```'
-        ess, opt = parse_skill_ranker_json(raw)
-        assert ess == ["a"]
-        assert opt == []
+        result = parse_skill_ranker_json(raw)
+        assert result.essential_skills == ["a"]
+        assert result.optional_skills == []
 
     def test_filters_non_string_and_blank(self):
         raw = '{"essential_skills": ["a", "", 1, null, "b"], "optional_skills": ["  "]}'
-        ess, opt = parse_skill_ranker_json(raw)
-        assert ess == ["a", "b"]
-        assert opt == []
+        result = parse_skill_ranker_json(raw)
+        assert result.essential_skills == ["a", "b"]
+        assert result.optional_skills == []
 
     def test_top_level_must_be_object(self):
         with pytest.raises(LlmParseError, match="must be an object"):
@@ -520,7 +505,7 @@ def _ctx(**overrides):
         city=None,
         county=None,
         employment_type=None,
-        classified={},
+        classified=RankRequest.model_validate({}),
     )
     base.update(overrides)
     return JobDescriptionContext(**base)
@@ -528,19 +513,21 @@ def _ctx(**overrides):
 
 class TestJobIdentifier:
     def test_prefers_fingerprint(self):
-        ctx = _ctx(job_fingerprint="fp-1", job_id=42)
-        assert job_identifier(ctx, {"_id": "z"}) == "fp-1"
+        ctx = _ctx(
+            job_fingerprint="fp-1", job_id=42, classified=RankRequest.model_validate({"_id": "z"})
+        )
+        assert job_identifier(ctx) == "fp-1"
 
     def test_falls_back_to_job_id(self):
-        ctx = _ctx(job_id=42)
-        assert job_identifier(ctx, {"_id": "z"}) == "42"
+        ctx = _ctx(job_id=42, classified=RankRequest.model_validate({"_id": "z"}))
+        assert job_identifier(ctx) == "42"
 
     def test_falls_back_to_mongo_id(self):
-        ctx = _ctx()
-        assert job_identifier(ctx, {"_id": "abc"}) == "abc"
+        ctx = _ctx(classified=RankRequest.model_validate({"_id": "abc"}))
+        assert job_identifier(ctx) == "abc"
 
     def test_empty_when_nothing_is_known(self):
-        assert job_identifier(_ctx(), {}) == ""
+        assert job_identifier(_ctx()) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +539,7 @@ class TestSkillsToPromptDicts:
     def test_outputs_label_only_when_no_descriptions(self):
         cands = [EscoSkillCandidate(label="Python", uri=ESCO_URI, esco_uuid="abc")]
         out = skills_to_prompt_dicts(cands)
-        assert out == [{"label": "Python"}]
+        assert out == [SkillPromptEntry(label="Python")]
 
     def test_attaches_description_via_esco_uuid(self):
         cands = [
@@ -564,12 +551,12 @@ class TestSkillsToPromptDicts:
         ]
         descs = {"5247a6ce-6ed0-4fb3-b121-758921dcc44e": "Programming language"}
         out = skills_to_prompt_dicts(cands, description_by_esco=descs)
-        assert out == [{"label": "Python", "description": "Programming language"}]
+        assert out == [SkillPromptEntry(label="Python", description="Programming language")]
 
     def test_skips_missing_description(self):
         cands = [EscoSkillCandidate(label="Python", uri=ESCO_URI, esco_uuid="other")]
         out = skills_to_prompt_dicts(cands, description_by_esco={"different": "..."})
-        assert out == [{"label": "Python"}]
+        assert out == [SkillPromptEntry(label="Python")]
 
 
 # ---------------------------------------------------------------------------
@@ -616,7 +603,7 @@ class TestFullDetailsFromContext:
 class TestLinkedEntityCandidateDataclass:
     def test_is_frozen(self):
         c = LinkedEntityCandidate(entity_type="skill", label="Python", uri=ESCO_URI)
-        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
+        with pytest.raises(ValidationError):
             c.label = "Other"  # type: ignore[misc]
 
     def test_default_score_and_uuid_are_none(self):

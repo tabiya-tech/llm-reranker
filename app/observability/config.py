@@ -12,8 +12,11 @@ import logging
 import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, fields, replace
 from typing import Any, TypeVar, cast
+
+from pydantic import Field
+
+from app.domain_base import DomainModel
 
 _T = TypeVar("_T")
 
@@ -29,47 +32,62 @@ _ENVIRONMENT_MAX_LENGTH = 40
 _TRUE = ("1", "true", "yes", "on")
 
 
-@dataclass(frozen=True)
-class TracingConfig:
+class TracingConfig(DomainModel):
     """The resolved configuration of the tracing layer.
 
     An instance with ``enabled=False`` (the default) makes every helper in
     :mod:`app.observability.tracing` a no-op, so tracing can be shipped dark.
     """
 
-    # Master on/off switch. Everything else is ignored when this is False.
-    enabled: bool = False
-    # The Langfuse project keys. The secret key belongs in Secret Manager, never plain env.
-    public_key: str = ""
-    secret_key: str = ""
-    # The Langfuse ingestion host (cloud, or a self-hosted instance).
-    host: str = DEFAULT_LANGFUSE_HOST
-    # The Langfuse environment (dev, prod, …), used to separate traces.
-    environment: str | None = None
-    # The deployed build, so a trace can be tied back to the image that produced it.
-    release: str | None = None
-    # Turn on the Langfuse SDK's own debug logging.
-    debug: bool = False
+    enabled: bool = Field(
+        default=False,
+        description="Master on/off switch. Everything else is ignored when this is False.",
+    )
+    public_key: str = Field(
+        default="",
+        description="Langfuse project public key. The secret key belongs in Secret Manager.",
+    )
+    secret_key: str = Field(default="", description="Langfuse project secret key.")
+    host: str = Field(
+        default=DEFAULT_LANGFUSE_HOST,
+        description="The Langfuse ingestion host (cloud, or self-hosted).",
+    )
+    environment: str | None = Field(
+        default=None,
+        description="The Langfuse environment (dev, prod, …), used to separate traces.",
+    )
+    release: str | None = Field(
+        default=None, description="The deployed build, so a trace can be tied back to the image."
+    )
+    debug: bool = Field(default=False, description="Turn on the Langfuse SDK's own debug logging.")
 
-    # Fraction of batch-CLI jobs traced. Sampling is deterministic per job id, so a
-    # re-run of the same job gets the same decision.
-    batch_sample_rate: float = 1.0
-    # Fraction of ``POST /rank`` requests traced.
-    api_sample_rate: float = 1.0
+    batch_sample_rate: float = Field(
+        default=1.0,
+        description="Fraction of batch-CLI jobs traced. Sampling is deterministic per job id, so "
+        "a re-run of the same job gets the same decision.",
+    )
+    api_sample_rate: float = Field(
+        default=1.0, description="Fraction of `POST /rank` requests traced."
+    )
 
-    # Redact e-mail addresses, phone numbers and long digit runs before export. Job ads
-    # routinely carry a recruiter's contact details.
-    mask_pii: bool = True
-    # Truncate any single string in a payload to this many characters. Generous by
-    # default: the LLM2 prompt (schema + ONET menu) is the payload worth inspecting.
-    max_payload_chars: int = 100_000
+    mask_pii: bool = Field(
+        default=True,
+        description="Redact e-mail addresses, phone numbers and long digit runs before export.",
+    )
+    max_payload_chars: int = Field(
+        default=100_000,
+        description="Truncate any single string in a payload to this many characters.",
+    )
 
-    # SDK buffering. The batch job flushes explicitly on exit, so these only bound memory.
-    flush_at: int = 512
-    flush_interval: float = 5.0
-    # Hard timeout, in seconds, on the exporter's HTTP calls, so a slow Langfuse never
-    # couples its latency onto the ranking path.
-    timeout: int = 10
+    flush_at: int = Field(
+        default=512, description="SDK buffering: batch size before an automatic flush."
+    )
+    flush_interval: float = Field(
+        default=5.0, description="SDK buffering: max seconds between flushes."
+    )
+    timeout: int = Field(
+        default=10, description="Hard timeout, in seconds, on the exporter's HTTP calls."
+    )
 
 
 # Field → (type, min, max) for the values the JSON blob may override.
@@ -132,7 +150,7 @@ def parse_tracing_config(
     if not isinstance(parsed, dict):
         logger.warning("RERANKER_TRACING_CONFIG must be a JSON object. Using defaults.")
         return config
-    return replace(config, **_overrides_from_json(parsed))
+    return config.model_copy(update=_overrides_from_json(parsed))
 
 
 def tracing_config_from_env() -> TracingConfig:
@@ -173,7 +191,7 @@ def _overrides_from_json(source: dict[str, Any]) -> dict[str, Any]:
     Credentials, host, environment and release come from dedicated variables and are
     never taken from the blob.
     """
-    known = {f.name for f in fields(TracingConfig)}
+    known = set(TracingConfig.model_fields)
     out: dict[str, Any] = {}
     for key, value in source.items():
         name = _CAMEL_CASE_BOUNDARY.sub("_", str(key)).lower()

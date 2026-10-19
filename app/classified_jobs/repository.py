@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import Any
 
 from app.classified_jobs.types import ClassifiedJobsFilter
+from app.job_ranking.routes.types import RankRequest
 
 
 class IClassifiedJobsRepository(ABC):
@@ -22,11 +22,13 @@ class IClassifiedJobsRepository(ABC):
         sort_field: str = "_id",
         sort_direction: int = -1,
         job_filter: ClassifiedJobsFilter | None = None,
-    ) -> Iterator[dict[str, Any]]:
+    ) -> Iterator[RankRequest]:
         """
         Stream classified job documents matching ``job_filter``, newest first by default.
 
-        ``limit`` <= 0 means no limit (entire collection). Results are streamed one document at a time.
+        ``limit`` <= 0 means no limit (entire collection). Each document is validated as a
+        :class:`~app.job_ranking.routes.types.RankRequest` before being yielded; a document that
+        fails validation is logged and skipped rather than aborting the whole stream.
         """
         raise NotImplementedError
 
@@ -40,7 +42,7 @@ class IClassifiedJobsRepository(ABC):
         sort_field: str = "_id",
         sort_direction: int = -1,
         job_filter: ClassifiedJobsFilter | None = None,
-    ) -> Iterator[list[dict[str, Any]]]:
+    ) -> Iterator[list[RankRequest]]:
         """
         Yield lists of documents in the same order as ``iter_jobs``.
 

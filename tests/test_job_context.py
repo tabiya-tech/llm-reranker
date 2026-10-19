@@ -28,6 +28,7 @@ from app.job_context import (
     _scalar_to_str,
     build_job_description_context,
 )
+from app.job_ranking.routes.types import RankRequest
 from app.ranked_jobs.types import RankedJobKey, RankedJobUpsert
 from app.ranked_jobs.upsert import ranked_job_upsert
 
@@ -167,8 +168,8 @@ class TestBuildJobDescriptionContext:
         assert ctx.city == "Lusaka"
         assert ctx.county == "Lusaka District"
         assert ctx.employment_type == "Full time"
-        # classified is a copy of the doc
-        assert ctx.classified["_id"] == "doc-1"
+        # classified is the validated RankRequest for the doc
+        assert ctx.classified.to_document()["_id"] == "doc-1"
         assert ctx.classified is not doc
 
     def test_metadata_fallback(self, make_settings):
@@ -226,7 +227,7 @@ def _ctx(**overrides):
         city=None,
         county=None,
         employment_type=None,
-        classified={},
+        classified=RankRequest.model_validate({}),
     )
     base.update(overrides)
     return JobDescriptionContext(**base)
@@ -237,7 +238,7 @@ class TestRankedJobUpsert:
         ctx = _ctx(job_id="jid-1", job_fingerprint="fp")
         doc = {"x": 1}
         assert ranked_job_upsert({"_id": "doc-1"}, ctx, doc) == RankedJobUpsert(
-            RankedJobKey.JOB_ID, "jid-1", doc
+            key=RankedJobKey.JOB_ID, key_value="jid-1", document=doc
         )
 
     def test_falls_back_to_fingerprint(self):

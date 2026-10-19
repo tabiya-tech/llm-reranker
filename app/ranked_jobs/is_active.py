@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal, TypedDict
+from typing import Literal
+
+from pydantic import Field
+
+from app.domain_base import DomainModel
 
 MissingPolicy = Literal["keep", "active", "inactive"]
 
@@ -42,14 +46,16 @@ def parse_closing_date(raw: object) -> date | None:
     return None
 
 
-class IsActiveSyncStats(TypedDict):
-    total: int
-    parsed: int
-    missing_or_bad: int
-    will_set_true: int
-    will_set_false: int
-    unchanged: int
-    modified: int
+class IsActiveSyncStats(DomainModel):
+    """Per-run counters for ``sync_is_active_from_closing_date``."""
+
+    total: int = Field(description="Documents scanned.")
+    parsed: int = Field(description="Documents with a parseable `closing_date`.")
+    missing_or_bad: int = Field(description="Documents with no or unparseable `closing_date`.")
+    will_set_true: int = Field(description="Documents whose `is_active` is set to true.")
+    will_set_false: int = Field(description="Documents whose `is_active` is set to false.")
+    unchanged: int = Field(description="Documents whose `is_active` already matched the target.")
+    modified: int = Field(description="Documents actually written (0 in `dry_run`).")
 
 
 def target_is_active(

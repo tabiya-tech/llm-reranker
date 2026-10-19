@@ -22,6 +22,7 @@ from pydantic.json_schema import GenerateJsonSchema, JsonSchemaValue
 from pydantic_core import core_schema
 
 from app.job_ranking.job_attributes.types import JobAttributesSchema, OnetWorkActivity
+from app.job_ranking.routes.types import OccupationSkillsBlock
 
 # Largest menu sent as an ``enum``; beyond it the field is a plain string.
 MAX_ENUM_VALUES = 500
@@ -153,21 +154,19 @@ def job_attributes_response_schema(
 
 
 def occupation_skills_relevance_response_schema(
-    occupation_to_skills_items: list[dict[str, Any]],
+    occupation_to_skills_items: list[OccupationSkillsBlock],
 ) -> dict[str, Any]:
     """LLM3: see :class:`OccupationSkillsRelevanceResponse`; ids are the judged skills'."""
     occupation_ids: list[str] = []
     skill_ids: list[str] = []
     for block in occupation_to_skills_items:
-        tid = str(block.get("tabiya_occupation_id") or "").strip()
+        tid = (block.tabiya_occupation_id or "").strip()
         if not tid:
             continue
-        for sk in block.get("skills") or []:
-            if not isinstance(sk, dict):
+        for sk in block.skills:
+            if sk.relation_type not in ("essential", "optional"):
                 continue
-            if (sk.get("relation_type") or "").strip().lower() not in ("essential", "optional"):
-                continue
-            sid = str(sk.get("skill_id") or "").strip()
+            sid = sk.skill_id.strip()
             if sid:
                 occupation_ids.append(tid)
                 skill_ids.append(sid)

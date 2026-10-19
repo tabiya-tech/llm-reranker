@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 from app.job_context import JobDescriptionContext
 from app.job_ranking.response_schemas import skill_ranker_response_schema
@@ -23,6 +22,7 @@ from app.llm import TracedLlmClient
 from app.taxonomy.types import TaxonomyContext
 from utils.classifier_linked_entities import (
     EscoSkillCandidate,
+    SkillPromptEntry,
     full_details_from_context,
     skills_to_prompt_dicts,
 )
@@ -67,13 +67,13 @@ class SkillRankerStep:
         raw = self._llm.generate_json(
             prompt,
             purpose=PURPOSE_SKILL_RANKER,
-            response_schema=skill_ranker_response_schema(d["label"] for d in skill_dicts),
+            response_schema=skill_ranker_response_schema(d.label for d in skill_dicts),
         )
         return self._parser.parse(raw, candidates)
 
     @staticmethod
     def _log_prompt(
-        label: str, full_details: str, skill_dicts: list[dict[str, Any]], prompt: str
+        label: str, full_details: str, skill_dicts: list[SkillPromptEntry], prompt: str
     ) -> None:
         skills_text = format_skill_ranker_skills_text(skill_dicts)
         logger.info("%s", PROMPT_LOG_SEPARATOR)
@@ -88,7 +88,7 @@ class SkillRankerStep:
         logger.info(
             "LLM1 parameter `potential_skills` (JSON, %s rows):\n%s",
             len(skill_dicts),
-            json.dumps(skill_dicts, ensure_ascii=False, indent=2),
+            json.dumps([d.model_dump() for d in skill_dicts], ensure_ascii=False, indent=2),
         )
         logger.info("LLM1 derived `skills_text` (%s chars):\n%s", len(skills_text), skills_text)
         logger.info("LLM1 assembled user prompt (%s chars):\n%s", len(prompt), prompt)

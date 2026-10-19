@@ -13,7 +13,6 @@ pin; tests must be updated together with the version.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 import pytest
@@ -28,6 +27,7 @@ from app.job_ranking.occupation_skills.menu import (
     classifier_skill_esco_uuids_lower,
     filter_occupation_skills_nested_by_signal_include,
     llm3_menu_skill_candidates,
+    occupation_block_skill_counts_from_models,
     occupation_skill_signal_tier,
     occupation_skills_relevance_menu_size,
     subset_occupation_nested_for_llm3_prompt,
@@ -45,7 +45,61 @@ from app.job_ranking.ranked_document import (
     occupation_to_skills_with_meta,
     work_activity_names_for_ids,
 )
+from app.job_ranking.routes.types import (
+    OccupationSkill,
+    OccupationSkillsBlock,
+    RankRequest,
+    SkillCounts,
+)
 from utils.classifier_linked_entities import EscoSkillCandidate, MappedEscoSkills
+
+# ``JobDescriptionContext.classified`` is typed as the forward ref ``RankRequest`` (deferred
+# to avoid a circular import between app.job_context and app.job_ranking.routes.types). The
+# rebuild normally happens as a side effect of calling ``build_job_description_context``, but
+# this module constructs ``JobDescriptionContext`` directly, so it must trigger the rebuild
+# itself rather than relying on another test module having imported/run first.
+JobDescriptionContext.model_rebuild()
+
+_DEFAULT_URI = "__default__"
+
+
+def _skill(
+    skill_id: str,
+    relation_type: str,
+    *,
+    label: str = "Skill",
+    uri: str = _DEFAULT_URI,
+    signalling_label: str | None = None,
+    signalling_value: str | None = None,
+) -> OccupationSkill:
+    resolved_uri = f"http://data.europa.eu/esco/skill/{skill_id}" if uri == _DEFAULT_URI else uri
+    return OccupationSkill(
+        skill_id=skill_id,
+        tabiya_skill_id=skill_id,
+        label=label,
+        uri=resolved_uri,
+        relation_type=relation_type,
+        signalling_label=signalling_label,
+        signalling_value=signalling_value,
+    )
+
+
+def _menu_block(
+    tabiya_occupation_id: str | None, skills: list[OccupationSkill]
+) -> OccupationSkillsBlock:
+    return OccupationSkillsBlock(
+        occupation_label="Welder",
+        occupation_esco_uuid=None,
+        occupation_uri="http://data.europa.eu/esco/occupation/x",
+        tabiya_occupation_id=tabiya_occupation_id,
+        skills=skills,
+        skill_counts=SkillCounts(
+            total=len(skills),
+            essential=sum(1 for s in skills if s.relation_type == "essential"),
+            optional=sum(1 for s in skills if s.relation_type == "optional"),
+            unspecified=sum(1 for s in skills if s.relation_type not in ("essential", "optional")),
+        ),
+    )
 
 
 def _ctx(**overrides):
@@ -65,7 +119,7 @@ def _ctx(**overrides):
         city="Lusaka",
         county=None,
         employment_type="Full time",
-        classified={"_id": "doc-1"},
+        classified=RankRequest.model_validate({"_id": "doc-1"}),
     )
     base.update(overrides)
     return JobDescriptionContext(**base)
@@ -118,7 +172,8 @@ class TestOccupationSkillSignalTier:
         ],
     )
     def test_tier(self, label, expected):
-        assert occupation_skill_signal_tier({"signalling_label": label}) == expected
+        sk = _skill("s1", "essential", signalling_label=label)
+        assert occupation_skill_signal_tier(sk) == expected
 
 
 class TestLlm3SignallingLabelRank:
@@ -127,7 +182,8 @@ class TestLlm3SignallingLabelRank:
         [("high", 0), ("medium", 1), ("low", 2), ("", 99), ("mystery", 99)],
     )
     def test_rank(self, label, rank):
-        assert _llm3_signalling_label_rank({"signalling_label": label}) == rank
+        sk = _skill("s1", "essential", signalling_label=label)
+        assert _llm3_signalling_label_rank(sk) == rank
 
 
 # ---------------------------------------------------------------------------
@@ -138,20 +194,21 @@ class TestLlm3SignallingLabelRank:
 class TestOccupationSkillsRelevanceMenuSize:
     def test_counts_essential_and_optional_only(self):
         items = [
-            {
-                "tabiya_occupation_id": "t1",
-                "skills": [
-                    {"skill_id": "s1", "relation_type": "essential"},
-                    {"skill_id": "s2", "relation_type": "optional"},
-                    {"skill_id": "s3", "relation_type": "unspecified"},  # excluded
-                    {"skill_id": "", "relation_type": "essential"},  # blank id excluded
-                    "not-a-dict",
+            _menu_block(
+                "t1",
+                [
+                    _skill("s1", "essential"),
+                    _skill("s2", "optional"),
+                    _skill("s3", "unspecified"),  # excluded
+                    # Note: a blank skill_id or a non-skill entry can no longer be constructed —
+                    # OccupationSkill.skill_id is a required str field, so those invalid-input
+                    # cases from the old dict-based test are no longer representable/applicable.
                 ],
-            },
-            {
-                "tabiya_occupation_id": "",  # excluded
-                "skills": [{"skill_id": "x", "relation_type": "essential"}],
-            },
+            ),
+            _menu_block(
+                None,  # excluded: no tabiya_occupation_id
+                [_skill("x", "essential")],
+            ),
         ]
         assert occupation_skills_relevance_menu_size(items) == 2
 
@@ -164,36 +221,18 @@ class TestOccupationSkillsRelevanceMenuSize:
 class TestFilterOccupationSkillsNestedBySignalInclude:
     def _items(self):
         return [
-            {
-                "tabiya_occupation_id": "t1",
-                "skills": [
-                    {
-                        "skill_id": "s1",
-                        "relation_type": "essential",
-                        "signalling_label": "high",
-                    },
-                    {
-                        "skill_id": "s2",
-                        "relation_type": "optional",
-                        "signalling_label": "low",
-                    },
-                    {
-                        "skill_id": "s3",
-                        "relation_type": "unspecified",
-                        "signalling_label": "low",
-                    },
+            _menu_block(
+                "t1",
+                [
+                    _skill("s1", "essential", signalling_label="high"),
+                    _skill("s2", "optional", signalling_label="low"),
+                    _skill("s3", "unspecified", signalling_label="low"),
                 ],
-            },
-            {
-                "tabiya_occupation_id": "t2",
-                "skills": [
-                    {
-                        "skill_id": "s4",
-                        "relation_type": "optional",
-                        "signalling_label": "low",
-                    },
-                ],
-            },
+            ),
+            _menu_block(
+                "t2",
+                [_skill("s4", "optional", signalling_label="low")],
+            ),
         ]
 
     def test_none_returns_input_identity(self):
@@ -207,14 +246,14 @@ class TestFilterOccupationSkillsNestedBySignalInclude:
         )
         # Only block t1 has a high-tier skill; unspecified rows are kept untouched.
         assert len(out) == 1
-        assert out[0]["tabiya_occupation_id"] == "t1"
-        kept = out[0]["skills"]
-        kept_ids = [s.get("skill_id") for s in kept]
+        assert out[0].tabiya_occupation_id == "t1"
+        kept = out[0].skills
+        kept_ids = [s.skill_id for s in kept]
         # s1 essential high stays; s2 optional low filtered; s3 unspecified is non-essential/optional → kept
         assert "s1" in kept_ids
         assert "s2" not in kept_ids
         assert "s3" in kept_ids
-        assert "skill_counts" in out[0]
+        assert out[0].skill_counts is not None
 
     def test_drops_blocks_with_no_kept_skills(self):
         out = filter_occupation_skills_nested_by_signal_include(
@@ -223,7 +262,7 @@ class TestFilterOccupationSkillsNestedBySignalInclude:
         # No skill has medium tier; t2 has only optional/low → dropped; t1 keeps
         # only its unspecified row "s3".
         assert len(out) == 1
-        assert [s["skill_id"] for s in out[0]["skills"]] == ["s3"]
+        assert [s.skill_id for s in out[0].skills] == ["s3"]
 
 
 # ---------------------------------------------------------------------------
@@ -233,85 +272,66 @@ class TestFilterOccupationSkillsNestedBySignalInclude:
 
 def _menu_items():
     return [
-        {
-            "tabiya_occupation_id": "t1",
-            "skills": [
-                {
-                    "skill_id": "s_high",
-                    "relation_type": "essential",
-                    "signalling_label": "high",
-                    "signalling_value": "0.9",
-                },
-                {
-                    "skill_id": "s_med",
-                    "relation_type": "optional",
-                    "signalling_label": "medium",
-                    "signalling_value": "0.5",
-                },
-                {
-                    "skill_id": "s_low",
-                    "relation_type": "optional",
-                    "signalling_label": "low",
-                    "signalling_value": "0.1",
-                },
-                {
-                    "skill_id": "s_blank",
-                    "relation_type": "essential",
-                    "signalling_label": "",
-                },
+        _menu_block(
+            "t1",
+            [
+                _skill("s_high", "essential", signalling_label="high", signalling_value="0.9"),
+                _skill("s_med", "optional", signalling_label="medium", signalling_value="0.5"),
+                _skill("s_low", "optional", signalling_label="low", signalling_value="0.1"),
+                _skill("s_blank", "essential", signalling_label=""),
             ],
-        },
+        ),
     ]
 
 
 class TestSubsetOccupationNestedForLlm3Prompt:
     def test_full_menu_returns_all_when_no_cap(self):
         items = _menu_items()
-        sub, full_n, sub_n = subset_occupation_nested_for_llm3_prompt(
+        result = subset_occupation_nested_for_llm3_prompt(
             items, max_menu_skills=0, classifier_esco_lower=None
         )
-        assert full_n == 4
-        assert sub_n == 4
-        assert sub[0]["skills"][0]["skill_id"] in {"s_high", "s_med", "s_low", "s_blank"}
+        assert result.full_menu_count == 4
+        assert result.subset_menu_count == 4
+        assert result.items[0].skills[0].skill_id in {"s_high", "s_med", "s_low", "s_blank"}
 
     def test_signal_filter_drops_low_and_blank(self):
         items = _menu_items()
-        sub, full_n, sub_n = subset_occupation_nested_for_llm3_prompt(
+        result = subset_occupation_nested_for_llm3_prompt(
             items, max_menu_skills=0, classifier_esco_lower=None, signal_menu_filter="medium"
         )
         # high + medium kept; low + blank dropped
-        assert full_n == 4
-        assert sub_n == 2
-        kept_ids = [s["skill_id"] for s in sub[0]["skills"]]
+        assert result.full_menu_count == 4
+        assert result.subset_menu_count == 2
+        kept_ids = [s.skill_id for s in result.items[0].skills]
         assert set(kept_ids) == {"s_high", "s_med"}
 
     def test_max_menu_skills_caps_in_strength_order(self):
         items = _menu_items()
-        sub, _, sub_n = subset_occupation_nested_for_llm3_prompt(
+        result = subset_occupation_nested_for_llm3_prompt(
             items, max_menu_skills=2, classifier_esco_lower=None
         )
-        assert sub_n == 2
-        kept = [s["skill_id"] for s in sub[0]["skills"]]
+        assert result.subset_menu_count == 2
+        kept = [s.skill_id for s in result.items[0].skills]
         assert kept == ["s_high", "s_med"]  # highest signal strength first
 
     def test_classifier_intersect_filters_to_subset(self):
         items = _menu_items()
-        sub, _, sub_n = subset_occupation_nested_for_llm3_prompt(
+        result = subset_occupation_nested_for_llm3_prompt(
             items,
             max_menu_skills=0,
             classifier_esco_lower=frozenset({"s_high", "s_low"}),
         )
-        assert sub_n == 2
-        kept = [s["skill_id"] for s in sub[0]["skills"]]
+        assert result.subset_menu_count == 2
+        kept = [s.skill_id for s in result.items[0].skills]
         assert set(kept) == {"s_high", "s_low"}
 
     def test_empty_items_returns_zero(self):
-        sub, full_n, sub_n = subset_occupation_nested_for_llm3_prompt(
+        result = subset_occupation_nested_for_llm3_prompt(
             [], max_menu_skills=10, classifier_esco_lower=None
         )
-        assert sub == []
-        assert full_n == 0
-        assert sub_n == 0
+        assert result.items == []
+        assert result.full_menu_count == 0
+        assert result.subset_menu_count == 0
 
 
 class TestClassifierSkillEscoUuidsLower:
@@ -328,10 +348,10 @@ class TestClassifierSkillEscoUuidsLower:
 class TestBuildLlm3OccupationMenu:
     def test_passes_settings_through(self, make_settings):
         s = make_settings(RERANKER_LLM3_MAX_MENU_SKILLS="2")
-        sub, _, sub_n = build_llm3_occupation_menu(_menu_items(), [], s)
-        assert sub_n == 2
+        result = build_llm3_occupation_menu(_menu_items(), [], s)
+        assert result.subset_menu_count == 2
         # Default RERANKER_LLM3_CLASSIFIER_INTERSECT=False → classifier list ignored
-        kept = [x["skill_id"] for x in sub[0]["skills"]]
+        kept = [x.skill_id for x in result.items[0].skills]
         assert kept == ["s_high", "s_med"]
 
 
@@ -343,33 +363,34 @@ class TestBuildLlm3OccupationMenu:
 class TestLlm3MenuSkillCandidates:
     def _items(self):
         return [
-            {
-                "tabiya_occupation_id": "t1",
-                "skills": [
-                    {
-                        "skill_id": "AAA",
-                        "label": "Welding",
-                        "uri": "http://data.europa.eu/esco/skill/aaa",
-                        "relation_type": "essential",
-                    },
-                    {"skill_id": "bbb", "label": "Painting", "relation_type": "optional"},
-                    {"skill_id": "ccc", "label": "Unspecified", "relation_type": "unspecified"},
-                    {"skill_id": "", "label": "No id", "relation_type": "essential"},
+            _menu_block(
+                "t1",
+                [
+                    _skill(
+                        "AAA",
+                        "essential",
+                        label="Welding",
+                        uri="http://data.europa.eu/esco/skill/aaa",
+                    ),
+                    _skill("bbb", "optional", label="Painting", uri=""),
+                    _skill("ccc", "unspecified", label="Unspecified"),
+                    # Note: a blank skill_id row ("No id" in the old dict-based test) can no
+                    # longer be constructed — OccupationSkill.skill_id is a required str field.
                 ],
-            },
-            {
-                "tabiya_occupation_id": "t2",
-                "skills": [
+            ),
+            _menu_block(
+                "t2",
+                [
                     # Same skill under a second occupation → added once.
-                    {"skill_id": "aaa", "label": "Welding", "relation_type": "optional"},
-                    {"skill_id": "ddd", "label": "Python", "relation_type": "essential"},
-                    {"skill_id": "eee", "label": "  painting ", "relation_type": "essential"},
+                    _skill("aaa", "optional", label="Welding"),
+                    _skill("ddd", "essential", label="Python"),
+                    _skill("eee", "essential", label="  painting "),
                 ],
-            },
-            {
-                "tabiya_occupation_id": None,
-                "skills": [{"skill_id": "fff", "label": "Orphan", "relation_type": "essential"}],
-            },
+            ),
+            _menu_block(
+                None,
+                [_skill("fff", "essential", label="Orphan")],
+            ),
         ]
 
     def test_flattens_menu_in_order_and_builds_candidates(self):
@@ -402,20 +423,14 @@ class TestLlm3MenuSkillCandidates:
 class TestApplyOccupationSkillsListingRelevance:
     def test_marks_skills_and_rolls_up_relevant_total(self):
         items = [
-            {
-                "tabiya_occupation_id": "t1",
-                "skills": [
-                    {"skill_id": "s1", "relation_type": "essential"},
-                    {"skill_id": "s2", "relation_type": "optional"},
-                    {"skill_id": "s3", "relation_type": "unspecified"},
+            _menu_block(
+                "t1",
+                [
+                    _skill("s1", "essential"),
+                    _skill("s2", "optional"),
+                    _skill("s3", "unspecified"),
                 ],
-                "skill_counts": {
-                    "total": 3,
-                    "essential": 1,
-                    "optional": 1,
-                    "unspecified": 1,
-                },
-            }
+            )
         ]
         result = OccupationSkillsRelevanceResult(
             decisions=(
@@ -429,13 +444,33 @@ class TestApplyOccupationSkillsListingRelevance:
             ),
             raw_response="{}",
         )
-        out = apply_occupation_skills_listing_relevance(deepcopy(items), result)
-        skills = out[0]["skills"]
-        flags = {s["skill_id"]: s["llm_is_relevant"] for s in skills}
+        out = apply_occupation_skills_listing_relevance(items, result)
+        skills = out[0].skills
+        flags = {s.skill_id: s.llm_is_relevant for s in skills}
         assert flags == {"s1": True, "s2": False, "s3": True}
-        assert out[0]["skill_counts"]["relevant_total"] == 2  # s1 + s3
+        assert out[0].skill_counts.relevant_total == 2  # s1 + s3
         # Original taxonomy counts preserved
-        assert out[0]["skill_counts"]["total"] == 3
+        assert out[0].skill_counts.total == 3
+        # Original items list is untouched (new blocks/skills, not in-place mutation).
+        assert items[0].skills[0].llm_is_relevant is None
+
+
+# ---------------------------------------------------------------------------
+# occupation_block_skill_counts_from_models
+# ---------------------------------------------------------------------------
+
+
+class TestOccupationBlockSkillCountsFromModels:
+    def test_counts_relation_types(self):
+        skills = [
+            _skill("s1", "essential"),
+            _skill("s2", "essential"),
+            _skill("s3", "optional"),
+            _skill("s4", "unspecified"),
+            _skill("s5", "weird"),  # falls into unspecified bucket
+        ]
+        counts = occupation_block_skill_counts_from_models(skills)
+        assert counts == SkillCounts(total=5, essential=2, optional=1, unspecified=2)
 
 
 # ---------------------------------------------------------------------------
@@ -443,47 +478,46 @@ class TestApplyOccupationSkillsListingRelevance:
 # ---------------------------------------------------------------------------
 
 
+def _occupation_block(
+    tabiya_occupation_id: str, skill_counts: dict[str, int]
+) -> OccupationSkillsBlock:
+    return OccupationSkillsBlock(
+        occupation_label="Welder",
+        occupation_esco_uuid=None,
+        occupation_uri="http://data.europa.eu/esco/occupation/x",
+        tabiya_occupation_id=tabiya_occupation_id,
+        skills=[],
+        skill_counts=SkillCounts(**skill_counts),
+    )
+
+
 class TestOccupationToSkillsWithMeta:
     def test_empty_input_returns_zeros(self):
         out = occupation_to_skills_with_meta([])
-        assert out["meta"]["occupation_count"] == 0
-        assert out["meta"]["skill_counts"] == {
+        assert out.meta.occupation_count == 0
+        assert out.meta.skill_counts.model_dump() == {
             "total": 0,
             "essential": 0,
             "optional": 0,
             "unspecified": 0,
             "relevant_total": 0,
         }
-        assert out["items"] == []
+        assert out.items == []
 
     def test_aggregates_skill_counts(self):
         items = [
-            {
-                "tabiya_occupation_id": "t1",
-                "skills": [],
-                "skill_counts": {
-                    "total": 5,
-                    "essential": 2,
-                    "optional": 2,
-                    "unspecified": 1,
-                    "relevant_total": 3,
-                },
-            },
-            {
-                "tabiya_occupation_id": "t2",
-                "skills": [],
-                "skill_counts": {
-                    "total": 1,
-                    "essential": 1,
-                    "optional": 0,
-                    "unspecified": 0,
-                    "relevant_total": 0,
-                },
-            },
+            _occupation_block(
+                "t1",
+                {"total": 5, "essential": 2, "optional": 2, "unspecified": 1, "relevant_total": 3},
+            ),
+            _occupation_block(
+                "t2",
+                {"total": 1, "essential": 1, "optional": 0, "unspecified": 0, "relevant_total": 0},
+            ),
         ]
         out = occupation_to_skills_with_meta(items)
-        assert out["meta"]["occupation_count"] == 2
-        assert out["meta"]["skill_counts"] == {
+        assert out.meta.occupation_count == 2
+        assert out.meta.skill_counts.model_dump() == {
             "total": 6,
             "essential": 3,
             "optional": 2,
@@ -528,20 +562,20 @@ class TestClassifierMetadataFromContext:
     def test_includes_title_and_text_blocks(self):
         ctx = _ctx()
         meta = classifier_metadata_from_context(ctx)
-        assert meta["title"] == "Engineer"
-        assert meta["job_description"] == "Build things."
-        assert meta["requirements"] == "3 years"
+        assert meta.title == "Engineer"
+        assert meta.job_description == "Build things."
+        assert meta.requirements == "3 years"
 
 
 class TestBuildLlmRerankerMeta:
     def test_includes_schema_version(self, make_settings):
         s = make_settings(GEMINI_API_KEY="x", GEMINI_MODEL="m1")
         meta = build_llm_reranker_meta(s)
-        assert meta["schema_version"] == PIPELINE_SCHEMA_VERSION
-        assert meta["skill_ranker_model"] == "m1"
-        assert meta["job_attributes_model"] == "m1"
-        assert meta["occupation_skills_relevance_model"] == "m1"
-        assert isinstance(meta["classified_linked_entity_types"], list)
+        assert meta.schema_version == PIPELINE_SCHEMA_VERSION
+        assert meta.skill_ranker_model == "m1"
+        assert meta.job_attributes_model == "m1"
+        assert meta.occupation_skills_relevance_model == "m1"
+        assert isinstance(meta.classified_linked_entity_types, list)
 
 
 # ---------------------------------------------------------------------------
@@ -587,17 +621,17 @@ class TestBuildRankedJobDocument:
         )
         assert out is not None
         # Regression: any new top-level key needs an explicit test update.
-        assert set(out.keys()) == EXPECTED_TOP_LEVEL_KEYS
-        assert out["job_id"] == "J-1"
-        assert out["job_fingerprint"] == "fp-1"
-        assert out["is_active"] is True
-        assert out["source_classified_id"] == "doc-1"
-        assert out["llm_reranker_meta"]["schema_version"] == PIPELINE_SCHEMA_VERSION
+        assert set(out.model_dump().keys()) == EXPECTED_TOP_LEVEL_KEYS
+        assert out.job_id == "J-1"
+        assert out.job_fingerprint == "fp-1"
+        assert out.is_active is True
+        assert out.source_classified_id == "doc-1"
+        assert out.llm_reranker_meta.schema_version == PIPELINE_SCHEMA_VERSION
         # Classified skills/occupations default to empty lists when no entities given.
-        assert out["classified_skills"] == []
-        assert out["classified_occupations"] == []
+        assert out.classified_skills == []
+        assert out.classified_occupations == []
         # llm_classified_skills always has the skeleton, even with no skill_ranker.
-        assert set(out["llm_classified_skills"].keys()) == {
+        assert set(out.llm_classified_skills.model_dump().keys()) == {
             "essential",
             "optional",
             "discarded",
@@ -630,8 +664,8 @@ class TestBuildRankedJobDocument:
             classifier_skill_candidates=[cand],
         )
         assert out is not None
-        ess = out["llm_classified_skills"]["essential"]
+        ess = out.llm_classified_skills.essential
         assert len(ess) == 1
-        assert ess[0]["uri"] == cand.uri
+        assert ess[0].uri == cand.uri
         # Ranked uri is ranked, so discarded should be empty.
-        assert out["llm_classified_skills"]["discarded"] == []
+        assert out.llm_classified_skills.discarded == []

@@ -1,4 +1,4 @@
-"""Unit tests for ``app.schemas``: LLM2 / LLM3 JSON parsers and resource loaders.
+"""Unit tests for the LLM2 / LLM3 JSON parsers and resource loaders.
 
 The parsers are the second-most critical surface in the pipeline (after
 classifier-linked-entity extraction): every stored ranked-job document

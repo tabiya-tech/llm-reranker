@@ -4,8 +4,7 @@ Covers:
 - ``utils.uuid_to_tabiya_id`` cell parser, history parser, and the in-memory map
   loader (driven by a tiny fixture CSV in a tmp path).
 - ``utils.occupation_to_skills_mapping`` low-level helpers
-  (``cell_to_taxonomy_id``, ``esco_skill_uri_for_uuid``,
-  ``occupation_block_skill_counts``).
+  (``cell_to_taxonomy_id``, ``esco_skill_uri_for_uuid``).
 - ``app.ranked_jobs.is_active.parse_closing_date`` and the sync
   function against an in-memory fake collection.
 """
@@ -25,7 +24,6 @@ from app.taxonomy.csv_loaders import load_skills_uuid_tabiya_map
 from utils.occupation_to_skills_mapping import (
     cell_to_taxonomy_id,
     esco_skill_uri_for_uuid,
-    occupation_block_skill_counts,
 )
 from utils.uuid_to_tabiya_id import (
     cell_to_esco_uuid,
@@ -131,23 +129,6 @@ class TestEscoSkillUriForUuid:
         )
 
 
-class TestOccupationBlockSkillCounts:
-    def test_counts_relation_types(self):
-        skills = [
-            {"relation_type": "essential"},
-            {"relation_type": "essential"},
-            {"relation_type": "optional"},
-            {"relation_type": "unspecified"},
-            {"relation_type": "weird"},  # falls into unspecified bucket
-            {},  # missing -> unspecified
-        ]
-        counts = occupation_block_skill_counts(skills)
-        assert counts["total"] == 6
-        assert counts["essential"] == 2
-        assert counts["optional"] == 1
-        assert counts["unspecified"] == 3
-
-
 # ---------------------------------------------------------------------------
 # is_active.parse_closing_date
 # ---------------------------------------------------------------------------
@@ -244,12 +225,12 @@ class TestSyncIsActiveFromClosingDate:
             ]
         )
         stats = sync_is_active_from_closing_date(cast(Collection, coll), today=today, dry_run=False)
-        assert stats["total"] == 3
-        assert stats["parsed"] == 3
-        assert stats["will_set_true"] == 1
-        assert stats["will_set_false"] == 1
-        assert stats["unchanged"] == 1
-        assert stats["modified"] == 2
+        assert stats.total == 3
+        assert stats.parsed == 3
+        assert stats.will_set_true == 1
+        assert stats.will_set_false == 1
+        assert stats.unchanged == 1
+        assert stats.modified == 2
         # Verify in-memory state
         by_id = {d["_id"]: d for d in coll._docs}
         assert by_id["future"]["is_active"] is True
@@ -268,8 +249,8 @@ class TestSyncIsActiveFromClosingDate:
             ]
         )
         stats = sync_is_active_from_closing_date(cast(Collection, coll), today=today, dry_run=True)
-        assert stats["will_set_true"] == 1
-        assert stats["modified"] == 0
+        assert stats.will_set_true == 1
+        assert stats.modified == 0
         assert coll.bulk_write_calls == []
         # Document untouched
         assert coll._docs[0]["is_active"] is False
@@ -281,9 +262,9 @@ class TestSyncIsActiveFromClosingDate:
         stats = sync_is_active_from_closing_date(
             cast(Collection, coll), today=today, missing_policy="keep", dry_run=False
         )
-        assert stats["missing_or_bad"] == 1
-        assert stats["unchanged"] == 1
-        assert stats["modified"] == 0
+        assert stats.missing_or_bad == 1
+        assert stats.unchanged == 1
+        assert stats.modified == 0
 
     def test_missing_policy_inactive(self):
         today = date(2026, 6, 12)
@@ -291,7 +272,7 @@ class TestSyncIsActiveFromClosingDate:
         stats = sync_is_active_from_closing_date(
             cast(Collection, coll), today=today, missing_policy="inactive", dry_run=False
         )
-        assert stats["missing_or_bad"] == 1
-        assert stats["will_set_false"] == 1
-        assert stats["modified"] == 1
+        assert stats.missing_or_bad == 1
+        assert stats.will_set_false == 1
+        assert stats.modified == 1
         assert coll._docs[0]["is_active"] is False

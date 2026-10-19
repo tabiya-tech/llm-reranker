@@ -1,26 +1,34 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from pydantic import Field
 
 from app.config import Settings
+from app.domain_base import DomainModel
 
 
-@dataclass(frozen=True)
-class Collections:
+class Collections(DomainModel):
     """Collection names in the reranker database.
 
     All four are env-driven (via ``Settings``) because each deployment stack reads and writes its own
     collections.
     """
 
-    # Classified job ads written by the classifier; the batch reads them (MONGODB_SOURCE_COLLECTION).
-    SOURCE: str
-    # Ranked job documents the batch upserts; the matching engine reads them (MONGODB_TARGET_COLLECTION).
-    TARGET: str
-    # One document per batch run: status, config and stats (RERANKER_LOGS_COLLECTION).
-    LOGS: str
-    # One document per country: the incremental-fetch cutoff (RERANKER_STATE_COLLECTION).
-    STATE: str
+    SOURCE: str = Field(
+        description="Classified job ads written by the classifier; the batch reads them "
+        "(`MONGODB_SOURCE_COLLECTION`)."
+    )
+    TARGET: str = Field(
+        description="Ranked job documents the batch upserts; the matching engine reads them "
+        "(`MONGODB_TARGET_COLLECTION`)."
+    )
+    LOGS: str = Field(
+        description="One document per batch run: status, config and stats "
+        "(`RERANKER_LOGS_COLLECTION`)."
+    )
+    STATE: str = Field(
+        description="One document per country: the incremental-fetch cutoff "
+        "(`RERANKER_STATE_COLLECTION`)."
+    )
 
     @classmethod
     def from_settings(cls, settings: Settings) -> Collections:

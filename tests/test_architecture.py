@@ -25,8 +25,13 @@ def _module(path: Path) -> str:
 
 
 def _is_pure(path: Path) -> bool:
-    """Files with no IO: types, prompt building, response parsing, rules, document assembly."""
-    if "routes" in path.parts:
+    """Files with no IO: types, prompt building, response parsing, rules, document assembly.
+
+    ``routes/types.py`` holds shared domain types (e.g. ``RankRequest``, ``OccupationSkillsBlock``)
+    alongside the request/response DTOs, so unlike ``routes/routes.py`` it is usable from every
+    role, not just the route layer.
+    """
+    if "routes" in path.parts and path.name != "types.py":
         return False
     return path.name in {
         "types.py",
@@ -60,6 +65,9 @@ def _is_service(path: Path) -> bool:
 
 
 def _is_route(path: Path) -> bool:
+    # ``routes/types.py`` is shared/pure (see ``_is_pure``), not route-layer.
+    if "routes" in path.parts and path.name == "types.py":
+        return False
     return "routes" in path.parts or path.name == "routes.py"
 
 

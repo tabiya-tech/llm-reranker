@@ -101,25 +101,34 @@ converted when the request is validated, so the pipeline never sees Extended JSO
 | `ran_llm3` | bool | The standalone LLM3 call was made. This can only be true in `call` mode. When the menu was folded into LLM1, it is false. |
 | `llm3_outcome` | string | What the LLM3 step did (see the table above). |
 
-`ranked_document` is the document the batch writes to the target collection, without
-the embedding fields:
+`ranked_document` is `app.ranked_job_schema.RankedJobDocument` (`strict=True,
+extra="forbid"`) — the same model the batch upserts into the target collection, built once
+by `build_ranked_job_document()`, so the write and this response can't drift apart. A bad
+shape fails with `pydantic.ValidationError` at construction, not silently at write time.
+Optional keys the pipeline didn't write are omitted rather than sent as `null`. For the
+full field-by-field source mapping, see the model and its docstrings in
+`app/ranked_job_schema.py` — this is just the shape:
 
-| Field | Description |
-|---|---|
-| `job_id`, `job_fingerprint`, `source_classified_id` | Identifiers from the source document |
-| `is_active` | Always `true` at ranking time |
-| `processed_at` | When the job was ranked (UTC, ISO 8601) |
-| `classified_skills`, `classified_occupations` | The classifier's ESCO links after deduplication, with Tabiya ids where the CSVs map them |
-| `occupation_to_skills` | `{meta, items}`: one block per classified occupation with its taxonomy skills and `skill_counts`. `llm_is_relevant` and the per-block `relevant_total` are present only in `call` mode. |
-| `work_activity.items[]` | ONET work activities chosen by LLM2 (`id`, `name`) |
-| `skill_groups_origin_uuids` | Skill-group ids derived from the essential and optional skills |
-| `llm_classified_skills` | LLM1's ranking: `essential`, `optional`, `discarded`, plus `unmatched_*` labels that matched no candidate |
-| `llm_job_attributes` | LLM2's `summary`, its `estimates`, and an `attributes` map from attribute name to level |
-| `classifier_metadata` | Listing fields copied from the source document, plus any scraper enrichment fields (`province`, `sector`, `isco_*`, `zqf_*`) |
-| `llm_reranker_meta` | `schema_version`, `llm_provider`, and the model behind each pass. `occupation_skills_relevance_model` is recorded even when no LLM3 call ran, because the matching service reads this shape. Use `llm3_outcome` to tell whether the call happened. |
+| Top-level field | Model | Notes |
+|---|---|---|
+| `job_id`, `job_fingerprint`, `source_classified_id` | — | Identifiers from the source document. |
+| `is_active` | — | Always `true` at ranking time; flipped later by the batch's closing-date sync. |
+| `processed_at` | — | UTC, ISO 8601 here, a native BSON date in Mongo. |
+| `classified_skills`, `classified_occupations` | `list[ClassifiedSkill \| ClassifiedOccupation]` | Deduplicated classifier ESCO links. |
+| `occupation_to_skills` | `OccupationToSkills` | `{meta, items}` — per-occupation taxonomy skills, with `llm_is_relevant` set only in `RERANKER_LLM3_MODE=call`. |
+| `work_activity` | `WorkActivities` | ONET work activities LLM2 picked (`id`, `name`). |
+| `skill_groups_origin_uuids` | `list[str]` | Skill-group ids derived from the essential/optional skills. |
+| `llm_classified_skills` | `LlmClassifiedSkills` | LLM1's `essential`/`optional`/`discarded` skills plus unmatched labels. |
+| `llm_job_attributes` | `LlmJobAttributes` | LLM2's summary, per-attribute estimates, and a flat lookup map. |
+| `classifier_metadata` | `ClassifierMetadata` | Listing fields from the source document, plus scraper-enrichment fields (`province`, `sector`, `isco_*`, `zqf_*`). |
+| `llm_reranker_meta` | `LlmRerankerMeta` | Schema version and the model behind each pass — a published contract the matching service reads. |
 
-Optional keys the pipeline did not write are left out of the response rather than sent as
-`null`.
+**Batch-only, not on this response:** `job_embedding`, `raw_embedding` and
+`llm_reranker_meta.embedding` are added by the batch CLI *after* `build_ranked_job_document()`
+returns (`utils.job_embedding.attach_job_embedding_to_payload`), so `extra="forbid"` never
+sees them and `POST /rank` never returns them. Skipped when `RERANKER_ENABLE_JOB_EMBEDDING`
+is off or `GEMINI_API_KEY` is unset. See `utils/job_embedding.py`'s `EmbeddingSection` /
+`WhiteningProvenance` for that shape.
 
 ### Errors
 

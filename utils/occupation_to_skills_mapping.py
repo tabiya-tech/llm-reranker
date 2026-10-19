@@ -13,6 +13,10 @@ Flow:
    Classifier ESCO skills and occupation-taxonomy skills stay separate; LLM1 sees classifier candidates only.
 
 Tabiya ``SKILLID`` → ESCO via :mod:`utils.uuid_to_tabiya_id` (``skills.csv``).
+
+CSV loading (``load_occupation_skill_relations``, ``load_occupations_lookup``, and the
+``_infer_*_column`` helpers) lives in :mod:`app.taxonomy.csv_loaders`; this module only resolves
+classifier occupation hits against an already-loaded bridge and relations map.
 """
 
 from __future__ import annotations
@@ -20,17 +24,27 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from pydantic import Field
 
 from app.config import Settings
+from app.domain_base import DomainModel
+from app.job_ranking.routes.types import OccupationSkill, OccupationSkillsBlock, SkillCounts
 from utils.classifier_linked_entities import (
     EscoSkillCandidate,
     LinkedEntityCandidate,
     group_linked_entities_by_type,
     linked_entity_preferred_taxonomy_id,
 )
+from utils.occupation_csv_models import (
+    OccupationLinkedEntity,
+    occupation_linked_entity_from_candidate,
+)
 from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap, cell_to_esco_uuid
+
+if TYPE_CHECKING:
+    from app.job_ranking.routes.types import RankRequest
 
 logger = logging.getLogger(__name__)
 
@@ -61,14 +75,15 @@ def cell_to_taxonomy_id(cell: str) -> str | None:
 
 
 def esco_skill_uri_for_uuid(uuid: str) -> str:
+    """Build the canonical ESCO skill concept URI for an ESCO uuid."""
     u = uuid.strip().lower()
     return f"http://data.europa.eu/esco/skill/{u}"
 
 
-def _classified_occupation_dicts_for_taxonomy(
-    classified_doc: dict[str, Any],
+def _classified_occupation_entities_for_taxonomy(
+    classified_doc: "RankRequest | dict[str, Any]",
     settings: Settings,
-) -> list[dict[str, Any]]:
+) -> list[OccupationLinkedEntity]:
     """
     Build lookup payloads from the **same** occupation list as ``classified_occupations`` / ``*_uuids``.
 
@@ -76,38 +91,24 @@ def _classified_occupation_dicts_for_taxonomy(
     not every nested ``linked_entities`` row under ``classification.entities`` (which can repeat URIs).
     """
     occ = group_linked_entities_by_type(classified_doc, settings).get("occupation", [])
-    out: list[dict[str, Any]] = []
-    for c in occ:
-        le: dict[str, Any] = {
-            "uri": c.uri,
-            "label": c.label,
-            "taxonomy": "esco",
-        }
-        if c.similarity_score is not None:
-            le["similarity_score"] = c.similarity_score
-        if c.concept_uuid:
-            le["originUUID"] = c.concept_uuid
-        out.append(le)
-    return out
+    return [occupation_linked_entity_from_candidate(c) for c in occ]
 
 
-def _esco_uuid_from_occupation_linked_entity(le: dict[str, Any]) -> str | None:
-    uri = (le.get("uri") or "").strip()
+def _esco_uuid_from_occupation_linked_entity(le: OccupationLinkedEntity) -> str | None:
+    uri = le.uri.strip()
     if uri:
         u = cell_to_esco_uuid(uri)
         if u:
             return u
-    for ok in ("originUUID", "origin_uuid", "originUuid"):
-        v = le.get(ok)
-        if v is not None and str(v).strip():
-            u = cell_to_esco_uuid(str(v))
-            if u:
-                return u
+    if le.origin_uuid and le.origin_uuid.strip():
+        u = cell_to_esco_uuid(le.origin_uuid)
+        if u:
+            return u
     return None
 
 
 def _resolve_first_tabiya_id_for_linked_entity(
-    le: dict[str, Any],
+    le: OccupationLinkedEntity,
     bridge: Mapping[str, str],
     all_ids: frozenset[str],
 ) -> str | None:
@@ -121,7 +122,7 @@ def _resolve_first_tabiya_id_for_linked_entity(
     return None
 
 
-def _esco_bridge_keys_for_occupation_row(le: dict[str, Any]) -> list[str]:
+def _esco_bridge_keys_for_occupation_row(le: OccupationLinkedEntity) -> list[str]:
     """
     Lowercased keys to try against ``occupations.csv`` derived **only** from ESCO uris / uuids.
 
@@ -142,11 +143,8 @@ def _esco_bridge_keys_for_occupation_row(le: dict[str, Any]) -> list[str]:
             seen.add(xl)
             keys.append(xl)
 
-    add((le.get("uri") or "").strip())
-    for ok in ("originUUID", "origin_uuid", "originUuid"):
-        v = le.get(ok)
-        if v is not None and str(v).strip():
-            add(str(v).strip())
+    add(le.uri.strip())
+    add(le.origin_uuid)
     return keys
 
 
@@ -160,7 +158,7 @@ def _bridge_tabiya_for_key(
 
 
 def resolve_occupation_tabiya_id_for_skill_relations(
-    le: dict[str, Any],
+    le: OccupationLinkedEntity,
     bridge: Mapping[str, str],
     all_ids: frozenset[str],
     *,
@@ -195,20 +193,28 @@ def tabiya_occupation_id_for_candidate(
     settings: Settings,
 ) -> str | None:
     """Resolve Tabiya occupation ``ID`` for one classifier occupation row (``occupations.csv``)."""
-    le: dict[str, Any] = {
-        "uri": c.uri,
-        "label": c.label,
-        "taxonomy": "esco",
-    }
-    if c.similarity_score is not None:
-        le["similarity_score"] = c.similarity_score
-    if c.concept_uuid:
-        le["originUUID"] = c.concept_uuid
+    le = occupation_linked_entity_from_candidate(c)
     return resolve_occupation_tabiya_id_for_skill_relations(le, bridge, all_ids, settings=settings)
 
 
-@dataclass
-class OccupationTaxonomyStats:
+class ClassifierOccupationHitStats(DomainModel):
+    """Taxonomy-resolution detail for one ``classified_occupations`` entry."""
+
+    index: int = Field(description="1-based position among this job's classifier occupation hits.")
+    label: str = Field(description="Classifier label for this occupation hit.")
+    esco_uuid: str | None = Field(
+        default=None, description="ESCO occupation UUID, when resolvable."
+    )
+    tabiya_id: str | None = Field(
+        default=None, description="Tabiya occupation id from `occupations.csv`, when resolved."
+    )
+    relation_skill_count: int = Field(
+        description="Skills linked to this occupation in the relations CSV."
+    )
+    resolved: bool = Field(description="Whether a Tabiya occupation id was found for this hit.")
+
+
+class OccupationTaxonomyStats(DomainModel):
     """
     One row per ``classified_occupations`` entry: lookup → Tabiya id → |skills| in relations.
 
@@ -217,12 +223,22 @@ class OccupationTaxonomyStats:
     (deduped across Tabiya occupation ids); classifier skills are not included in this count.
     """
 
-    classified_skill_count: int
-    occupation_classifier_hits: int
-    per_classifier_hit: list[dict[str, Any]] = field(default_factory=list)
-    deduped_tabiya_occupation_ids: list[str] = field(default_factory=list)
-    sum_relation_skills_per_classifier_hit: int = 0
-    merged_unique_skills_from_occupations: int = 0
+    classified_skill_count: int = Field(description="Classifier ESCO skill links for this job.")
+    occupation_classifier_hits: int = Field(
+        description="Classifier occupation links considered for taxonomy resolution."
+    )
+    per_classifier_hit: list[ClassifierOccupationHitStats] = Field(
+        default_factory=list, description="Resolution detail for each classifier occupation hit."
+    )
+    deduped_tabiya_occupation_ids: list[str] = Field(
+        default_factory=list, description="Unique Tabiya occupation ids resolved across all hits."
+    )
+    sum_relation_skills_per_classifier_hit: int = Field(
+        default=0, description="Sum of relation-CSV skill counts across hits (may double-count)."
+    )
+    merged_unique_skills_from_occupations: int = Field(
+        default=0, description="Unique ESCO skill ids from occupation relations, deduped."
+    )
 
     def format_log_lines(self) -> list[str]:
         lines = [
@@ -240,19 +256,19 @@ class OccupationTaxonomyStats:
             lines.append(
                 "  occ[%s] label=%r esco_uuid=%s tabiya_id=%s relation_skills=%s resolved=%s"
                 % (
-                    row["index"],
-                    row.get("label") or "",
-                    row.get("esco_uuid") or "—",
-                    row.get("tabiya_id") or "—",
-                    row.get("relation_skill_count"),
-                    row.get("resolved"),
+                    row.index,
+                    row.label or "",
+                    row.esco_uuid or "—",
+                    row.tabiya_id or "—",
+                    row.relation_skill_count,
+                    row.resolved,
                 )
             )
         return lines
 
 
 def _build_occupation_taxonomy_stats(
-    classified_doc: dict[str, Any],
+    classified_doc: "RankRequest | dict[str, Any]",
     settings: Settings,
     bridge: Mapping[str, str],
     all_ids: frozenset[str],
@@ -261,11 +277,11 @@ def _build_occupation_taxonomy_stats(
     deduped_tabiya_ids: list[str],
     merged_unique_skill_count: int,
 ) -> OccupationTaxonomyStats:
-    per_hit: list[dict[str, Any]] = []
+    per_hit: list[ClassifierOccupationHitStats] = []
     sum_counts = 0
-    hits = _classified_occupation_dicts_for_taxonomy(classified_doc, settings)
+    hits = _classified_occupation_entities_for_taxonomy(classified_doc, settings)
     for i, le in enumerate(hits, start=1):
-        label = (le.get("label") or "").strip()
+        label = le.label.strip()
         esco_u = _esco_uuid_from_occupation_linked_entity(le)
         tid = resolve_occupation_tabiya_id_for_skill_relations(
             le, bridge, all_ids, settings=settings
@@ -277,14 +293,14 @@ def _build_occupation_taxonomy_stats(
             n = 0
         sum_counts += n
         per_hit.append(
-            {
-                "index": i,
-                "label": label,
-                "esco_uuid": esco_u or None,
-                "tabiya_id": tid,
-                "relation_skill_count": n,
-                "resolved": tid is not None,
-            }
+            ClassifierOccupationHitStats(
+                index=i,
+                label=label,
+                esco_uuid=esco_u or None,
+                tabiya_id=tid,
+                relation_skill_count=n,
+                resolved=tid is not None,
+            )
         )
     return OccupationTaxonomyStats(
         classified_skill_count=classified_skill_count,
@@ -296,7 +312,7 @@ def _build_occupation_taxonomy_stats(
     )
 
 
-def _lookup_keys_for_occupation_row(le: dict[str, Any]) -> list[str]:
+def _lookup_keys_for_occupation_row(le: OccupationLinkedEntity) -> list[str]:
     """Normalized keys to try against the ``occupations.csv`` bridge (``TaxonomyContext.occ_bridge``)."""
     keys: list[str] = []
     seen: set[str] = set()
@@ -309,10 +325,10 @@ def _lookup_keys_for_occupation_row(le: dict[str, Any]) -> list[str]:
             seen.add(xl)
             keys.append(xl)
 
-    pref = linked_entity_preferred_taxonomy_id(le)
+    pref = linked_entity_preferred_taxonomy_id(le.model_dump(by_alias=True, exclude_none=True))
     if pref:
         add(pref)
-    uri = (le.get("uri") or "").strip()
+    uri = le.uri.strip()
     if uri:
         t = cell_to_taxonomy_id(uri)
         if t:
@@ -320,17 +336,15 @@ def _lookup_keys_for_occupation_row(le: dict[str, Any]) -> list[str]:
         eu = cell_to_esco_uuid(uri)
         if eu:
             add(eu)
-    for ok in ("originUUID", "origin_uuid", "originUuid"):
-        v = le.get(ok)
-        if v is not None and str(v).strip():
-            t = cell_to_taxonomy_id(str(v))
-            if t:
-                add(t)
+    if le.origin_uuid and le.origin_uuid.strip():
+        t = cell_to_taxonomy_id(le.origin_uuid)
+        if t:
+            add(t)
     return keys
 
 
 def resolve_tabiya_occupation_ids_for_relations(
-    classified_doc: dict[str, Any],
+    classified_doc: "RankRequest | dict[str, Any]",
     bridge: Mapping[str, str],
     all_ids: frozenset[str],
     *,
@@ -350,7 +364,7 @@ def resolve_tabiya_occupation_ids_for_relations(
     out: list[str] = []
     seen: set[str] = set()
     mode = (settings.occupation_relation_lookup or "tabiya_bridge").strip().lower()
-    for le in _classified_occupation_dicts_for_taxonomy(classified_doc, settings):
+    for le in _classified_occupation_entities_for_taxonomy(classified_doc, settings):
         if mode == "esco_uuid_bridge":
             tid = resolve_occupation_tabiya_id_for_skill_relations(
                 le, bridge, all_ids, settings=settings
@@ -371,7 +385,7 @@ def resolve_tabiya_occupation_ids_for_relations(
     return out
 
 
-def occupation_block_skill_counts(skills: list[dict[str, Any]]) -> dict[str, int]:
+def occupation_block_skill_counts(skills: list[OccupationSkill]) -> SkillCounts:
     """
     Count ``total`` / ``essential`` / ``optional`` / ``unspecified`` for a block's ``skills`` rows
     (``relation_type`` from the relations CSV). Used after listing-relevance filtering.
@@ -379,27 +393,27 @@ def occupation_block_skill_counts(skills: list[dict[str, Any]]) -> dict[str, int
     return _skill_relation_counts_after_lookup(skills)
 
 
-def _skill_relation_counts_after_lookup(skills: list[dict[str, Any]]) -> dict[str, int]:
+def _skill_relation_counts_after_lookup(skills: list[OccupationSkill]) -> SkillCounts:
     """Counts on skills persisted under one occupation (ESCO-mapped rows only, ``relation_type`` from CSV)."""
     essential = optional = unspecified = 0
     for s in skills:
-        rt = (s.get("relation_type") or "").strip().lower() or "unspecified"
+        rt = s.relation_type or "unspecified"
         if rt == "essential":
             essential += 1
         elif rt == "optional":
             optional += 1
         else:
             unspecified += 1
-    return {
-        "total": len(skills),
-        "essential": essential,
-        "optional": optional,
-        "unspecified": unspecified,
-    }
+    return SkillCounts(
+        total=len(skills),
+        essential=essential,
+        optional=optional,
+        unspecified=unspecified,
+    )
 
 
 def build_occupation_to_skills_nested(
-    classified_doc: dict[str, Any],
+    classified_doc: RankRequest | dict[str, Any],
     settings: Settings,
     occupation_to_skills: Mapping[str, frozenset[str]],
     occupation_skill_relation: Mapping[str, Mapping[str, str]],
@@ -408,7 +422,7 @@ def build_occupation_to_skills_nested(
     all_ids: frozenset[str],
     skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
     occupation_skill_signalling: Mapping[str, Mapping[str, Mapping[str, str]]] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[OccupationSkillsBlock]:
     """
     One object per ``classified_occupations`` row: Tabiya id, skills from relations with ``relation_type``
     (from ``RELATIONTYPE`` in the CSV).
@@ -420,24 +434,21 @@ def build_occupation_to_skills_nested(
 
     Optional ``occupation_skill_signalling`` adds ``signalling_value`` / ``signalling_label`` from the
     relations CSV when present (used to prioritize skills for LLM3 when the menu is capped).
+
+    Returns validated ``OccupationSkillsBlock`` models: this is the typed shape
+    ``app.job_ranking.occupation_skills`` (menu filtering, LLM3 subsetting) and
+    ``app.job_ranking.ranked_document`` operate on before it is persisted as the
+    ``occupation_to_skills`` Mongo payload.
     """
     sig_root = occupation_skill_signalling or {}
-    out: list[dict[str, Any]] = []
+    out: list[OccupationSkillsBlock] = []
     for c in group_linked_entities_by_type(classified_doc, settings).get("occupation", []):
-        le: dict[str, Any] = {
-            "uri": c.uri,
-            "label": c.label,
-            "taxonomy": "esco",
-        }
-        if c.similarity_score is not None:
-            le["similarity_score"] = c.similarity_score
-        if c.concept_uuid:
-            le["originUUID"] = c.concept_uuid
+        le = occupation_linked_entity_from_candidate(c)
         tid = resolve_occupation_tabiya_id_for_skill_relations(
             le, bridge, all_ids, settings=settings
         )
         tid_l = tid.strip().lower() if tid else ""
-        skills_raw: list[dict[str, Any]] = []
+        skills_raw: list[OccupationSkill] = []
         if tid_l:
             rel_by_skill = occupation_skill_relation.get(tid_l, {})
             for sid in sorted(occupation_to_skills.get(tid_l, frozenset())):
@@ -462,13 +473,8 @@ def build_occupation_to_skills_nested(
                     lab = str(lab).strip()
                 if not lab:
                     lab = f"Skill ({esco[:8]}…)" if len(esco) >= 8 else esco
-                row: dict[str, Any] = {
-                    "skill_id": esco,
-                    "tabiya_skill_id": sid_l,
-                    "label": lab,
-                    "uri": esco_skill_uri_for_uuid(esco),
-                    "relation_type": rel_t,
-                }
+                signalling_value: str | None = None
+                signalling_label: str | None = None
                 sig = (sig_root.get(tid_l, {}) or {}).get(sid_l) or (
                     sig_root.get(tid_l, {}) or {}
                 ).get(sid.strip().lower())
@@ -476,25 +482,35 @@ def build_occupation_to_skills_nested(
                     sv = (sig.get("signalling_value") or "").strip()
                     sl = (sig.get("signalling_label") or "").strip()
                     if sv:
-                        row["signalling_value"] = sv
+                        signalling_value = sv
                     if sl:
-                        row["signalling_label"] = sl.lower()
-                skills_raw.append(row)
+                        signalling_label = sl.lower()
+                skills_raw.append(
+                    OccupationSkill(
+                        skill_id=esco,
+                        tabiya_skill_id=sid_l,
+                        label=lab,
+                        uri=esco_skill_uri_for_uuid(esco),
+                        relation_type=rel_t,
+                        signalling_value=signalling_value,
+                        signalling_label=signalling_label,
+                    )
+                )
 
-        def _sk_key(d: dict[str, Any]) -> tuple[int, str]:
+        def _sk_key(sk: OccupationSkill) -> tuple[int, str]:
             order = {"essential": 0, "optional": 1, "unspecified": 3}
-            return (order.get(d.get("relation_type") or "", 2), (d.get("label") or "").lower())
+            return (order.get(sk.relation_type, 2), sk.label.lower())
 
         skills_sorted = sorted(skills_raw, key=_sk_key)
         out.append(
-            {
-                "occupation_label": c.label,
-                "occupation_esco_uuid": c.concept_uuid,
-                "occupation_uri": c.uri,
-                "tabiya_occupation_id": tid,
-                "skill_counts": _skill_relation_counts_after_lookup(skills_sorted),
-                "skills": skills_sorted,
-            }
+            OccupationSkillsBlock(
+                occupation_label=c.label,
+                occupation_esco_uuid=c.concept_uuid,
+                occupation_uri=c.uri,
+                tabiya_occupation_id=tid,
+                skill_counts=_skill_relation_counts_after_lookup(skills_sorted),
+                skills=skills_sorted,
+            )
         )
     return out
 
@@ -518,19 +534,12 @@ def _label_for_taxonomy_skill(
     return f"ESCO skill ({u[:8]}…)"
 
 
-def build_occupation_taxonomy_skill_rows(
+def build_occupation_taxonomy_skill_ids(
     tabiya_occupation_ids: list[str],
     occupation_to_skills: Mapping[str, frozenset[str]],
-    csv_skill_labels: Mapping[str, str],
-    base_candidates: list[EscoSkillCandidate],
     skills_uuid_tabiya_map: SkillsUuidTabiyaMap | None = None,
-) -> tuple[list[dict[str, Any]], list[str]]:
-    base_by_uuid: dict[str, EscoSkillCandidate] = {}
-    for c in base_candidates:
-        u = (c.esco_uuid or "").strip().lower()
-        if u:
-            base_by_uuid[u] = c
-
+) -> list[str]:
+    """Unique ESCO skill uuids linked via ``tabiya_occupation_ids`` (occupation relations only)."""
     esco_ids: list[str] = []
     for oid in tabiya_occupation_ids:
         oid_l = oid.strip().lower()
@@ -546,25 +555,11 @@ def build_occupation_taxonomy_skill_rows(
                     )
             else:
                 esco_ids.append(str(su).strip().lower())
-    skill_ids = sorted(frozenset(esco_ids))
-
-    rows: list[dict[str, Any]] = []
-    for su in skill_ids:
-        rows.append(
-            {
-                "label": _label_for_taxonomy_skill(
-                    su, csv_skill_labels, base_by_uuid, skills_uuid_tabiya_map
-                ),
-                "uri": esco_skill_uri_for_uuid(su),
-                "esco_uuid": su,
-                "similarity_score": None,
-            }
-        )
-    return rows, skill_ids
+    return sorted(frozenset(esco_ids))
 
 
 def resolve_occupation_taxonomy_for_classified_job(
-    classified_doc: dict[str, Any],
+    classified_doc: "RankRequest | dict[str, Any]",
     classifier_skill_candidates: list[EscoSkillCandidate],
     occupation_to_skills: Mapping[str, frozenset[str]],
     csv_skill_labels: Mapping[str, str] | None = None,
@@ -575,7 +570,7 @@ def resolve_occupation_taxonomy_for_classified_job(
     occupations_bridge: Mapping[str, str],
     occupations_all_ids: frozenset[str],
     settings: Settings,
-) -> tuple[list[str], OccupationTaxonomyStats, list[dict[str, Any]]]:
+) -> tuple[list[str], OccupationTaxonomyStats, list[OccupationSkillsBlock]]:
     """
     Resolve classifier occupations via ``occupations.csv`` and skills from the relations CSV.
 
@@ -583,7 +578,8 @@ def resolve_occupation_taxonomy_for_classified_job(
 
     - ``taxonomy_skill_ids``: unique ESCO uuids linked via occupation relations (for logging / analytics).
     - ``OccupationTaxonomyStats`` for terminal logs.
-    - ``occupation_to_skills_nested``: Mongo shape (``relation_type`` from CSV per skill).
+    - ``occupation_to_skills_nested``: validated ``OccupationSkillsBlock`` rows (``relation_type`` from CSV
+      per skill).
 
     The skill ranker (LLM1) continues to use **classifier** candidates only; pass those separately.
     """
@@ -595,11 +591,9 @@ def resolve_occupation_taxonomy_for_classified_job(
         classified_doc, bridge, all_ids, settings=settings
     )
 
-    _taxonomy_rows, taxonomy_skill_ids = build_occupation_taxonomy_skill_rows(
+    taxonomy_skill_ids = build_occupation_taxonomy_skill_ids(
         tabiya_occ_ids,
         occupation_to_skills,
-        labels,
-        classifier_skill_candidates,
         skills_uuid_tabiya_map,
     )
 

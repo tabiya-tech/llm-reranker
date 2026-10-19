@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from app.job_context import JobDescriptionContext
 from app.job_ranking.prompts.job_listing import (
     build_job_attributes_jd_text,
     build_job_attributes_metadata_block,
 )
 from app.job_ranking.prompts.templates import PromptTemplates
+from app.job_ranking.routes.types import OccupationSkillsBlock
 
 
 def build_occupation_skills_relevance_prompt(
     system: str,
     ctx: JobDescriptionContext,
-    occupation_to_skills_items: list[dict[str, Any]],
+    occupation_to_skills_items: list[OccupationSkillsBlock],
 ) -> str:
     """
     LLM call 3: ``system`` + user message listing job ad context and occupation taxonomy skills
@@ -26,20 +25,18 @@ def build_occupation_skills_relevance_prompt(
 
     menu_lines: list[str] = []
     for block in occupation_to_skills_items:
-        tid = block.get("tabiya_occupation_id")
-        o_lab = (block.get("occupation_label") or "").strip() or "(occupation)"
+        tid = block.tabiya_occupation_id
+        o_lab = (block.occupation_label or "").strip() or "(occupation)"
         menu_lines.append(f"### Occupation: {o_lab}")
         menu_lines.append(f"- tabiya_occupation_id: `{tid}`")
-        for sk in block.get("skills") or []:
-            if not isinstance(sk, dict):
-                continue
-            rt = (sk.get("relation_type") or "").strip().lower()
+        for sk in block.skills:
+            rt = sk.relation_type.strip().lower()
             if rt not in ("essential", "optional"):
                 continue
-            sid = str(sk.get("skill_id") or "").strip()
+            sid = sk.skill_id.strip()
             if not sid or not tid:
                 continue
-            lab = (sk.get("label") or "").strip() or sid
+            lab = (sk.label or "").strip() or sid
             menu_lines.append(f"- skill_id: `{sid}` | label: {lab} | taxonomy_role: {rt}")
         menu_lines.append("")
 
@@ -87,7 +84,7 @@ class OccupationSkillsRelevancePromptBuilder:
         self._system = templates.occupation_skills_relevance_system
 
     def build(
-        self, ctx: JobDescriptionContext, occupation_to_skills_items: list[dict[str, Any]]
+        self, ctx: JobDescriptionContext, occupation_to_skills_items: list[OccupationSkillsBlock]
     ) -> str:
         return build_occupation_skills_relevance_prompt(
             self._system, ctx, occupation_to_skills_items

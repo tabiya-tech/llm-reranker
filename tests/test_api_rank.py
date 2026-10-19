@@ -208,15 +208,18 @@ class TestRankedJobDocumentModel:
             occupation_relevance=StubOccupationRelevance(relevance_result),
         )
         doc = _classified_doc()
-        doc["province"] = "Nairobi County"  # scraper enrichment: an extra metadata key
+        doc["province"] = "Nairobi County"  # scraper enrichment: a named ClassifierMetadata field
 
         ranked = ranking.rank(doc).ranked_document
         assert ranked is not None
-        model = RankedJobDocument.model_validate(ranked)
+        # The pipeline already returns a validated RankedJobDocument; re-validating here
+        # confirms it round-trips cleanly (no lossy mode="json" coercions).
+        model = RankedJobDocument.model_validate(ranked.model_dump(mode="python"))
 
         assert model.model_dump(mode="json", exclude_unset=True) == jsonable_encoder(ranked)
-        # Only the documented open-ended block may carry undeclared keys.
-        assert _extra_keys(model) == [".classifier_metadata.province"]
+        assert model.classifier_metadata.province == "Nairobi County"
+        # Every field is declared and strict (extra="forbid") — nothing carries undeclared keys.
+        assert _extra_keys(model) == []
 
 
 class TestOpenApi:

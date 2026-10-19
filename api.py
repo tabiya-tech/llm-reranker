@@ -18,7 +18,7 @@ from app.job_ranking.get_job_ranking_service import (
     get_job_ranking_services,
     reset_job_ranking_services,
 )
-from app.job_ranking.routes import add_job_ranking_routes
+from app.job_ranking.routes.routes import add_job_ranking_routes
 from app.logging_config import configure_logging, reconfigure_uvicorn_logging
 from app.observability import init_tracing, shutdown_tracing, tracing_config_from_env
 

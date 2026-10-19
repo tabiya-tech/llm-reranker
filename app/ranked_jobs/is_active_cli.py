@@ -55,23 +55,23 @@ def main() -> int:
 
     print(f"Collection: {location}")
     print(f"Today: {today.isoformat()}")
-    print(f"Total docs scanned: {stats['total']}")
-    print(f"Parsed closing_date: {stats['parsed']}")
-    print(f"Missing/unparseable closing_date: {stats['missing_or_bad']}")
-    print(f"Would set is_active=True: {stats['will_set_true']}")
-    print(f"Would set is_active=False: {stats['will_set_false']}")
-    print(f"Unchanged: {stats['unchanged']}")
+    print(f"Total docs scanned: {stats.total}")
+    print(f"Parsed closing_date: {stats.parsed}")
+    print(f"Missing/unparseable closing_date: {stats.missing_or_bad}")
+    print(f"Would set is_active=True: {stats.will_set_true}")
+    print(f"Would set is_active=False: {stats.will_set_false}")
+    print(f"Unchanged: {stats.unchanged}")
 
     if not do_apply:
         print("Dry run complete. Re-run with --apply to persist changes.")
         return 0
 
-    if stats["will_set_true"] + stats["will_set_false"] == 0:
+    if stats.will_set_true + stats.will_set_false == 0:
         print("No updates to apply.")
     else:
         print(
             "Applied updates:",
-            f"modified={stats['modified']}",
+            f"modified={stats.modified}",
         )
     return 0
 

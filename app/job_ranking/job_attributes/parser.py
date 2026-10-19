@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from dataclasses import replace
+from pydantic import ValidationError
 
 from app.config import Settings
 from app.job_ranking.job_attributes.types import (
@@ -13,10 +12,13 @@ from app.job_ranking.job_attributes.types import (
     OnetWorkActivity,
 )
 from app.llm.errors import LlmParseError
-from utils.classifier_linked_entities import (
-    json_bool,
+from app.llm_models import (
+    AttributeEstimateRaw,
+    JobAttributesLlmResponse,
+    parse_llm_json_response,
     strip_json_fence,
 )
+from utils.classifier_linked_entities import json_bool
 
 
 def allowed_level_ids_by_attribute(schema: JobAttributesSchema) -> dict[str, frozenset[str]]:
@@ -57,25 +59,25 @@ def parse_job_attributes_response(
     under that key for downstream matching eligibility (Kenya pipeline).
     """
     cleaned = strip_json_fence(raw_text)
+    data = parse_llm_json_response(raw_text)
     try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        raise LlmParseError(f"Job attributes JSON could not be parsed: {e}") from e
-    if not isinstance(data, dict):
-        raise LlmParseError("Job attributes JSON must be an object")
+        parsed = JobAttributesLlmResponse.model_validate(data)
+    except ValidationError as e:
+        raise LlmParseError(f"Job attributes JSON has an unexpected shape: {e}") from e
 
     allowed_levels = allowed_level_ids_by_attribute(schema)
     attr_names = frozenset(allowed_levels.keys())
 
     by_name: dict[str, AttributeEstimate] = {}
 
-    raw_attrs = data.get("attributes")
+    raw_attrs = parsed.attributes
     if isinstance(raw_attrs, list):
-        for item in raw_attrs:
-            if not isinstance(item, dict):
+        for raw_item in raw_attrs:
+            if not isinstance(raw_item, dict):
                 continue
-            name = str(item.get("attribute_name") or "").strip()
-            lid_raw = item.get("selected_level_id")
+            item = AttributeEstimateRaw.model_validate(raw_item)
+            name = str(item.attribute_name or "").strip()
+            lid_raw = item.selected_level_id
             if name not in attr_names or not isinstance(lid_raw, str) or not lid_raw.strip():
                 continue
             lid = lid_raw.strip()
@@ -84,10 +86,10 @@ def parse_job_attributes_response(
             by_name[name] = AttributeEstimate(
                 attribute_name=name,
                 selected_level_id=lid,
-                confidence=_normalize_confidence(item.get("confidence")),
-                reasoning=str(item.get("reasoning") or "").strip(),
+                confidence=_normalize_confidence(item.confidence),
+                reasoning=str(item.reasoning or "").strip(),
             )
-    elif isinstance(raw_attrs, dict):
+    else:
         for name, level_id in raw_attrs.items():
             if name not in attr_names:
                 continue
@@ -107,20 +109,18 @@ def parse_job_attributes_response(
     flat: dict[str, str | bool] = {e.attribute_name: e.selected_level_id for e in estimates}
     if settings.target_country == "kenya":
         flat["requires_post_secondary"] = parse_requires_post_secondary(
-            data.get("requires_post_secondary")
+            parsed.requires_post_secondary
         )
-    summary_raw = data.get("summary")
+    summary_raw = parsed.summary
     summary = str(summary_raw).strip() if summary_raw is not None else ""
 
     wa_allowed = frozenset(x.wa_element_id for x in onet)
     wa_out: list[str] = []
-    raw_wa = data.get("work_activities")
-    if isinstance(raw_wa, list):
-        for x in raw_wa:
-            if isinstance(x, str) and x.strip() in wa_allowed:
-                wid = x.strip()
-                if wid not in wa_out:
-                    wa_out.append(wid)
+    for x in parsed.work_activities:
+        if isinstance(x, str) and x.strip() in wa_allowed:
+            wid = x.strip()
+            if wid not in wa_out:
+                wa_out.append(wid)
 
     return JobAttributesResult(
         attribute_estimates=tuple(estimates),
@@ -148,4 +148,4 @@ class JobAttributesResponseParser:
         parsed = parse_job_attributes_response(
             raw, self._schema, self._onet, settings=self._settings
         )
-        return replace(parsed, raw_response=raw)
+        return parsed.model_copy(update={"raw_response": raw})

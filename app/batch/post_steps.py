@@ -83,13 +83,13 @@ class BatchPostSteps:
             logger.info(
                 "Post-step | is_active from closing_date | done | total=%s parsed=%s "
                 "missing_or_bad=%s set_true=%s set_false=%s unchanged=%s modified=%s elapsed_s=%.3f",
-                stats["total"],
-                stats["parsed"],
-                stats["missing_or_bad"],
-                stats["will_set_true"],
-                stats["will_set_false"],
-                stats["unchanged"],
-                stats["modified"],
+                stats.total,
+                stats.parsed,
+                stats.missing_or_bad,
+                stats.will_set_true,
+                stats.will_set_false,
+                stats.unchanged,
+                stats.modified,
                 time.perf_counter() - t0,
             )
         except Exception as e:
