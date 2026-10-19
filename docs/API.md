@@ -121,6 +121,7 @@ full field-by-field source mapping, see the model and its docstrings in
 | `llm_classified_skills` | `LlmClassifiedSkills` | LLM1's `essential`/`optional`/`discarded` skills plus unmatched labels. |
 | `llm_job_attributes` | `LlmJobAttributes` | LLM2's summary, per-attribute estimates, and a flat lookup map. |
 | `classifier_metadata` | `ClassifierMetadata` | Listing fields from the source document, plus scraper-enrichment fields (`province`, `sector`, `isco_*`, `zqf_*`). |
+| `location_keys` | `list[str]` | Standardised location keys of `classifier_metadata` city / province (`utils/location_keys.py`): each comma-separated part, trimmed and casefolded, plus `remote` when the place mentions it. The matching service filters jobs on this array. |
 | `llm_reranker_meta` | `LlmRerankerMeta` | Schema version and the model behind each pass — a published contract the matching service reads. |
 
 **Batch-only, not on this response:** `job_embedding`, `raw_embedding` and

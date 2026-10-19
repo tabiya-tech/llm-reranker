@@ -18,7 +18,7 @@ def test_import_use_case_modules():
 def test_import_app_ranked_document():
     from app.job_ranking import ranked_document
 
-    assert ranked_document.PIPELINE_SCHEMA_VERSION == "32"
+    assert ranked_document.PIPELINE_SCHEMA_VERSION == "33"
 
 
 def test_import_main():
