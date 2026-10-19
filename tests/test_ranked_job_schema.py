@@ -42,6 +42,7 @@ from app.job_ranking.ranked_document import (
     build_ranked_job_document,
     classifier_metadata_from_context,
     derive_skill_groups_origin_uuids,
+    location_keys_from_metadata,
     occupation_to_skills_with_meta,
     work_activity_names_for_ids,
 )
@@ -150,7 +151,7 @@ def _ja_minimal() -> JobAttributesResult:
 class TestPipelineSchemaVersion:
     def test_version_is_pinned(self):
         # Update intentionally when bumping the document schema.
-        assert PIPELINE_SCHEMA_VERSION == "32"
+        assert PIPELINE_SCHEMA_VERSION == "33"
 
 
 # ---------------------------------------------------------------------------
@@ -567,6 +568,24 @@ class TestClassifierMetadataFromContext:
         assert meta.requirements == "3 years"
 
 
+class TestLocationKeysFromMetadata:
+    def test_keys_of_city_and_enriched_province(self):
+        ctx = _ctx(
+            city="Ndola, Lusaka",
+            classified={"_id": "doc-1", "province": ["Copperbelt", "Lusaka"]},
+        )
+        meta = classifier_metadata_from_context(ctx)
+        assert location_keys_from_metadata(meta) == ["copperbelt", "lusaka", "ndola"]
+
+    def test_county_falls_back_to_province(self):
+        meta = classifier_metadata_from_context(_ctx(city="Thika", county="Nairobi"))
+        assert location_keys_from_metadata(meta) == ["nairobi", "thika"]
+
+    def test_remote_anywhere_adds_the_remote_key(self):
+        meta = classifier_metadata_from_context(_ctx(city=None, county="National/Remote"))
+        assert location_keys_from_metadata(meta) == ["national", "remote"]
+
+
 class TestBuildLlmRerankerMeta:
     def test_includes_schema_version(self, make_settings):
         s = make_settings(GEMINI_API_KEY="x", GEMINI_MODEL="m1")
@@ -596,6 +615,7 @@ EXPECTED_TOP_LEVEL_KEYS = {
     "llm_classified_skills",
     "llm_job_attributes",
     "classifier_metadata",
+    "location_keys",
     "llm_reranker_meta",
 }
 
@@ -627,6 +647,7 @@ class TestBuildRankedJobDocument:
         assert out.is_active is True
         assert out.source_classified_id == "doc-1"
         assert out.llm_reranker_meta.schema_version == PIPELINE_SCHEMA_VERSION
+        assert out.location_keys == ["lusaka"]
         # Classified skills/occupations default to empty lists when no entities given.
         assert out.classified_skills == []
         assert out.classified_occupations == []

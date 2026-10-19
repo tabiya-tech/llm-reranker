@@ -35,11 +35,12 @@ from utils.classifier_linked_entities import (
     MappedEscoSkills,
     group_linked_entities_by_type,
 )
+from utils.location_keys import location_keys_for
 from utils.occupation_to_skills_mapping import tabiya_occupation_id_for_candidate
 from utils.scraper_enrichment_fields import copy_scraper_enrichment_fields
 from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap, cell_to_esco_uuid
 
-PIPELINE_SCHEMA_VERSION = "32"
+PIPELINE_SCHEMA_VERSION = "33"
 
 
 def occupation_block_skill_counts_from_models(skills: list[OccupationSkill]) -> SkillCounts:
@@ -276,6 +277,15 @@ def classifier_metadata_from_context(ctx: JobDescriptionContext) -> ClassifierMe
     return ClassifierMetadata.model_validate(meta)
 
 
+def location_keys_from_metadata(meta: ClassifierMetadata) -> list[str]:
+    """``location_keys`` of a ranked job, from its ``classifier_metadata`` city / province.
+
+    ``province`` already falls back to the listing's county (see
+    :func:`classifier_metadata_from_context`).
+    """
+    return list(location_keys_for(meta.city, meta.province))
+
+
 def occupation_to_skills_with_meta(items: list[OccupationSkillsBlock]) -> OccupationToSkills:
     """
     Stored ``occupation_to_skills``: ``meta`` + ``items`` only.
@@ -417,6 +427,8 @@ def build_ranked_job_document(
         attributes=dict(ja.attributes),
     )
 
+    classifier_metadata = classifier_metadata_from_context(ctx)
+
     # Order matches target schema (see module docstring). ``_id`` is not $set.
     return RankedJobDocument(
         job_id=ctx.job_id,
@@ -431,7 +443,9 @@ def build_ranked_job_document(
         skill_groups_origin_uuids=skill_groups_origin_uuids,
         llm_classified_skills=llm_skills,
         llm_job_attributes=llm_job_attributes,
-        classifier_metadata=classifier_metadata_from_context(ctx),
+        classifier_metadata=classifier_metadata,
+        # Standardised location keys: the matching service's indexed /match location filter.
+        location_keys=location_keys_from_metadata(classifier_metadata),
         llm_reranker_meta=build_llm_reranker_meta(settings),
     )
 

@@ -403,7 +403,7 @@ class ClassifierMetadata(DomainModel):
 class LlmRerankerMeta(DomainModel):
     """Run metadata: which schema version and which models produced this ranked document."""
 
-    schema_version: str = Field(description="Ranked-document schema version.", examples=["32"])
+    schema_version: str = Field(description="Ranked-document schema version.", examples=["33"])
     llm_provider: str = Field(description="Provider alias that served the LLM calls.")
     skill_ranker_model: str = Field(description="Model behind LLM1.")
     occupation_skills_relevance_model: str = Field(
@@ -442,6 +442,11 @@ class RankedJobDocument(DomainModel):
     llm_job_attributes: LlmJobAttributes = Field(description="LLM2's job attributes.")
     classifier_metadata: ClassifierMetadata = Field(
         description="Listing fields copied from the source document."
+    )
+    location_keys: list[str] = Field(
+        description="Standardised location keys of the listing's city and province (the matching "
+        "service's location filter).",
+        examples=[["nairobi", "remote"]],
     )
     llm_reranker_meta: LlmRerankerMeta = Field(
         description="Schema version and the models that produced the document."
