@@ -40,6 +40,7 @@ def _is_pure(path: Path) -> bool:
         "job_listing.py",
         "whitening.py",
         "upsert.py",
+        "response_schemas.py",
     }
 
 

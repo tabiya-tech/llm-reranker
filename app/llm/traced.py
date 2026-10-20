@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from app.llm.base import LlmClient, LlmConfig
 from app.observability import traced_observation, update_observation
@@ -34,9 +35,21 @@ class TracedLlmClient:
     def config(self) -> LlmConfig:
         return self._client.config
 
-    def generate_json(self, prompt: str, *, purpose: str) -> str:
-        """Ask the model for JSON, recording the call as a generation named ``purpose``."""
+    def generate_json(
+        self, prompt: str, *, purpose: str, response_schema: dict[str, Any] | None = None
+    ) -> str:
+        """Ask the model for JSON, recording the call as a generation named ``purpose``.
+
+        ``response_schema`` reaches the client only when it supports structured output and
+        ``RERANKER_LLM_RESPONSE_SCHEMA`` is on; otherwise the prompt's prose contract and
+        the provider's JSON mode are all the model gets.
+        """
         cfg = self._client.config
+        use_schema = (
+            response_schema is not None
+            and cfg.response_schema
+            and self._client.supports_response_schema
+        )
         logger.debug("LLM call (%s): invoking %s", purpose, cfg.describe())
         with traced_observation(
             name=purpose or "generate_json",
@@ -51,10 +64,20 @@ class TracedLlmClient:
                 "purpose": purpose,
                 "provider": cfg.provider,
                 "client_class": cfg.client_class,
+                "response_schema": use_schema,
             },
         ) as generation:
             try:
-                out = self._client.generate_json(prompt, purpose=purpose)
+                if use_schema:
+                    # Opt-in keyword, not in the base signature: only clients that set
+                    # supports_response_schema are called with it (see LlmClient).
+                    out = self._client.generate_json(
+                        prompt,
+                        purpose=purpose,
+                        response_schema=response_schema,  # type: ignore[call-arg]
+                    )
+                else:
+                    out = self._client.generate_json(prompt, purpose=purpose)
             except Exception as e:
                 update_observation(
                     generation, level="ERROR", status_message=f"{type(e).__name__}: {e}"

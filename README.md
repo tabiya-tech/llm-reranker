@@ -180,6 +180,8 @@ RERANKER_LLM_MODEL=my-model-v1
 RERANKER_LLM_API_KEY=...
 ```
 
+**Structured output.** Each pass also builds a JSON Schema for its reply (`app/job_ranking/response_schemas.py`), with the prompt's menus — candidate skill labels, attribute level ids, ONET ids — as enums, so the model can only answer with values it was offered. A client that sets `supports_response_schema = True` receives it as `generate_json(..., response_schema=...)`; Gemini sends it as `response_json_schema`. Clients that leave the flag unset keep the two-argument signature above and get the prose contract only. `RERANKER_LLM_RESPONSE_SCHEMA=false` withholds the schema everywhere.
+
 The contract is in `app/llm/base.py`: return raw text (fenced ```json is tolerated — every parser strips fences), never return an empty string, raise `LlmConfigurationError` for anything a retry cannot fix and `LlmInvocationError` for a failed call. Clients are built once per process and shared across `RERANKER_PARALLEL_WORKERS` threads, so they must be thread-safe. `app/llm/retry.py` provides the transient-failure retry the shipped providers use. A third exception, `LlmParseError` (`app/llm/errors.py`), is raised by the reranker itself — not by providers — when a model responds but its JSON does not parse or match the expected shape; see [Errors and logging](#errors-and-logging).
 
 **Misconfiguration fails at startup**, not one job at a time: both `main.py` and the API build the client before reading MongoDB, so an unknown provider, an unimportable class, a class that is not an `LlmClient`, a missing model id, or a missing key stops the run with a message naming the variable to fix.

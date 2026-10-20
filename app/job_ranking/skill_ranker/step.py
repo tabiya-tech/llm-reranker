@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from app.job_context import JobDescriptionContext
+from app.job_ranking.response_schemas import skill_ranker_response_schema
 from app.job_ranking.skill_ranker.parser import SkillRankerResponseParser
 from app.job_ranking.skill_ranker.prompt import (
     SkillRankerPromptBuilder,
@@ -63,7 +64,11 @@ class SkillRankerStep:
         prompt = self._prompts.build(full_details, skill_dicts)
         if prompt_logging.llm1:
             self._log_prompt(prompt_logging.label, full_details, skill_dicts, prompt)
-        raw = self._llm.generate_json(prompt, purpose=PURPOSE_SKILL_RANKER)
+        raw = self._llm.generate_json(
+            prompt,
+            purpose=PURPOSE_SKILL_RANKER,
+            response_schema=skill_ranker_response_schema(d["label"] for d in skill_dicts),
+        )
         return self._parser.parse(raw, candidates)
 
     @staticmethod

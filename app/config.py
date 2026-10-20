@@ -508,6 +508,8 @@ class Settings(BaseSettings):
     # Historical alias consulted when ``RERANKER_LLM_MAX_ATTEMPTS`` is unset.
     gemini_transient_max_attempts: int | None = None
     reranker_llm_options: str = ""
+    # Send each pass's JSON Schema to clients that support structured output.
+    reranker_llm_response_schema: bool = True
 
     # gemini_api_key (the property) is read directly by the job-embedding step, which
     # always uses Gemini regardless of RERANKER_LLM_PROVIDER.
@@ -806,6 +808,7 @@ class Settings(BaseSettings):
             timeout_s=self.reranker_llm_timeout_s,
             max_attempts=max_attempts,
             options_json=self.reranker_llm_options.strip(),
+            response_schema=self.reranker_llm_response_schema,
         )
 
     @cached_property

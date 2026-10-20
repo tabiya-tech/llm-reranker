@@ -31,6 +31,23 @@ from app.taxonomy.repository import TaxonomyRepository
 from app.taxonomy.service import TaxonomyService
 from app.taxonomy.types import TaxonomyContext
 from utils.classifier_linked_entities import EscoSkillCandidate, MappedEscoSkills
+from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap
+
+
+def empty_taxonomy() -> TaxonomyContext:
+    """A taxonomy with no rows: enough to build the service and its steps."""
+    return TaxonomyContext(
+        occ_map={},
+        csv_skill_labels=None,
+        occ_skill_relation=None,
+        occ_skill_signalling=None,
+        occ_bridge={},
+        occ_all_ids=frozenset(),
+        skills_uuid_tabiya_map=SkillsUuidTabiyaMap(),
+        skill_desc_by_esco={},
+        occ_label_by_esco={},
+        occ_desc_by_esco={},
+    )
 
 
 def classified_doc() -> dict[str, Any]:
