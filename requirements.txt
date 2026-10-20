@@ -5,6 +5,8 @@ python-dotenv>=1.0.0
 certifi>=2024.0.0
 # >=2.31: latest version tested (response_json_schema / thinking_level need >=1.51)
 google-genai>=2.31.0
+# LLM reply shapes (app/response_schemas.py), as in compass-connect
+pydantic>=2.13.0
 httpx>=0.27.0
 fastapi>=0.115.0
 uvicorn>=0.34.0
