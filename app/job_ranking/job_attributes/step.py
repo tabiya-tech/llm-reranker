@@ -25,6 +25,7 @@ from app.job_ranking.prompts.job_listing import (
     build_job_attributes_jd_text,
     build_job_attributes_metadata_block,
 )
+from app.job_ranking.response_schemas import job_attributes_response_schema
 from app.job_ranking.types import (
     NO_PROMPT_LOGGING,
     PROMPT_LOG_SEPARATOR,
@@ -76,7 +77,15 @@ class JobAttributesStep:
         prompt = self._prompts.build(ctx, occupation)
         if prompt_logging.llm2:
             self._log_prompt(prompt_logging.label, ctx, occupation, prompt)
-        raw = self._llm.generate_json(prompt, purpose=PURPOSE_JOB_ATTRIBUTES)
+        raw = self._llm.generate_json(
+            prompt,
+            purpose=PURPOSE_JOB_ATTRIBUTES,
+            response_schema=job_attributes_response_schema(
+                self._prompts.schema,
+                self._prompts.onet,
+                requires_post_secondary=self._settings.target_country == "kenya",
+            ),
+        )
         return self._parser.parse(raw)
 
     def _log_prompt(

@@ -18,8 +18,7 @@ from app.job_ranking.routes.types import (
     normalize_mongo_extended_json as _normalize_mongo_extended_json,
 )
 from app.taxonomy.repository import TaxonomyRepository
-from app.taxonomy.types import TaxonomyContext
-from utils.uuid_to_tabiya_id import SkillsUuidTabiyaMap
+from tests.ranking_fakes import empty_taxonomy
 
 # ---------------------------------------------------------------------------
 # _normalize_mongo_extended_json
@@ -82,28 +81,12 @@ class TestNormalizeMongoExtendedJson:
 # ---------------------------------------------------------------------------
 
 
-def _empty_taxonomy() -> TaxonomyContext:
-    """A taxonomy with no rows: enough for the lifespan to build and warm the service."""
-    return TaxonomyContext(
-        occ_map={},
-        csv_skill_labels=None,
-        occ_skill_relation=None,
-        occ_skill_signalling=None,
-        occ_bridge={},
-        occ_all_ids=frozenset(),
-        skills_uuid_tabiya_map=SkillsUuidTabiyaMap(),
-        skill_desc_by_esco={},
-        occ_label_by_esco={},
-        occ_desc_by_esco={},
-    )
-
-
 def test_health_endpoint_returns_ok(make_settings, monkeypatch):
     """FastAPI lifespan boots when taxonomy load is stubbed."""
     # The real repository needs the full resources/CSVs; it is replaced with an empty
     # taxonomy and a Gemini key (lifespan refuses to start without one).
     make_settings(GEMINI_API_KEY="dummy-key", TARGET_COUNTRY="kenya")
-    monkeypatch.setattr(TaxonomyRepository, "load", lambda self, settings: _empty_taxonomy())
+    monkeypatch.setattr(TaxonomyRepository, "load", lambda self, settings: empty_taxonomy())
 
     from fastapi.testclient import TestClient
 

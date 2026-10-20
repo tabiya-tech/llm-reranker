@@ -18,6 +18,7 @@ from app.job_ranking.occupation_skills.prompt import (
 from app.job_ranking.occupation_skills.types import (
     OccupationSkillsRelevanceResult,
 )
+from app.job_ranking.response_schemas import occupation_skills_relevance_response_schema
 from app.job_ranking.types import (
     NO_PROMPT_LOGGING,
     PROMPT_LOG_SEPARATOR,
@@ -61,5 +62,9 @@ class OccupationSkillsRelevanceStep:
             )
             logger.info("LLM3 assembled prompt (%s chars):\n%s", len(prompt), prompt)
             logger.info("%s", PROMPT_LOG_SEPARATOR)
-        raw = self._llm.generate_json(prompt, purpose=PURPOSE_OCCUPATION_SKILLS_RELEVANCE)
+        raw = self._llm.generate_json(
+            prompt,
+            purpose=PURPOSE_OCCUPATION_SKILLS_RELEVANCE,
+            response_schema=occupation_skills_relevance_response_schema(menu_items),
+        )
         return self._parser.parse(raw)

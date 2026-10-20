@@ -126,6 +126,9 @@ class LlmConfig:
     max_attempts: int = 5
     # Provider-specific extras as a JSON object string (e.g. ``{"top_p": 0.9}``).
     options_json: str = ""
+    # Send each pass's JSON Schema to clients that support structured output
+    # (``LlmClient.supports_response_schema``). Off = prose contract + JSON mode only.
+    response_schema: bool = True
 
     def options(self) -> dict[str, Any]:
         """Parse ``options_json`` into a dict; a malformed value is a configuration error."""
@@ -192,7 +195,15 @@ class LlmClient(ABC):
     * raise :class:`~app.llm.errors.LlmConfigurationError` for anything a retry
       cannot fix (bad credentials, unknown model id) and
       :class:`~app.llm.errors.LlmInvocationError` for a failed call.
+
+    Structured output is opt-in: a client that sets ``supports_response_schema`` is
+    called with ``response_schema=`` (a JSON Schema dict, or ``None``) and should
+    constrain decoding to it. Clients that leave it ``False`` keep the two-argument
+    ``generate_json`` signature and are never passed a schema.
     """
+
+    #: Whether ``generate_json`` accepts a ``response_schema`` keyword (see above).
+    supports_response_schema: bool = False
 
     def __init__(self, config: LlmConfig) -> None:
         self.config = config

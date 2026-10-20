@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
@@ -28,6 +29,8 @@ class GeminiLlmClient(LlmClient):
     Holds one ``genai.Client`` for the process, rebuilt after a transient failure
     so a retry does not reuse a half-dead connection pool.
     """
+
+    supports_response_schema = True
 
     def __init__(self, config: LlmConfig) -> None:
         super().__init__(config)
@@ -81,9 +84,24 @@ class GeminiLlmClient(LlmClient):
     def close(self) -> None:
         self._reset_client()
 
-    def generate_json(self, prompt: str, *, purpose: str = "") -> str:
+    def _config_for(
+        self, response_schema: dict[str, Any] | None
+    ) -> genai_types.GenerateContentConfig:
+        """The shared config, plus ``response_json_schema`` when the call has one."""
+        if response_schema is None:
+            return self._generate_config
+        return self._generate_config.model_copy(update={"response_json_schema": response_schema})
+
+    def generate_json(
+        self,
+        prompt: str,
+        *,
+        purpose: str = "",
+        response_schema: dict[str, Any] | None = None,
+    ) -> str:
         model = self.config.model
         label = f"Gemini[{purpose or 'json'}]"
+        generate_config = self._config_for(response_schema)
 
         def _once() -> object:
             client = self._client()
@@ -91,7 +109,7 @@ class GeminiLlmClient(LlmClient):
                 response = client.models.generate_content(
                     model=model,
                     contents=prompt,
-                    config=self._generate_config,
+                    config=generate_config,
                 )
             except Exception as e:
                 msg = str(e)

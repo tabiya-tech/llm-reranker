@@ -396,6 +396,117 @@ class TestGradingCodeUsesTheConfiguredModel:
         assert meta["job_attributes_model"] == "gemini-2.5-flash"
 
 
+class SchemaAwareLlmClient(LlmClient):
+    """Opts into structured output; records the schema each pass sent."""
+
+    supports_response_schema = True
+    seen: list[tuple[str, dict | None]] = []
+    reply = "{}"
+
+    def generate_json(self, prompt: str, *, purpose: str = "", response_schema=None) -> str:
+        SchemaAwareLlmClient.seen.append((purpose, response_schema))
+        return SchemaAwareLlmClient.reply
+
+
+class TestResponseSchemaRouting:
+    SCHEMA = {"type": "object"}
+
+    def _call_all(self, s) -> None:
+        from app.llm import build_traced_llm_client
+
+        llm = build_traced_llm_client(s.llm)
+        for purpose in ("skill_ranker", "job_attributes", "occupation_skills_relevance"):
+            llm.generate_json("p", purpose=purpose, response_schema=self.SCHEMA)
+
+    def test_schema_reaches_a_client_that_supports_it(self, make_settings):
+        SchemaAwareLlmClient.seen = []
+        self._call_all(
+            make_settings(
+                RERANKER_LLM_CLIENT_CLASS="tests.test_llm_provider:SchemaAwareLlmClient",
+                RERANKER_LLM_MODEL="m",
+            )
+        )
+        assert [schema for _, schema in SchemaAwareLlmClient.seen] == [self.SCHEMA] * 3
+
+    def test_schema_is_withheld_when_switched_off(self, make_settings):
+        SchemaAwareLlmClient.seen = []
+        self._call_all(
+            make_settings(
+                RERANKER_LLM_CLIENT_CLASS="tests.test_llm_provider:SchemaAwareLlmClient",
+                RERANKER_LLM_MODEL="m",
+                RERANKER_LLM_RESPONSE_SCHEMA="false",
+            )
+        )
+        assert [schema for _, schema in SchemaAwareLlmClient.seen] == [None] * 3
+
+    def test_a_client_without_support_keeps_the_two_argument_call(self, make_settings):
+        """``RecordingLlmClient.generate_json`` takes no ``response_schema``; it must not get one."""
+        RecordingLlmClient.seen = []
+        self._call_all(
+            make_settings(
+                RERANKER_LLM_CLIENT_CLASS="tests.test_llm_provider:RecordingLlmClient",
+                RERANKER_LLM_MODEL="m",
+            )
+        )
+        assert len(RecordingLlmClient.seen) == 3
+
+    def test_skill_ranker_sends_the_candidate_labels_as_an_enum(self, make_settings, monkeypatch):
+        from app.job_context import JobDescriptionContext
+        from app.job_ranking.prompts.repository import PromptRepository
+        from app.job_ranking.skill_ranker.parser import SkillRankerResponseParser
+        from app.job_ranking.skill_ranker.prompt import SkillRankerPromptBuilder
+        from app.job_ranking.skill_ranker.step import SkillRankerStep
+        from app.llm import build_traced_llm_client
+        from tests.ranking_fakes import empty_taxonomy
+        from utils.classifier_linked_entities import EscoSkillCandidate
+
+        SchemaAwareLlmClient.seen = []
+        monkeypatch.setattr(
+            SchemaAwareLlmClient, "reply", '{"essential_skills": ["Python"], "optional_skills": []}'
+        )
+        s = make_settings(
+            RERANKER_LLM_CLIENT_CLASS="tests.test_llm_provider:SchemaAwareLlmClient",
+            RERANKER_LLM_MODEL="m",
+        )
+        step = SkillRankerStep(
+            build_traced_llm_client(s.llm),
+            SkillRankerPromptBuilder(PromptRepository().load(s)),
+            SkillRankerResponseParser(),
+            empty_taxonomy(),
+        )
+        ctx = JobDescriptionContext(
+            job_id="J-1",
+            job_fingerprint=None,
+            title="Engineer",
+            employer=None,
+            category=None,
+            application_url=None,
+            posted_date=None,
+            closing_date=None,
+            source_platform=None,
+            raw_job_description="Write Python.",
+            requirements_text=None,
+            salary=None,
+            city=None,
+            county=None,
+            employment_type=None,
+            classified={"_id": "doc-1"},
+        )
+        result = step.run(
+            ctx,
+            [
+                EscoSkillCandidate(label="Python", uri="u1"),
+                EscoSkillCandidate(label="Weld metal", uri="u2"),
+            ],
+        )
+        assert result.essential == ["Python"]
+        ((purpose, schema),) = SchemaAwareLlmClient.seen
+        assert purpose == "skill_ranker"
+        assert schema is not None
+        items = schema["properties"]["essential_skills"]["items"]
+        assert items["enum"] == ["Python", "Weld metal"]
+
+
 # ---------------------------------------------------------------------------
 # Gemini provider (SDK stubbed)
 # ---------------------------------------------------------------------------
@@ -467,6 +578,26 @@ class TestGeminiClient:
         assert call["contents"] == "prompt"
         assert call["config"].temperature == 0.2
         assert call["config"].response_mime_type == "application/json"
+
+    def test_response_schema_is_sent_as_response_json_schema(self, monkeypatch):
+        client = GeminiLlmClient(
+            LlmConfig(
+                provider="gemini",
+                client_class=PROVIDER_CLASS_PATHS["gemini"],
+                model="gemini-2.5-flash",
+                api_key="k",
+            )
+        )
+        schema = {"type": "object", "properties": {"a": {"type": "string", "enum": ["x"]}}}
+        models = _stub_gemini(monkeypatch, client, ['{"a": "x"}', '{"a": "x"}'])
+        client.generate_json("p", response_schema=schema)
+        client.generate_json("p")
+        with_schema, without = models.calls
+        assert with_schema["config"].response_json_schema == schema
+        assert with_schema["config"].response_mime_type == "application/json"
+        assert with_schema["config"].temperature == 0.2
+        assert without["config"].response_json_schema is None
+        assert client._generate_config.response_json_schema is None
 
     def test_options_and_token_cap_reach_the_generate_config(self):
         client = GeminiLlmClient(
