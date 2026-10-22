@@ -49,7 +49,7 @@ app/
 │   ├── skill_ranker/                LLM 1: prompt.py, parser.py, step.py, types.py
 │   ├── job_attributes/              LLM 2: prompt.py, parser.py, step.py, types.py, repository.py (schema, ONET)
 │   ├── occupation_skills/           taxonomy_step.py, menu.py (LLM 3 menu), LLM 3 prompt / parser / relevance_step
-│   ├── prompts/                     PromptTemplates, PromptRepository (prompt files), shared job-ad text
+│   ├── prompts/                     PromptTemplates, PromptRepository (resources/prompts/), render, shared job-ad text
 │   └── ranked_document.py           RankedJobDocumentAssembler: the ranked job document
 ├── taxonomy/                        Per-language taxonomy: CSV loaders, TaxonomyRepository, TaxonomyService (cache)
 ├── batch/                           A batch run: BatchRankingService, BatchJobRanker, BatchPostSteps, provider
@@ -253,10 +253,11 @@ lifecycle, the collections, and how to add a query.
 
 `TARGET_COUNTRY` (`zambia` | `kenya` | `south_africa` | `argentina`) is the batch/state
 key and picks the country name used in the prompts. `RERANKER_LANGUAGE` (`en` | `es`) picks
-the **language pack**: the taxonomy label CSVs, the prompt files, and the job-attribute
-schema. Everything else that varies is env-driven, so **one image serves every country and
-every language** — the GCP Workflow supplies the differences as env overrides on each Cloud
-Run Job execution.
+the **language pack** (the taxonomy label CSVs and the job-attribute schema) and the
+language the model answers in. The prompts themselves are shared by every country and
+language (see [Prompts](#prompts)). Everything else that varies is env-driven, so **one
+image serves every country and every language** — the GCP Workflow supplies the
+differences as env overrides on each Cloud Run Job execution.
 
 Language resolution, most specific first:
 
@@ -274,11 +275,12 @@ resources/
   concat_whitening_gemini.npz     language-neutral (embeddings, not text)
   en/                             English pack
     occupations.csv  skills.csv  occupation_to_skill_relations.csv  skill_hierarchy.csv
-    prompts.py  Skills_reranker_prompts.md  job_attributes_reduced.json
+    job_attributes_reduced.json
     ONET_tasks_WAs_translated.json  combined_occupation_database_with_wa.json
   es/                             Argentine Spanish pack (Tabiya ESCO 1.1.1, locale AR-es)
     occupations.csv  skills.csv  occupation_to_skill_relations.csv  skill_hierarchy.csv
-    prompts.py  Skills_reranker_prompts.md  job_attributes_reduced.json  model_info.csv
+    job_attributes_reduced.json  model_info.csv
+  prompts/                        prompt templates, shared by every country and language
 ```
 
 Each file is looked up in `resources/<language>/`, then `resources/en/`, then `resources/`.
@@ -292,30 +294,47 @@ Spanish-linked skill resolve to the same entity downstream —
 `tests/test_language_resources.py` asserts that the two packs share one skill id space,
 along with presence, required columns, and the declared locale.
 
-What is *not* translated, on purpose: the JSON response contract in the LLM2/LLM3 prompts.
-Its keys (`attribute_name`, `selected_level_id`, …), the attribute `name`s, and the level
-ids are identifiers the model must copy verbatim, and a translated contract invites
-translated keys back. The human-facing framing around it is translated
-(`prompt_labels` in `app/languages/<lang>_config.py`).
+### Prompts
+
+Each LLM call has one template in `resources/prompts/`, written once in English:
+
+| Template | LLM call |
+|---|---|
+| `skill_ranker.md` | LLM1, skill ranking |
+| `job_attributes.md` | LLM2, job attributes + ONET work activities |
+| `occupation_skills_relevance.md` | LLM3, occupation-skill relevance |
+| `answer_language.md` | added to every prompt when the language is not English |
+
+A template is `str.format` text: `{slot}` is filled by that call's prompt builder
+(`app/job_ranking/*/prompt.py`), and a literal brace is doubled, as in the JSON examples.
+A slot no builder supplies raises `KeyError`, which `tests/test_prompt_templates.py`
+catches. To change what the model is told, edit the template;
+`tests/test_prompt_snapshots.py` then shows the exact prompt diff
+(`pytest tests/test_prompt_snapshots.py --snapshot-update` accepts it).
+
+A non-English run uses the same templates plus `answer_language.md`: answer in the run's
+language and copy every label and id exactly as given. The skill and occupation labels in
+the menus come from that language's taxonomy CSVs, and identifiers (JSON keys, attribute
+`name`s, level ids) are never translated.
 
 ### Adding a language
 
 1. Add the code to `LANGUAGE_REGISTRY` in `app/languages/__init__.py`.
 2. Copy `app/languages/es_config.py` to `<code>_config.py`; set its locales,
-   `taxonomy_locale`, `prompt_language` and `prompt_labels`.
+   `taxonomy_locale` and `prompt_language` (the language name the model is told to
+   answer in).
 3. Build the taxonomy half of the pack from a taxonomy CSV export:
 
 ```bash
 python scripts/build_language_resources.py --taxonomy-dir <export-dir> --language <code>
 ```
 
-   The script validates the columns each loader reads by name and reports which prompt
-   files still need translating.
+   The script validates the columns each loader reads by name.
 
-4. Translate `prompts.py`, `Skills_reranker_prompts.md` and `job_attributes_reduced.json`
-   from `resources/en/`. Until you do, that language falls back to the English prompts —
-   the model would be instructed in English over a non-English skill menu.
-5. If the language belongs to a new country, add it to `LANGUAGE_BY_COUNTRY`.
+4. Translate `job_attributes_reduced.json` from `resources/en/`. The prompts need no
+   translation: they are shared, and the model is told to answer in the new language.
+5. If the language belongs to a new country, add it to `LANGUAGE_BY_COUNTRY`, or set
+   `RERANKER_LANGUAGE` on that country's deployment.
 
 ### Argentina
 

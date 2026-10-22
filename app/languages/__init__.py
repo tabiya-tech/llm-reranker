@@ -11,9 +11,10 @@ One deployed image ranks jobs in any registered language. The language is an *in
 
 What the language selects:
 
-* the resource pack under ``resources/<language>/`` — taxonomy label CSVs, the prompt
-  files, and the job-attributes schema;
-* the language the prompts instruct the model to answer in.
+* the resource pack under ``resources/<language>/`` — taxonomy label CSVs and the
+  job-attributes schema;
+* the language the model is told to answer in. The prompt templates themselves are shared
+  by every language (``resources/prompts/``).
 
 Each registered language has an ``app/languages/{lang}_config.py`` exporting
 ``LANGUAGE_CONFIG``; same shape as ``scraper/config/{country}_config.py``.

@@ -110,75 +110,31 @@ class TestSettingsLanguage:
 
 
 class TestPrompts:
-    def test_spanish_prompts_come_from_the_spanish_pack(self, make_settings):
-        from app.job_ranking.prompts.repository import (
-            load_job_attributes_system_prompt,
-            load_skills_ranker_prompt_template,
-        )
+    def test_spanish_run_is_told_to_answer_in_spanish(self, make_settings):
+        from app.job_ranking.prompts.render import answer_language_slot
+        from app.job_ranking.prompts.repository import PromptRepository
 
         s = make_settings(RERANKER_LANGUAGE="es", TARGET_COUNTRY="argentina")
-        system = load_job_attributes_system_prompt(s)
-        skills = load_skills_ranker_prompt_template(s)
+        block = answer_language_slot(PromptRepository().load(s), s)
 
-        # Spanish text, with the country substituted and the language stated.
-        assert "analista experto del mercado laboral" in system
-        assert "Argentina" in system
-        assert "Responde en Spanish." in system
-        # LLM1 must be told to copy the Spanish labels verbatim.
-        assert "reclutador técnico experto" in skills
-        # The template's runtime placeholders survive extraction.
-        assert "{full_details}" in skills and "{skills_text}" in skills
+        assert block.startswith("\n\nAnswer in Spanish.")
+        # The menus carry Spanish taxonomy labels the model must return unchanged.
+        assert "do not translate" in block
 
-    def test_english_prompts_are_unchanged(self, make_settings):
-        from app.job_ranking.prompts.repository import load_job_attributes_system_prompt
+    def test_english_run_gets_no_language_block(self, make_settings):
+        from app.job_ranking.prompts.render import answer_language_slot
+        from app.job_ranking.prompts.repository import PromptRepository
 
         s = make_settings(TARGET_COUNTRY="kenya")
-        system = load_job_attributes_system_prompt(s)
-        assert system.startswith("You are an expert labor market analyst")
-        assert "Kenya" in system
+        assert answer_language_slot(PromptRepository().load(s), s) == ""
 
-    def test_llm2_scaffolding_is_translated(self, make_settings):
-        from app.job_context import JobDescriptionContext
-        from app.job_ranking.job_attributes.prompt import (
-            llm2_opening_line_from_context,
-            prompt_label,
-        )
-        from app.job_ranking.routes.types import RankRequest
+    def test_every_language_shares_the_english_templates(self, make_settings):
+        from app.job_ranking.prompts.repository import PromptRepository
 
-        s = make_settings(RERANKER_LANGUAGE="es", TARGET_COUNTRY="argentina")
-        ctx = JobDescriptionContext(
-            job_id=None,
-            job_fingerprint=None,
-            title="Cocinero",
-            employer=None,
-            category=None,
-            application_url=None,
-            posted_date=None,
-            closing_date=None,
-            source_platform=None,
-            raw_job_description=None,
-            requirements_text=None,
-            salary=None,
-            city="Buenos Aires",
-            county=None,
-            employment_type=None,
-            classified=RankRequest.model_validate({}),
-        )
-        opening = llm2_opening_line_from_context(ctx, settings=s)
-        assert opening == (
-            "Estimá los atributos del puesto para la siguiente ocupación en "
-            "Buenos Aires, Argentina:"
-        )
-        assert prompt_label("occupation", s) == "Ocupación"
-        # Kenya's KESCO label must not leak into an Argentine prompt.
-        assert prompt_label("code", s) == "Código de la taxonomía"
-
-    def test_missing_label_falls_back_to_english(self, make_settings):
-        from app.job_ranking.job_attributes.prompt import prompt_label
-
-        s = make_settings(RERANKER_LANGUAGE="es")
-        # A key no pack defines resolves to itself rather than raising.
-        assert prompt_label("not_a_real_label", s) == "not_a_real_label"
+        en = PromptRepository().load(make_settings(TARGET_COUNTRY="kenya"))
+        es = PromptRepository().load(make_settings(RERANKER_LANGUAGE="es"))
+        assert en == es
+        assert en.job_attributes.startswith("You are an expert labor market analyst")
 
 
 class TestTranslationPreference:

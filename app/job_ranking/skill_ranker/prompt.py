@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.config import Settings
+from app.job_ranking.prompts.render import answer_language_slot, render_prompt
 from app.job_ranking.prompts.templates import PromptTemplates
 from utils.classifier_linked_entities import SkillPromptEntry
 
@@ -18,29 +20,37 @@ def _format_labeled_list(potential_skills: list[SkillPromptEntry]) -> str:
 
 
 def format_skill_ranker_skills_text(potential_skills: list[SkillPromptEntry]) -> str:
-    """The ``skills_text`` argument passed to ``str.format`` for ``Skills_reranker_prompts.md``."""
+    """The ``{skills_text}`` slot of ``resources/prompts/skill_ranker.md``."""
     return _format_labeled_list(potential_skills)
 
 
 def build_skill_ranker_prompt(
-    template: str,
+    templates: PromptTemplates,
+    settings: Settings,
     full_details: str,
     potential_skills: list[SkillPromptEntry],
 ) -> str:
     """
-    Skill ranker user message from ``template`` (``resources/Skills_reranker_prompts.md``).
+    Skill ranker prompt from ``resources/prompts/skill_ranker.md``.
 
     ``potential_skills``: label and optional description (no URIs or scores).
     """
-    skills_text = _format_labeled_list(potential_skills)
-    return template.format(full_details=full_details, skills_text=skills_text)
+    return render_prompt(
+        templates.skill_ranker,
+        full_details=full_details,
+        skills_text=_format_labeled_list(potential_skills),
+        answer_language=answer_language_slot(templates, settings),
+    )
 
 
 class SkillRankerPromptBuilder:
     """LLM call 1: the job ad's full details plus the candidate skill menu."""
 
-    def __init__(self, templates: PromptTemplates):
-        self._template = templates.skill_ranker
+    def __init__(self, templates: PromptTemplates, settings: Settings):
+        self._templates = templates
+        self._settings = settings
 
     def build(self, full_details: str, potential_skills: list[SkillPromptEntry]) -> str:
-        return build_skill_ranker_prompt(self._template, full_details, potential_skills)
+        return build_skill_ranker_prompt(
+            self._templates, self._settings, full_details, potential_skills
+        )
