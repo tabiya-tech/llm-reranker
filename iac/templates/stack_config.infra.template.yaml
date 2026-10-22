@@ -40,6 +40,16 @@ config:
   # TARGET_COUNTRY=argentina implies RERANKER_LANGUAGE=es and the resources/es/ pack;
   # set RERANKER_LANGUAGE only to break that pairing.
   #
+  # A Kenya stack also asks LLM2 its extra question (see app/SETTINGS.md); the text is
+  # docs/llm2_extra_fields/kenya_requires_post_secondary.md:
+  #
+  #   tabiya-horizon-reranker-infra:extraEnv:
+  #     TARGET_COUNTRY: kenya
+  #     RERANKER_LLM2_EXTRA_FIELDS: requires_post_secondary
+  #     RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY: |
+  #       whether this **specific job advertisement** requires
+  #       ...
+  #
   # Optional — secret-backed env vars for the Cloud Run Job, as a YAML mapping of env
   # name to "<secretId>" or "<secretId>:<version>". Also left out of the template on
   # purpose. Use it for credentials, which must not go in extraEnv as plaintext. The

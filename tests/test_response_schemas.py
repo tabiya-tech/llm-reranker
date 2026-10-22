@@ -107,15 +107,16 @@ class TestJobAttributesSchema:
         attrs = job_attributes_response_schema(_attrs_schema(), _onet())["properties"]["attributes"]
         assert (attrs["minItems"], attrs["maxItems"]) == (2, 2)
 
-    def test_kenya_flag_only_when_asked_for(self):
+    def test_extra_fields_only_when_configured(self):
         plain = job_attributes_response_schema(_attrs_schema(), _onet())
         assert "requires_post_secondary" not in plain["properties"]
         assert "requires_post_secondary" not in plain["required"]
-        kenya = job_attributes_response_schema(
-            _attrs_schema(), _onet(), requires_post_secondary=True
+        extra = job_attributes_response_schema(
+            _attrs_schema(), _onet(), extra_fields=["requires_post_secondary", "needs_license"]
         )
-        assert kenya["properties"]["requires_post_secondary"] == {"type": "boolean"}
-        assert "requires_post_secondary" in kenya["required"]
+        for name in ("requires_post_secondary", "needs_license"):
+            assert extra["properties"][name] == {"type": "boolean"}
+            assert name in extra["required"]
 
     def test_a_conforming_reply_parses(self, make_settings):
         reply = json.dumps(

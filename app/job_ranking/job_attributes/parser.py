@@ -32,8 +32,9 @@ def _normalize_confidence(raw: object) -> str:
     return "medium"
 
 
-def parse_requires_post_secondary(raw: object) -> bool:
-    """Kenya eligibility flag from LLM2 JSON; omitted or unparseable -> ``false``."""
+def parse_extra_field_flag(raw: object) -> bool:
+    """One of the deployment's extra LLM2 booleans (e.g. ``requires_post_secondary``);
+    omitted or unparseable -> ``false``."""
     if raw is None:
         return False
     return json_bool(raw, default=False)
@@ -55,8 +56,9 @@ def parse_job_attributes_response(
 
     ``summary`` is optional text; ``work_activities`` is a list of allowed ONET ids.
 
-    When present, ``requires_post_secondary`` (boolean) is stored on the flat ``attributes`` map
-    under that key for downstream matching eligibility (Kenya pipeline).
+    Each of the deployment's extra fields (:attr:`Settings.job_attributes_extra_fields`, e.g.
+    Kenya's ``requires_post_secondary``) is stored as a boolean on the flat ``attributes`` map
+    under its own key, for downstream matching eligibility.
     """
     cleaned = strip_json_fence(raw_text)
     data = parse_llm_json_response(raw_text)
@@ -107,10 +109,8 @@ def parse_job_attributes_response(
 
     estimates = tuple(by_name[a.name] for a in schema.attributes if a.name in by_name)
     flat: dict[str, str | bool] = {e.attribute_name: e.selected_level_id for e in estimates}
-    if settings.target_country == "kenya":
-        flat["requires_post_secondary"] = parse_requires_post_secondary(
-            parsed.requires_post_secondary
-        )
+    for field in settings.job_attributes_extra_fields:
+        flat[field.name] = parse_extra_field_flag(data.get(field.name))
     summary_raw = parsed.summary
     summary = str(summary_raw).strip() if summary_raw is not None else ""
 

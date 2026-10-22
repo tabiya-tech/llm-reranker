@@ -101,9 +101,6 @@ class JobAttributesLlmResponse(SourceRecord):
     work_activities: list[Any] = Field(
         default_factory=list, description="Candidate ONET work-activity ids."
     )
-    requires_post_secondary: Any = Field(
-        default=None, description="Kenya eligibility flag, loosely typed."
-    )
 
 
 class RelevanceDecisionRaw(SourceRecord):

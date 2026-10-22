@@ -197,6 +197,33 @@ class TestTargetCountry:
         assert make_settings(TARGET_COUNTRY="narnia").target_country == "zambia"
 
 
+class TestJobAttributesExtraFields:
+    def test_none_by_default(self, make_settings):
+        # Kenya too: the extra question comes from the deployment's env, not the country.
+        assert make_settings(TARGET_COUNTRY="kenya").job_attributes_extra_fields == ()
+
+    def test_names_with_their_instructions(self, make_settings):
+        s = make_settings(
+            RERANKER_LLM2_EXTRA_FIELDS=" requires_post_secondary , needs_license,",
+            RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY="\nwhether a degree is needed.\n",
+            RERANKER_LLM2_EXTRA_FIELD_NEEDS_LICENSE="whether a licence is needed.",
+        )
+        fields = s.job_attributes_extra_fields
+        assert [f.name for f in fields] == ["requires_post_secondary", "needs_license"]
+        # Surrounding newlines are trimmed; the text is otherwise kept as written.
+        assert fields[0].instructions == "whether a degree is needed."
+
+    def test_listed_field_without_instructions_fails(self, make_settings):
+        s = make_settings(RERANKER_LLM2_EXTRA_FIELDS="requires_post_secondary")
+        with pytest.raises(ValueError, match="RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY"):
+            _ = s.job_attributes_extra_fields
+
+    def test_name_must_be_a_lowercase_identifier(self, make_settings):
+        s = make_settings(RERANKER_LLM2_EXTRA_FIELDS="Requires-Degree")
+        with pytest.raises(ValueError, match="lowercase identifier"):
+            _ = s.job_attributes_extra_fields
+
+
 class TestOccupationRelationLookup:
     def test_default_is_tabiya_bridge(self, make_settings):
         s = make_settings()

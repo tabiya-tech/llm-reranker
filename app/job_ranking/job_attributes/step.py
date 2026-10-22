@@ -83,7 +83,7 @@ class JobAttributesStep:
             response_schema=job_attributes_response_schema(
                 self._prompts.schema,
                 self._prompts.onet,
-                requires_post_secondary=self._settings.target_country == "kenya",
+                extra_fields=[f.name for f in self._prompts.extra_fields],
             ),
         )
         return self._parser.parse(raw)

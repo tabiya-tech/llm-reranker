@@ -312,6 +312,18 @@ catches. To change what the model is told, edit the template;
 `tests/test_prompt_snapshots.py` then shows the exact prompt diff
 (`pytest tests/test_prompt_snapshots.py --snapshot-update` accepts it).
 
+A deployment can add extra yes/no questions to LLM2 without touching a template or the
+code. Kenya, for example, asks whether the job needs post-secondary education:
+
+```bash
+RERANKER_LLM2_EXTRA_FIELDS=requires_post_secondary
+RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY="<what the model is told; Kenya's text is in docs/llm2_extra_fields/kenya_requires_post_secondary.md>"
+```
+
+Each listed field gets a bullet in LLM2's response instructions, a key in its JSON example,
+a required boolean in its JSON Schema, and a boolean on `llm_job_attributes.attributes`.
+With the list empty, LLM2 gets the plain prompt. See `app/SETTINGS.md`.
+
 A non-English run uses the same templates plus `answer_language.md`: answer in the run's
 language and copy every label and id exactly as given. The skill and occupation labels in
 the menus come from that language's taxonomy CSVs, and identifiers (JSON keys, attribute

@@ -6,7 +6,7 @@ from typing import Any, Sequence
 
 from pydantic import Field
 
-from app.config import Settings
+from app.config import JobAttributeExtraField, Settings
 from app.domain_base import DomainModel
 from app.job_context import JobDescriptionContext
 from app.job_ranking.job_attributes.types import (
@@ -276,26 +276,14 @@ def _format_onet_work_activity_menu(onet: Sequence[OnetWorkActivity]) -> str:
     return "\n".join(lines)
 
 
-def _kenya_requires_post_secondary_prompt_block() -> str:
-    """LLM2 JSON contract addendum: Kenya education eligibility (stored on ranked job documents)."""
-    return """
-- `requires_post_secondary` (boolean): whether this **specific job advertisement** requires
-  education **beyond Kenya secondary school** (KCSE / Form 4 / O-Level completion).
+def _extra_field_instructions(fields: Sequence[JobAttributeExtraField]) -> str:
+    """The ``{extra_field_instructions}`` slot: one response-field bullet per extra field."""
+    return "".join(f"\n- `{f.name}` (boolean): {f.instructions}" for f in fields)
 
-  Set **`true`** when the listing explicitly requires any of:
-  - Certificate, diploma, higher diploma, or degree from a college, university, or TVET institution
-  - Named professional qualifications (e.g. CPA, ACCA, nursing registration, teaching certificate
-    from a post-secondary institution)
-  - "Graduate", "bachelor's", "master's", or equivalent post-secondary credentials
 
-  Set **`false`** when:
-  - Only KCSE, O-Level, Form 4, or "secondary education" is required or mentioned
-  - Only a KCSE grade is specified (e.g. "KCSE C+", "D plain and above") with no college/university qualification
-  - No education requirement is stated, or requirements are experience/skills only
-  - Requirements are unclear or ambiguous — prefer **`false`** rather than guessing
-
-  Do **not** treat generic phrases like "minimum qualification" or "relevant qualification" as post-secondary
-  unless the ad clearly points to certificate/diploma/degree-level study after secondary school."""
+def _extra_field_json(fields: Sequence[JobAttributeExtraField]) -> str:
+    """The ``{extra_field_json}`` slot: each extra field's key in the JSON example."""
+    return "".join(f',\n  "{f.name}": true' for f in fields)
 
 
 def build_job_attributes_prompt(
@@ -312,10 +300,11 @@ def build_job_attributes_prompt(
 ) -> str:
     """
     LLM call 2 from ``resources/prompts/job_attributes.md``: the occupation, the job ad, the
-    attribute menu, the ONET work-activity menu and the JSON contract.
+    attribute menu, the ONET work-activity menu and the JSON contract, plus the deployment's
+    extra fields (:attr:`Settings.job_attributes_extra_fields`; none gives the plain prompt).
     """
     fields = resolve_llm2_single_county_user_fields(occupation, extras)
-    kenya = settings.target_country == "kenya"
+    extra_fields = settings.job_attributes_extra_fields
     return render_prompt(
         templates.job_attributes,
         country=settings.country_name,
@@ -325,8 +314,8 @@ def build_job_attributes_prompt(
         listing_metadata=job_listing_metadata,
         attributes_menu=build_attribute_descriptions(schema),
         work_activities_menu=_format_onet_work_activity_menu(onet_work_activities),
-        extra_field_instructions=_kenya_requires_post_secondary_prompt_block() if kenya else "",
-        extra_field_json=',\n  "requires_post_secondary": true' if kenya else "",
+        extra_field_instructions=_extra_field_instructions(extra_fields),
+        extra_field_json=_extra_field_json(extra_fields),
         answer_language=answer_language_slot(templates, settings),
     )
 
@@ -342,6 +331,8 @@ class JobAttributesPromptBuilder:
         settings: Settings,
     ):
         self._templates = templates
+        # Read now so a misconfigured RERANKER_LLM2_EXTRA_FIELDS fails startup, not a job.
+        self.extra_fields = settings.job_attributes_extra_fields
         self.schema = schema
         self.onet = onet
         self._settings = settings

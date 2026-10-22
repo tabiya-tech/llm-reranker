@@ -15,7 +15,7 @@ parsers already discard values outside the menu.
 
 from __future__ import annotations
 
-from typing import Any, Generic, Iterable, Literal, TypeVar, cast
+from typing import Any, Generic, Iterable, Literal, Sequence, TypeVar, cast
 
 from pydantic import BaseModel, Field
 from pydantic.json_schema import GenerateJsonSchema, JsonSchemaValue
@@ -55,15 +55,6 @@ class JobAttributesResponse(BaseModel, Generic[AttributeName, LevelId, WorkActiv
     attributes: list[AttributeEstimate[AttributeName, LevelId]]
     summary: str
     work_activities: list[WorkActivityId] = Field(min_length=3, max_length=10)
-
-
-class KenyaJobAttributesResponse(
-    JobAttributesResponse[AttributeName, LevelId, WorkActivityId],
-    Generic[AttributeName, LevelId, WorkActivityId],
-):
-    """LLM2 for Kenya, which also asks whether the job needs post-secondary education."""
-
-    requires_post_secondary: bool
 
 
 class RelevanceDecision(BaseModel, Generic[SkillId, OccupationId]):
@@ -131,9 +122,10 @@ def job_attributes_response_schema(
     schema: JobAttributesSchema,
     onet: Iterable[OnetWorkActivity],
     *,
-    requires_post_secondary: bool = False,
+    extra_fields: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """LLM2: see :class:`JobAttributesResponse` (:class:`KenyaJobAttributesResponse` with the flag).
+    """LLM2: see :class:`JobAttributesResponse`, plus one required boolean per name in
+    ``extra_fields`` (the deployment's :attr:`Settings.job_attributes_extra_fields`).
 
     Level ids are the union across attributes; whether a level belongs to *its*
     attribute is left to :func:`app.job_ranking.job_attributes.parser.parse_job_attributes_response`, which keeps
@@ -142,10 +134,10 @@ def job_attributes_response_schema(
     names = _menu(a.name for a in schema.attributes)
     level_ids = _menu(lev.id for a in schema.attributes for lev in a.levels)
     wa_ids = _menu(x.wa_element_id for x in onet)
-    if requires_post_secondary:
-        out = _json_schema(KenyaJobAttributesResponse[names, level_ids, wa_ids])
-    else:
-        out = _json_schema(JobAttributesResponse[names, level_ids, wa_ids])
+    out = _json_schema(JobAttributesResponse[names, level_ids, wa_ids])
+    for name in extra_fields:
+        out["properties"][name] = {"type": "boolean"}
+        out["required"].append(name)
     # One estimate per attribute: the count is per call, so it is set on the schema.
     n_attrs = len(schema.attributes)
     if n_attrs:
