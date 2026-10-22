@@ -511,7 +511,7 @@ class TestResponseSchemaRouting:
         )
         step = SkillRankerStep(
             build_traced_llm_client(s.llm),
-            SkillRankerPromptBuilder(PromptRepository().load(s)),
+            SkillRankerPromptBuilder(PromptRepository().load(s), s),
             SkillRankerResponseParser(),
             empty_taxonomy(),
         )

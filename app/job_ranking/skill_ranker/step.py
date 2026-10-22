@@ -78,7 +78,7 @@ class SkillRankerStep:
         skills_text = format_skill_ranker_skills_text(skill_dicts)
         logger.info("%s", PROMPT_LOG_SEPARATOR)
         logger.info(
-            "LLM1 skill ranker | job=%s | template=resources/Skills_reranker_prompts.md | candidates=%s",
+            "LLM1 skill ranker | job=%s | template=resources/prompts/skill_ranker.md | candidates=%s",
             label,
             len(skill_dicts),
         )

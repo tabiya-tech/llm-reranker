@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 
+from app.config import Settings
 from app.job_context import JobDescriptionContext
 from app.job_ranking.prompts.job_listing import (
     build_job_attributes_jd_text,
     build_job_attributes_metadata_block,
 )
+from app.job_ranking.prompts.render import answer_language_slot, render_prompt
 from app.job_ranking.prompts.templates import PromptTemplates
 from app.job_ranking.routes.types import OccupationSkillsBlock
 
 
 def build_occupation_skills_relevance_prompt(
-    system: str,
+    templates: PromptTemplates,
+    settings: Settings,
     ctx: JobDescriptionContext,
     occupation_to_skills_items: list[OccupationSkillsBlock],
 ) -> str:
     """
-    LLM call 3: ``system`` + user message listing job ad context and occupation taxonomy skills
-    (essential / optional only). Model returns JSON ``decisions`` with ``is_relevant`` per skill.
+    LLM call 3 from ``resources/prompts/occupation_skills_relevance.md``: the job ad context and
+    the occupation taxonomy skills (essential / optional only). Model returns JSON ``decisions``
+    with ``is_relevant`` per skill.
     """
     jd = build_job_attributes_jd_text(ctx)
     meta = build_job_attributes_metadata_block(ctx)
@@ -42,50 +46,26 @@ def build_occupation_skills_relevance_prompt(
 
     menu = "\n".join(menu_lines).strip() or "(no essential or optional occupation skills to judge)"
 
-    user = f"""## Job listing (description and requirements)
-
-{jd}
-
-## Listing metadata
-
-{meta}
-
-## Occupation-linked skills to judge
-
-Each line below is one taxonomy skill tied to an occupation classified on this posting.
-Decide whether it is **relevant to this specific job advertisement** (not only whether it belongs to the occupation in general).
-
-{menu}
-
-## Required response format
-
-Respond with **only** a single JSON object (no markdown fences, no other text).
-
-- `decisions`: array with **exactly one object per skill** listed under "Occupation-linked skills" above that has `taxonomy_role` **essential** or **optional**. Each object must have:
-  - `skill_id` (string, must match exactly)
-  - `tabiya_occupation_id` (string, must match exactly)
-  - `is_relevant` (boolean)
-
-Do not include `summary`, `reason`, or any other top-level keys.
-
-**JSON shape:**
-{{
-  "decisions": [
-    {{"skill_id": "<uuid>", "tabiya_occupation_id": "<id>", "is_relevant": true}}
-  ]
-}}"""
-    return f"{system}\n\n---\n\n{user}"
+    return render_prompt(
+        templates.occupation_skills_relevance,
+        country=settings.country_name,
+        job_listing=jd,
+        listing_metadata=meta,
+        skills_menu=menu,
+        answer_language=answer_language_slot(templates, settings),
+    )
 
 
 class OccupationSkillsRelevancePromptBuilder:
     """LLM call 3: the job ad plus the occupation-linked skills to judge."""
 
-    def __init__(self, templates: PromptTemplates):
-        self._system = templates.occupation_skills_relevance_system
+    def __init__(self, templates: PromptTemplates, settings: Settings):
+        self._templates = templates
+        self._settings = settings
 
     def build(
         self, ctx: JobDescriptionContext, occupation_to_skills_items: list[OccupationSkillsBlock]
     ) -> str:
         return build_occupation_skills_relevance_prompt(
-            self._system, ctx, occupation_to_skills_items
+            self._templates, self._settings, ctx, occupation_to_skills_items
         )

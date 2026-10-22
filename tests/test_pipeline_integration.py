@@ -388,7 +388,7 @@ class TestPipelineOverAConfiguredModel:
         )
         step = OccupationSkillsRelevanceStep(
             build_traced_llm_client(s.llm),
-            OccupationSkillsRelevancePromptBuilder(PromptRepository().load(s)),
+            OccupationSkillsRelevancePromptBuilder(PromptRepository().load(s), s),
             OccupationSkillsRelevanceResponseParser(),
         )
         ctx = build_job_description_context(classified_doc(), settings=s)

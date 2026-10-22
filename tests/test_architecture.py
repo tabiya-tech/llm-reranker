@@ -43,6 +43,7 @@ def _is_pure(path: Path) -> bool:
         "ranked_document.py",
         "templates.py",
         "job_listing.py",
+        "render.py",
         "whitening.py",
         "upsert.py",
         "response_schemas.py",

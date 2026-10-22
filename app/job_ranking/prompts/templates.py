@@ -1,4 +1,4 @@
-"""A language pack's prompt texts."""
+"""The prompt templates, as read from ``resources/prompts/``."""
 
 from __future__ import annotations
 
@@ -8,12 +8,23 @@ from app.domain_base import DomainModel
 
 
 class PromptTemplates(DomainModel):
-    """A language pack's prompt texts, with ``{country}`` / ``{language}`` already filled in."""
+    """One template per LLM call, plus the answer-language block; slots not yet filled."""
 
     skill_ranker: str = Field(
-        description="`Skills_reranker_prompts.md`: `str.format(full_details=..., skills_text=...)`."
+        description="`skill_ranker.md` (LLM1): `{full_details}`, `{skills_text}`, "
+        "`{answer_language}`."
     )
-    job_attributes_system: str = Field(description="`prompts.py` `JOB_ATTRIBUTES_SYSTEM_PROMPT`.")
-    occupation_skills_relevance_system: str = Field(
-        description="`prompts.py` `OCCUPATION_SKILLS_RELEVANCE_SYSTEM_PROMPT`."
+    job_attributes: str = Field(
+        description="`job_attributes.md` (LLM2): `{country}`, `{opening_line}`, "
+        "`{occupation_block}`, `{job_listing}`, `{listing_metadata}`, `{attributes_menu}`, "
+        "`{work_activities_menu}`, `{extra_field_instructions}`, `{extra_field_json}`, "
+        "`{answer_language}`."
+    )
+    occupation_skills_relevance: str = Field(
+        description="`occupation_skills_relevance.md` (LLM3): `{country}`, `{job_listing}`, "
+        "`{listing_metadata}`, `{skills_menu}`, `{answer_language}`."
+    )
+    answer_language: str = Field(
+        description="`answer_language.md`: `{language}`. Added to every prompt when the run's "
+        "language is not English."
     )

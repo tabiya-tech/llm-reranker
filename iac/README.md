@@ -82,7 +82,8 @@ TARGET_COUNTRY=argentina,MONGODB_DATABASE=ArgentinaJobs_V2
 ```
 
 The language follows from the country (`argentina` → `es`) and selects the whole
-`resources/es/` pack — taxonomy labels, Spanish prompts, Spanish job-attributes schema.
+`resources/es/` pack (taxonomy labels and the Spanish job-attributes schema), and the shared
+prompts are told to answer in Spanish.
 Override with `RERANKER_LANGUAGE` (or `--language`) when you want a different pairing.
 Every language pack ships in the image under `resources/<lang>/` — see the *Countries and
 languages* section of the repo README.

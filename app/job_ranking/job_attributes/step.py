@@ -100,7 +100,7 @@ class JobAttributesStep:
         resolved = resolve_llm2_single_county_user_fields(occupation, None)
         logger.info("%s", PROMPT_LOG_SEPARATOR)
         logger.info(
-            "LLM2 job attributes | job=%s | system=resources/prompts.py | user=client single-county | "
+            "LLM2 job attributes | job=%s | template=resources/prompts/job_attributes.md | "
             "onet_rows=%s | schema_attrs=%s | county=%r | city=%r",
             label,
             len(self._prompts.onet),

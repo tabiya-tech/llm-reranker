@@ -324,7 +324,7 @@ class JobRankingServiceFactory:
             taxonomy_step=OccupationTaxonomyStep(settings, taxonomy),
             skill_ranker=SkillRankerStep(
                 self._llm,
-                SkillRankerPromptBuilder(templates),
+                SkillRankerPromptBuilder(templates, settings),
                 SkillRankerResponseParser(),
                 taxonomy,
             ),
@@ -337,7 +337,7 @@ class JobRankingServiceFactory:
             ),
             occupation_relevance=OccupationSkillsRelevanceStep(
                 self._llm,
-                OccupationSkillsRelevancePromptBuilder(templates),
+                OccupationSkillsRelevancePromptBuilder(templates, settings),
                 OccupationSkillsRelevanceResponseParser(),
             ),
             assembler=RankedJobDocumentAssembler(settings, taxonomy, onet),
