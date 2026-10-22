@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain_base import DomainModel
 from app.languages import (
     DEFAULT_LANGUAGE,
     LANGUAGE_REGISTRY,
@@ -72,6 +74,46 @@ def _country_name_from_slug(slug: str) -> str:
     if slug in _COUNTRY_NAME_BY_SLUG:
         return _COUNTRY_NAME_BY_SLUG[slug]
     return slug.replace("_", " ").title()
+
+
+# Extra yes/no questions a deployment adds to LLM2 (e.g. Kenya's ``requires_post_secondary``):
+# names in RERANKER_LLM2_EXTRA_FIELDS, each one's instruction text in its own variable.
+LLM2_EXTRA_FIELD_ENV_PREFIX = "RERANKER_LLM2_EXTRA_FIELD_"
+_LLM2_EXTRA_FIELD_NAME = re.compile(r"[a-z][a-z0-9_]*")
+
+
+class JobAttributeExtraField(DomainModel):
+    """One extra boolean LLM2 returns at the top level of its JSON, stored on
+    ``llm_job_attributes.attributes.<name>``."""
+
+    name: str = Field(description="JSON key, e.g. `requires_post_secondary`.")
+    instructions: str = Field(
+        description="What the model is told about the field, after `` - `<name>` (boolean): ``."
+    )
+
+
+def _llm2_extra_fields(raw: str | None) -> tuple[JobAttributeExtraField, ...]:
+    """Parse ``RERANKER_LLM2_EXTRA_FIELDS`` and read each field's instruction variable.
+
+    Empty means no extra fields. A field listed without its instruction text, or with a name
+    that is not a lowercase identifier, is a misconfigured deployment and raises.
+    """
+    fields: list[JobAttributeExtraField] = []
+    for name in (part.strip() for part in (raw or "").split(",")):
+        if not name:
+            continue
+        if not _LLM2_EXTRA_FIELD_NAME.fullmatch(name):
+            raise ValueError(
+                f"RERANKER_LLM2_EXTRA_FIELDS: {name!r} is not a lowercase identifier "
+                "(letters, digits and underscores, starting with a letter)"
+            )
+        var = LLM2_EXTRA_FIELD_ENV_PREFIX + name.upper()
+        instructions = (os.environ.get(var) or "").strip("\n")
+        if not instructions.strip():
+            raise ValueError(f"RERANKER_LLM2_EXTRA_FIELDS lists {name!r} but {var} is not set")
+        if name not in (f.name for f in fields):
+            fields.append(JobAttributeExtraField(name=name, instructions=instructions))
+    return tuple(fields)
 
 
 def _normalize_classifier_entity_type_token(raw: str) -> str:
@@ -597,6 +639,9 @@ class Settings(BaseSettings):
     )
 
     target_country_raw: str = Field(default="zambia", validation_alias="TARGET_COUNTRY")
+    job_attributes_extra_fields_raw: str | None = Field(
+        default=None, validation_alias="RERANKER_LLM2_EXTRA_FIELDS"
+    )
 
     reranker_run_wa_enrichment: bool = True
     reranker_fail_on_wa_enrichment_error: bool = False
@@ -648,6 +693,11 @@ class Settings(BaseSettings):
     @cached_property
     def country_name(self) -> str:
         return _country_name_from_slug(self.target_country)
+
+    @cached_property
+    def job_attributes_extra_fields(self) -> tuple[JobAttributeExtraField, ...]:
+        """This deployment's extra LLM2 booleans (``RERANKER_LLM2_EXTRA_FIELDS``); may be empty."""
+        return _llm2_extra_fields(self.job_attributes_extra_fields_raw)
 
     @cached_property
     def language(self) -> str:
@@ -1024,7 +1074,7 @@ def log_ranker_run_configuration(
 
     log.info(
         "Ranker run configuration | invocation=%s | TARGET_COUNTRY=%s | "
-        "RERANKER_LANGUAGE=%s | resources=%s | "
+        "RERANKER_LANGUAGE=%s | resources=%s | RERANKER_LLM2_EXTRA_FIELDS=%s | "
         "RERANKER_LLM_PROVIDER=%s | RERANKER_LLM_MODEL=%s | RERANKER_LLM_CLIENT_CLASS=%s | "
         "llm_api_key=...%s | "
         "MONGODB_SOURCE_COLLECTION=%s | MONGODB_TARGET_COLLECTION=%s | "
@@ -1044,6 +1094,7 @@ def log_ranker_run_configuration(
         loc,
         f"{settings.language} ({settings.language_name})",
         settings.language_resources_dir.name,
+        ",".join(f.name for f in settings.job_attributes_extra_fields) or "none",
         settings.llm.provider,
         settings.llm.model,
         settings.llm.client_class,

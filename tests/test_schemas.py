@@ -15,8 +15,8 @@ import pytest
 from app.job_ranking.job_attributes.parser import (
     _normalize_confidence,
     allowed_level_ids_by_attribute,
+    parse_extra_field_flag,
     parse_job_attributes_response,
-    parse_requires_post_secondary,
 )
 from app.job_ranking.job_attributes.repository import (
     JobAttributesRepository,
@@ -36,6 +36,13 @@ from app.job_ranking.occupation_skills.types import (
 )
 from app.llm.errors import LlmParseError
 from utils.classifier_linked_entities import json_bool
+
+# A deployment's LLM2 extra field, as its env sets it.
+_EXTRA_FIELD_ENV = {
+    "RERANKER_LLM2_EXTRA_FIELDS": "requires_post_secondary",
+    "RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY": "whether a degree is required.",
+}
+
 
 # ---------------------------------------------------------------------------
 # Resource paths and loaders (use the real, committed resources)
@@ -132,7 +139,7 @@ class TestJsonBool:
         assert json_bool(raw, default) == expected
 
 
-class TestParseRequiresPostSecondary:
+class TestParseExtraFieldFlag:
     @pytest.mark.parametrize(
         "raw, expected",
         [
@@ -144,8 +151,8 @@ class TestParseRequiresPostSecondary:
             ("garbage", False),
         ],
     )
-    def test_kenya_eligibility_flag(self, raw, expected):
-        assert parse_requires_post_secondary(raw) == expected
+    def test_flag_value(self, raw, expected):
+        assert parse_extra_field_flag(raw) == expected
 
 
 class TestAllowedLevelIdsByAttribute:
@@ -329,22 +336,23 @@ class TestParseJobAttributesResponse:
         with pytest.raises(LlmParseError, match="must be an object"):
             parse_job_attributes_response("[]", schema, _ONET_FIXTURE, settings=s)
 
-    def test_kenya_requires_post_secondary_attached(self, make_settings):
-        s = make_settings(TARGET_COUNTRY="kenya")
+    def test_configured_extra_field_attached(self, make_settings):
+        s = make_settings(**_EXTRA_FIELD_ENV)
         schema = _build_minimal_schema()
         raw = json.dumps({"attributes": [], "requires_post_secondary": True})
         result = parse_job_attributes_response(raw, schema, _ONET_FIXTURE, settings=s)
         assert result.attributes.get("requires_post_secondary") is True
 
-    def test_kenya_requires_post_secondary_default_false(self, make_settings):
-        s = make_settings(TARGET_COUNTRY="kenya")
+    def test_configured_extra_field_defaults_false(self, make_settings):
+        s = make_settings(**_EXTRA_FIELD_ENV)
         schema = _build_minimal_schema()
         raw = json.dumps({"attributes": []})
         result = parse_job_attributes_response(raw, schema, _ONET_FIXTURE, settings=s)
         assert result.attributes.get("requires_post_secondary") is False
 
-    def test_zambia_does_not_attach_kenya_field(self, make_settings):
-        s = make_settings(TARGET_COUNTRY="zambia")
+    def test_unconfigured_field_is_not_attached(self, make_settings):
+        # The country alone no longer adds the field: only the deployment's env does.
+        s = make_settings(TARGET_COUNTRY="kenya")
         schema = _build_minimal_schema()
         raw = json.dumps({"attributes": [], "requires_post_secondary": True})
         result = parse_job_attributes_response(raw, schema, _ONET_FIXTURE, settings=s)

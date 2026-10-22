@@ -161,8 +161,19 @@ outside `[0, 1]` is accepted but logged and ignored (falls back to "no threshold
 | `RERANKER_LANGUAGE` / `TARGET_LANGUAGE` | `language` | registered language code | derived from `target_country`, else `en` |
 | — | `language_name` | str | `English` |
 | — | `language_resources_dir` | path | `resources/en/` |
+| `RERANKER_LLM2_EXTRA_FIELDS` | `job_attributes_extra_fields` | comma list of lowercase names → `tuple[JobAttributeExtraField, ...]` | empty (plain prompts) |
+| `RERANKER_LLM2_EXTRA_FIELD_<NAME>` | (each field's `instructions`) | text, may span lines | — |
 
 An unrecognised `TARGET_COUNTRY` falls back to `zambia` rather than failing a batch.
+
+`RERANKER_LLM2_EXTRA_FIELDS` lists extra yes/no questions this deployment adds to LLM2. Each
+is a boolean the model returns at the top level of its JSON, stored on
+`llm_job_attributes.attributes.<name>` (`false` when missing or unparseable). The name also
+picks the variable holding what the model is told about it: `requires_post_secondary` reads
+`RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY`. A listed name without that variable, or
+a name that is not a lowercase identifier, fails startup. Kenya's deployment sets
+`requires_post_secondary`, with the text in
+[`docs/llm2_extra_fields/kenya_requires_post_secondary.md`](../docs/llm2_extra_fields/kenya_requires_post_secondary.md).
 
 ## Data files / resource resolution
 
