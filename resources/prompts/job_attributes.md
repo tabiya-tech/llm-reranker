@@ -21,7 +21,9 @@ When estimating attributes, consider:
 Confidence levels:
 - high: Strong evidence from data or well-established patterns
 - medium: Reasonable inference based on similar occupations
-- low: Limited data, estimate based on general patterns{answer_language}
+- low: Limited data, estimate based on general patterns
+
+Answer in {language}. Copy every label and id exactly as given in this prompt: do not translate, rephrase or correct it.
 
 ---
 

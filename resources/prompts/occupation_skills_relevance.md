@@ -9,7 +9,9 @@ Rules:
 - Prioritize domain-specific, technical, or role-specific skills over general soft skills.
 - Use only the skills listed; do not invent skill_ids.
 - Copy skill_id and tabiya_occupation_id exactly as given (strings).
-- Output nothing but the JSON object specified in the user message: a decisions array only, no summary or reasons.{answer_language}
+- Output nothing but the JSON object specified in the user message: a decisions array only, no summary or reasons.
+
+Answer in {language}. Copy every label and id exactly as given in this prompt: do not translate, rephrase or correct it.
 
 ---
 

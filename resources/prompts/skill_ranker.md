@@ -17,7 +17,9 @@ You are an expert technical recruiter with deep knowledge of the job market. You
 3.  **Mutual Exclusivity**: A skill can be essential, optional, or discarded. It cannot appear in more than one category.
 4.  **Use Provided List Only**: Do not invent or infer skills outside the provided list. Strictly exclude non-skills (benefits, conditions, years of experience counts, employer names, and traits).
 5.  **Verbatim Matching**: Every skill string you return must be an **exact, verbatim** copy of a skill label from the list above.
-6.  **Strict JSON Output**: Format your response as a single, valid JSON object. Do not include any explanatory text, markdown formatting (like ```json), or conversational filler outside the JSON.{answer_language}
+6.  **Strict JSON Output**: Format your response as a single, valid JSON object. Do not include any explanatory text, markdown formatting (like ```json), or conversational filler outside the JSON.
+
+Answer in {language}. Copy every label and id exactly as given in this prompt: do not translate, rephrase or correct it.
 
 **Output JSON shape:**
 {{

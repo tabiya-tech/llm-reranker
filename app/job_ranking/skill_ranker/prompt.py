@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.config import Settings
-from app.job_ranking.prompts.render import answer_language_slot, render_prompt
+from app.job_ranking.prompts.render import render_prompt
 from app.job_ranking.prompts.templates import PromptTemplates
 from utils.classifier_linked_entities import SkillPromptEntry
 
@@ -39,7 +39,7 @@ def build_skill_ranker_prompt(
         templates.skill_ranker,
         full_details=full_details,
         skills_text=_format_labeled_list(potential_skills),
-        answer_language=answer_language_slot(templates, settings),
+        language=settings.language_name,
     )
 
 

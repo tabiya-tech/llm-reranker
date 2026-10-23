@@ -110,23 +110,31 @@ class TestSettingsLanguage:
 
 
 class TestPrompts:
-    def test_spanish_run_is_told_to_answer_in_spanish(self, make_settings):
-        from app.job_ranking.prompts.render import answer_language_slot
+    @pytest.mark.parametrize(
+        ("env", "language"),
+        [({"RERANKER_LANGUAGE": "es"}, "Spanish"), ({"TARGET_COUNTRY": "kenya"}, "English")],
+    )
+    def test_prompts_say_which_language_to_answer_in(self, make_settings, env, language):
+        from app.job_context import JobDescriptionContext
+        from app.job_ranking.occupation_skills.prompt import OccupationSkillsRelevancePromptBuilder
         from app.job_ranking.prompts.repository import PromptRepository
+        from app.job_ranking.routes.types import RankRequest
+        from app.job_ranking.skill_ranker.prompt import SkillRankerPromptBuilder
 
-        s = make_settings(RERANKER_LANGUAGE="es", TARGET_COUNTRY="argentina")
-        block = answer_language_slot(PromptRepository().load(s), s)
-
-        assert block.startswith("\n\nAnswer in Spanish.")
-        # The menus carry Spanish taxonomy labels the model must return unchanged.
-        assert "do not translate" in block
-
-    def test_english_run_gets_no_language_block(self, make_settings):
-        from app.job_ranking.prompts.render import answer_language_slot
-        from app.job_ranking.prompts.repository import PromptRepository
-
-        s = make_settings(TARGET_COUNTRY="kenya")
-        assert answer_language_slot(PromptRepository().load(s), s) == ""
+        s = make_settings(**env)
+        templates = PromptRepository().load(s)
+        ctx = JobDescriptionContext.model_validate(
+            {
+                **{f: None for f in JobDescriptionContext.model_fields if f != "classified"},
+                "classified": RankRequest.model_validate({}),
+            }
+        )
+        prompts = [
+            SkillRankerPromptBuilder(templates, s).build("details", []),
+            OccupationSkillsRelevancePromptBuilder(templates, s).build(ctx, []),
+        ]
+        for prompt in prompts:
+            assert f"Answer in {language}." in prompt
 
     def test_every_language_shares_the_english_templates(self, make_settings):
         from app.job_ranking.prompts.repository import PromptRepository

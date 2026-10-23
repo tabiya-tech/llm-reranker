@@ -40,8 +40,8 @@ config:
   # TARGET_COUNTRY=argentina implies RERANKER_LANGUAGE=es and the resources/es/ pack;
   # set RERANKER_LANGUAGE only to break that pairing.
   #
-  # A Kenya stack also asks LLM2 its extra question (see app/SETTINGS.md); the text is
-  # docs/llm2_extra_fields/kenya_requires_post_secondary.md:
+  # A Kenya stack also asks LLM2 its extra question (see app/SETTINGS.md); the full text
+  # is in .env.example:
   #
   #   tabiya-horizon-reranker-infra:extraEnv:
   #     TARGET_COUNTRY: kenya

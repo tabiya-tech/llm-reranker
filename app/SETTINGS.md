@@ -172,8 +172,7 @@ is a boolean the model returns at the top level of its JSON, stored on
 picks the variable holding what the model is told about it: `requires_post_secondary` reads
 `RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY`. A listed name without that variable, or
 a name that is not a lowercase identifier, fails startup. Kenya's deployment sets
-`requires_post_secondary`, with the text in
-[`docs/llm2_extra_fields/kenya_requires_post_secondary.md`](../docs/llm2_extra_fields/kenya_requires_post_secondary.md).
+`requires_post_secondary`; its text is in `.env.example`.
 
 ## Data files / resource resolution
 
