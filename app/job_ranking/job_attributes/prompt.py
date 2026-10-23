@@ -17,7 +17,7 @@ from app.job_ranking.prompts.job_listing import (
     build_job_attributes_jd_text,
     build_job_attributes_metadata_block,
 )
-from app.job_ranking.prompts.render import answer_language_slot, render_prompt
+from app.job_ranking.prompts.render import render_prompt
 from app.job_ranking.prompts.templates import PromptTemplates
 from app.job_ranking.routes.types import RankRequest
 from utils.classifier_linked_entities import (
@@ -28,8 +28,8 @@ from utils.occupation_to_skills_mapping import (
 )
 from utils.uuid_to_tabiya_id import cell_to_esco_uuid
 
-# The LLM2 opening line. Prompt text stays English for every language: the model answers in
-# the run's language through the template's ``{answer_language}`` block.
+# The LLM2 opening line. Prompt text stays English for every language: the template tells the
+# model which language to answer in.
 _OPENING_WITH_REGION = (
     "Estimate job attributes for the following occupation in {region}, {country}:"
 )
@@ -316,7 +316,7 @@ def build_job_attributes_prompt(
         work_activities_menu=_format_onet_work_activity_menu(onet_work_activities),
         extra_field_instructions=_extra_field_instructions(extra_fields),
         extra_field_json=_extra_field_json(extra_fields),
-        answer_language=answer_language_slot(templates, settings),
+        language=settings.language_name,
     )
 
 

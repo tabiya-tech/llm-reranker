@@ -8,7 +8,7 @@ from app.job_ranking.prompts.job_listing import (
     build_job_attributes_jd_text,
     build_job_attributes_metadata_block,
 )
-from app.job_ranking.prompts.render import answer_language_slot, render_prompt
+from app.job_ranking.prompts.render import render_prompt
 from app.job_ranking.prompts.templates import PromptTemplates
 from app.job_ranking.routes.types import OccupationSkillsBlock
 
@@ -52,7 +52,7 @@ def build_occupation_skills_relevance_prompt(
         job_listing=jd,
         listing_metadata=meta,
         skills_menu=menu,
-        answer_language=answer_language_slot(templates, settings),
+        language=settings.language_name,
     )
 
 

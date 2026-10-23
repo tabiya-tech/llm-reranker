@@ -37,5 +37,4 @@ class PromptRepository:
             skill_ranker=_read_template(directory, "skill_ranker.md"),
             job_attributes=_read_template(directory, "job_attributes.md"),
             occupation_skills_relevance=_read_template(directory, "occupation_skills_relevance.md"),
-            answer_language=_read_template(directory, "answer_language.md"),
         )

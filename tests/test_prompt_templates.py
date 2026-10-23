@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 
 # Every slot each template may use; the builders fill exactly these.
 SLOTS = {
-    "skill_ranker": {"full_details", "skills_text", "answer_language"},
+    "skill_ranker": {"full_details", "skills_text", "language"},
     "job_attributes": {
         "country",
         "opening_line",
@@ -24,16 +24,15 @@ SLOTS = {
         "work_activities_menu",
         "extra_field_instructions",
         "extra_field_json",
-        "answer_language",
+        "language",
     },
     "occupation_skills_relevance": {
         "country",
         "job_listing",
         "listing_metadata",
         "skills_menu",
-        "answer_language",
+        "language",
     },
-    "answer_language": {"language"},
 }
 
 

@@ -303,7 +303,6 @@ Each LLM call has one template in `resources/prompts/`, written once in English:
 | `skill_ranker.md` | LLM1, skill ranking |
 | `job_attributes.md` | LLM2, job attributes + ONET work activities |
 | `occupation_skills_relevance.md` | LLM3, occupation-skill relevance |
-| `answer_language.md` | added to every prompt when the language is not English |
 
 A template is `str.format` text: `{slot}` is filled by that call's prompt builder
 (`app/job_ranking/*/prompt.py`), and a literal brace is doubled, as in the JSON examples.
@@ -317,15 +316,15 @@ code. Kenya, for example, asks whether the job needs post-secondary education:
 
 ```bash
 RERANKER_LLM2_EXTRA_FIELDS=requires_post_secondary
-RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY="<what the model is told; Kenya's text is in docs/llm2_extra_fields/kenya_requires_post_secondary.md>"
+RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY="<what the model is told; Kenya's text is in .env.example>"
 ```
 
 Each listed field gets a bullet in LLM2's response instructions, a key in its JSON example,
 a required boolean in its JSON Schema, and a boolean on `llm_job_attributes.attributes`.
 With the list empty, LLM2 gets the plain prompt. See `app/SETTINGS.md`.
 
-A non-English run uses the same templates plus `answer_language.md`: answer in the run's
-language and copy every label and id exactly as given. The skill and occupation labels in
+Every template ends its instructions with "Answer in {language}" (the run's language, e.g.
+English or Spanish) and to copy every label and id exactly as given. The skill and occupation labels in
 the menus come from that language's taxonomy CSVs, and identifiers (JSON keys, attribute
 `name`s, level ids) are never translated.
 
