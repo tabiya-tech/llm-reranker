@@ -35,7 +35,7 @@ curl -X POST 'http://localhost:8000/rank?language=en' \
 
 | Name | Description |
 |---|---|
-| `language` | Optional. The language pack to rank against: taxonomy labels, prompts and job attributes. Accepts a code (`en`, `es`), a locale (`AR-es`, `es_AR`) or a name (`spanish`). Takes precedence over the document's `language` field. When both are missing, the service default applies (`RERANKER_LANGUAGE`, then `TARGET_COUNTRY`). An unknown value falls back to `en` and logs a warning. Each language's taxonomy loads on the first request that needs it, so that request is slower. |
+| `language` | Optional. The language pack to rank against (taxonomy labels and job attributes), and the language the model answers in. Accepts a code (`en`, `es`), a locale (`AR-es`, `es_AR`) or a name (`spanish`). Takes precedence over the document's `language` field. When both are missing, the service default applies (`RERANKER_LANGUAGE`, then `TARGET_COUNTRY`). An unknown value falls back to `en` and logs a warning. Each language's taxonomy loads on the first request that needs it, so that request is slower. |
 
 ### Request body
 

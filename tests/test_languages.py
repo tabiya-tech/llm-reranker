@@ -153,7 +153,7 @@ class TestTranslationPreference:
         assert reranker_prefer_translation(s) is True
 
     def test_spanish_reads_the_original_text(self, make_settings):
-        # With Spanish prompts and a Spanish taxonomy there is no reason to prompt over
+        # With answers in Spanish and a Spanish taxonomy there is no reason to prompt over
         # machine-translated English.
         from app.translation import reranker_prefer_translation
 
