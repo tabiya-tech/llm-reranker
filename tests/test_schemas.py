@@ -350,6 +350,30 @@ class TestParseJobAttributesResponse:
         result = parse_job_attributes_response(raw, schema, _ONET_FIXTURE, settings=s)
         assert result.attributes.get("requires_post_secondary") is False
 
+    @pytest.mark.parametrize("name", ["attributes", "summary", "work_activities", "career_growth"])
+    def test_extra_field_may_not_reuse_a_taken_key(self, make_settings, name):
+        from app.job_ranking.job_attributes.prompt import JobAttributesPromptBuilder
+        from app.job_ranking.prompts.repository import PromptRepository
+
+        s = make_settings(
+            RERANKER_LLM2_EXTRA_FIELDS=name,
+            **{f"RERANKER_LLM2_EXTRA_FIELD_{name.upper()}": "anything."},
+        )
+        with pytest.raises(ValueError, match=name):
+            JobAttributesPromptBuilder(
+                PromptRepository().load(s), _build_minimal_schema(), _ONET_FIXTURE, s
+            )
+
+    def test_free_extra_field_name_is_accepted(self, make_settings):
+        from app.job_ranking.job_attributes.prompt import JobAttributesPromptBuilder
+        from app.job_ranking.prompts.repository import PromptRepository
+
+        s = make_settings(**_EXTRA_FIELD_ENV)
+        builder = JobAttributesPromptBuilder(
+            PromptRepository().load(s), _build_minimal_schema(), _ONET_FIXTURE, s
+        )
+        assert [f.name for f in builder.extra_fields] == ["requires_post_secondary"]
+
     def test_unconfigured_field_is_not_attached(self, make_settings):
         # The country alone no longer adds the field: only the deployment's env does.
         s = make_settings(TARGET_COUNTRY="kenya")
