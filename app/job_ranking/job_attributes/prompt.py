@@ -19,6 +19,7 @@ from app.job_ranking.prompts.job_listing import (
 )
 from app.job_ranking.prompts.render import render_prompt
 from app.job_ranking.prompts.templates import PromptTemplates
+from app.job_ranking.response_schemas import JobAttributesResponse
 from app.job_ranking.routes.types import RankRequest
 from utils.classifier_linked_entities import (
     group_linked_entities_by_type,
@@ -286,6 +287,25 @@ def _extra_field_json(fields: Sequence[JobAttributeExtraField]) -> str:
     return "".join(f',\n  "{f.name}": true' for f in fields)
 
 
+def check_extra_field_names(
+    fields: Sequence[JobAttributeExtraField], schema: JobAttributesSchema
+) -> None:
+    """An extra field may not reuse a key LLM2 already returns or a job attribute's name.
+
+    A clash would replace that key in the JSON Schema (e.g. ``attributes``) or overwrite an
+    attribute's selected level in the stored ``attributes`` map.
+
+    :raises ValueError: naming every clashing field.
+    """
+    taken = set(JobAttributesResponse.model_fields) | {a.name for a in schema.attributes}
+    clashes = sorted(f.name for f in fields if f.name in taken)
+    if clashes:
+        raise ValueError(
+            f"RERANKER_LLM2_EXTRA_FIELDS: {', '.join(clashes)} already used by LLM2's response "
+            "(attributes, summary, work_activities) or the job-attribute schema"
+        )
+
+
 def build_job_attributes_prompt(
     *,
     templates: PromptTemplates,
@@ -333,6 +353,7 @@ class JobAttributesPromptBuilder:
         self._templates = templates
         # Read now so a misconfigured RERANKER_LLM2_EXTRA_FIELDS fails startup, not a job.
         self.extra_fields = settings.job_attributes_extra_fields
+        check_extra_field_names(self.extra_fields, schema)
         self.schema = schema
         self.onet = onet
         self._settings = settings

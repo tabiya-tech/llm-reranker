@@ -13,6 +13,7 @@ Goals:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Iterator
@@ -39,6 +40,7 @@ _RERANKER_ENV_VARS = (
     "RERANKER_LANGUAGE",
     "TARGET_LANGUAGE",
     "RERANKER_PREFER_TRANSLATION",
+    "RERANKER_LLM2_EXTRA_FIELDS",
     "MONGODB_URI",
     "MONGODB_DATABASE",
     "MONGODB_SOURCE_COLLECTION",
@@ -219,7 +221,12 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[pytest.MonkeyPatch
     Caches are cleared on entry and exit so cached settings cannot leak
     across tests.
     """
+    from app.config import LLM2_EXTRA_FIELD_ENV_PREFIX
+
     for name in _RERANKER_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    # Each LLM2 extra field's text has its own variable, named after the field.
+    for name in [n for n in os.environ if n.startswith(LLM2_EXTRA_FIELD_ENV_PREFIX)]:
         monkeypatch.delenv(name, raising=False)
     _clear_settings_caches()
     yield monkeypatch
