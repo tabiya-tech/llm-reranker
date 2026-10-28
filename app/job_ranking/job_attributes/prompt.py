@@ -233,7 +233,7 @@ def build_occupation_block(
     """
     lines = [f"**Occupation:** {preferred_label}"]
     if code:
-        lines.append(f"**KESCO Code:** {code}")
+        lines.append(f"**Occupation Code:** {code}")
     if alt_labels:
         lines.append(f"**Alternative Names:** {'; '.join(alt_labels)}")
     if description:
