@@ -171,7 +171,8 @@ is a boolean the model returns at the top level of its JSON, stored on
 `llm_job_attributes.attributes.<name>` (`false` when missing or unparseable). The name also
 picks the variable holding what the model is told about it: `requires_post_secondary` reads
 `RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY`. A listed name without that variable, or
-a name that is not a lowercase identifier, fails startup. Kenya's deployment sets
+a name that is not a lowercase identifier or that LLM2 already uses (`attributes`, `summary`,
+`work_activities`, or a job attribute's name), fails startup. Kenya's deployment sets
 `requires_post_secondary`; its text is in `.env.example`.
 
 ## Data files / resource resolution

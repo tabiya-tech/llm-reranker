@@ -15,10 +15,10 @@ from app.languages import language_setting
 def reranker_prefer_translation(settings: Settings) -> bool:
     """Use ``translation`` on classified_jobs for LLM listing text (English MT path).
 
-    ``RERANKER_PREFER_TRANSLATION`` wins when set. Otherwise the language decides: English
-    prompts want the English machine translation, while a language with its own prompt and
-    taxonomy pack wants the original text — prompting in Spanish over English MT text would
-    mix the two. See ``prefer_translation`` in ``app/languages/{lang}_config.py``.
+    ``RERANKER_PREFER_TRANSLATION`` wins when set. Otherwise the language decides: an English
+    run wants the English machine translation, while a language with its own taxonomy pack
+    wants the original text — answering in Spanish over English MT text would mix the two.
+    See ``prefer_translation`` in ``app/languages/{lang}_config.py``.
     """
     raw = (os.getenv("RERANKER_PREFER_TRANSLATION") or "").strip().lower()
     if raw:

@@ -62,7 +62,8 @@ async def rank_job(
     """Rank a single classified job document. Send the document directly as the JSON body.
 
     ``?language=es`` (or a ``language`` field on the document) picks the resource pack the
-    job is ranked against — taxonomy labels, prompts, job attributes. Omitted, the
+    job is ranked against (taxonomy labels, job attributes) and the language the model
+    answers in. Omitted, the
     service default applies, so existing callers are unaffected.
     """
     # The query parameter wins over the document's field; neither means the service default.

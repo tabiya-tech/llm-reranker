@@ -64,7 +64,7 @@ app/
 ├── languages/                       language registry, one config module per language
 └── config.py, job_context.py, translation.py, logging_config.py
 utils/                               pure helpers: classifier entities, ESCO–Tabiya mapping
-resources/<lang>/, resources/        language packs (taxonomy CSVs, prompts, job attributes); whitening artifact
+resources/<lang>/, resources/        language packs (taxonomy CSVs, job attributes); prompts/ templates; whitening artifact
 ```
 
 ### Reusable classes
@@ -89,7 +89,7 @@ runs on any configured model, and a test can swap one step for a stub (see
 | A new use case | A new module `app/<use_case>/` with its `routes.py`, `service.py`, `repository.py`, `types.py` and `get_<x>_service.py`; register its routes in `api.py` |
 | An HTTP endpoint for ranking | `app/job_ranking/routes/`, taking `JobRankingServiceFactory` from `get_job_ranking_services` |
 | A pipeline stage | A new sub-module of `app/job_ranking/` (prompt, parser, step, types), run by `JobRankingService` and wired in `JobRankingServiceFactory` |
-| A prompt change | The language pack under `resources/<lang>/`, or the pass's `prompt.py` |
+| A prompt change | The call's template in `resources/prompts/`, or the pass's `prompt.py` for the parts it builds |
 | A field on the ranked document | `app/job_ranking/ranked_document.py` (and `routes/types.py`, `PIPELINE_SCHEMA_VERSION`) |
 | A batch flag | `main.py` (argument) → `BatchOptions` (`app/batch/service.py`) |
 | A post-step after the batch | A use-case module for the work, called from `BatchPostSteps` (`app/batch/post_steps.py`) |
@@ -307,9 +307,7 @@ Each LLM call has one template in `resources/prompts/`, written once in English:
 A template is `str.format` text: `{slot}` is filled by that call's prompt builder
 (`app/job_ranking/*/prompt.py`), and a literal brace is doubled, as in the JSON examples.
 A slot no builder supplies raises `KeyError`, which `tests/test_prompt_templates.py`
-catches. To change what the model is told, edit the template;
-`tests/test_prompt_snapshots.py` then shows the exact prompt diff
-(`pytest tests/test_prompt_snapshots.py --snapshot-update` accepts it).
+catches. To change what the model is told, edit the template.
 
 A deployment can add extra yes/no questions to LLM2 without touching a template or the
 code. Kenya, for example, asks whether the job needs post-secondary education:
@@ -321,12 +319,14 @@ RERANKER_LLM2_EXTRA_FIELD_REQUIRES_POST_SECONDARY="<what the model is told; Keny
 
 Each listed field gets a bullet in LLM2's response instructions, a key in its JSON example,
 a required boolean in its JSON Schema, and a boolean on `llm_job_attributes.attributes`.
-With the list empty, LLM2 gets the plain prompt. See `app/SETTINGS.md`.
+With the list empty, LLM2 gets the plain prompt. A name LLM2 already uses (`attributes`,
+`summary`, `work_activities`, or a job attribute's name) fails startup. See
+`app/SETTINGS.md`.
 
-Every template ends its instructions with "Answer in {language}" (the run's language, e.g.
-English or Spanish) and to copy every label and id exactly as given. The skill and occupation labels in
-the menus come from that language's taxonomy CSVs, and identifiers (JSON keys, attribute
-`name`s, level ids) are never translated.
+Every template tells the model to answer in the run's language (`{language}`, e.g. English
+or Spanish) and to copy every label and id exactly as given. The skill and occupation
+labels in the menus come from that language's taxonomy CSVs, and identifiers (JSON keys,
+attribute `name`s, level ids) are never translated.
 
 ### Adding a language
 

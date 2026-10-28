@@ -82,7 +82,8 @@ def _parse_args() -> argparse.Namespace:
         metavar="LANG",
         help=(
             f"Language of the job ads: {', '.join(LANGUAGE_REGISTRY)} (a locale like AR-es also "
-            "works). Selects resources/<language>/ — taxonomy labels, prompts, job attributes. "
+            "works). Selects resources/<language>/ (taxonomy labels, job attributes) and the "
+            "language the model answers in. "
             "Same as RERANKER_LANGUAGE. Default: derived from TARGET_COUNTRY."
         ),
     )
@@ -106,7 +107,7 @@ def run() -> None:
     args = _parse_args()
     if args.language:
         # Exported before the first get_settings() so every resource path — taxonomy
-        # labels, prompts, job attributes — resolves inside this language's pack.
+        # labels, job attributes — resolves inside this language's pack.
         os.environ["RERANKER_LANGUAGE"] = str(args.language).strip()
     settings: Settings | None = None
     try:
