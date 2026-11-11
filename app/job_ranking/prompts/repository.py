@@ -36,5 +36,6 @@ class PromptRepository:
         return PromptTemplates(
             skill_ranker=_read_template(directory, "skill_ranker.md"),
             job_attributes=_read_template(directory, "job_attributes.md"),
+            experience_skill_ranker=_read_template(directory, "experience_skill_ranker.md"),
             occupation_skills_relevance=_read_template(directory, "occupation_skills_relevance.md"),
         )

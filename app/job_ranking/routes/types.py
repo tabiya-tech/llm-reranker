@@ -499,6 +499,84 @@ class RankResponse(BaseModel):
         )
 
 
+class ExperienceDetails(BaseModel):
+    """The jobseeker's experience whose candidate skills are ranked."""
+
+    title: str = Field(min_length=1, description="Experience title, as the jobseeker gave it.")
+    company: str | None = Field(None, description="Company or organisation, if any.")
+    work_type: str | None = Field(
+        None, description="Kind of work, e.g. `Formal sector/Wage employment`, `Unpaid other`."
+    )
+    responsibilities: list[str] = Field(
+        default_factory=list, description="What the jobseeker did, in their own words."
+    )
+
+
+class SkillCandidate(BaseModel):
+    """One candidate skill, e.g. a classifier match. The caller's taxonomy is used as-is."""
+
+    id: str = Field(min_length=1, description="Caller's skill id, returned in `ranked_ids`.")
+    label: str = Field(min_length=1, description="Skill preferred label.")
+    description: str = Field("", description="Skill description, shown to the model.")
+    score: float | None = Field(
+        None, description="Caller's similarity score. Not shown to the model."
+    )
+
+
+class RankSkillsRequest(BaseModel):
+    """The ``POST /rank/skills`` body: one experience and its candidate skills."""
+
+    experience: ExperienceDetails = Field(description="The experience to rank skills for.")
+    candidates: list[SkillCandidate] = Field(
+        min_length=1, max_length=200, description="Candidate skills; ids must be unique."
+    )
+    max_skills: int = Field(5, ge=1, le=50, description="Most skills to return in `ranked_ids`.")
+    language: str | None = Field(
+        None, description="Language pack (`en`, `es`, ...); the `language` query parameter wins."
+    )
+
+    @model_validator(mode="after")
+    def _unique_candidate_ids(self) -> RankSkillsRequest:
+        ids = [c.id for c in self.candidates]
+        if len(set(ids)) != len(ids):
+            raise ValueError("candidate ids must be unique")
+        return self
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "experience": {
+                        "title": "Baker",
+                        "company": "Mama's Bakery",
+                        "work_type": "SELF_EMPLOYMENT",
+                        "responsibilities": ["I bake bread", "I sell bread at the market"],
+                    },
+                    "candidates": [
+                        {"id": "a1", "label": "bake goods", "description": "...", "score": 0.82},
+                        {"id": "b2", "label": "sell products", "description": "...", "score": 0.77},
+                    ],
+                    "max_skills": 5,
+                }
+            ]
+        }
+    )
+
+
+class RankSkillsResponse(BaseModel):
+    """The ``POST /rank/skills`` response."""
+
+    ranked_ids: list[str] = Field(
+        description="Ids of the skills the experience shows, best first, at most `max_skills`."
+    )
+    discarded_ids: list[str] = Field(description="Every other candidate id, in request order.")
+    timings: dict[str, float] = Field(
+        description="Wall-clock seconds: `llm_s` and `total_s`.",
+        examples=[{"llm_s": 1.4, "total_s": 1.4}],
+    )
+    model: str = Field(description="Model that ranked the skills.", examples=["gemini-2.5-flash"])
+
+
 class HealthResponse(BaseModel):
     """The ``GET /health`` response: readiness and which language packs are loaded."""
 

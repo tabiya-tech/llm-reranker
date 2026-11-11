@@ -11,6 +11,10 @@ from typing import Any, TypeVar
 
 from app.config import LLM3_MODE_FOLD, Settings, get_settings_for_language
 from app.job_context import JobDescriptionContext, build_job_description_context
+from app.job_ranking.experience_skills.parser import ExperienceSkillRankerResponseParser
+from app.job_ranking.experience_skills.prompt import ExperienceSkillRankerPromptBuilder
+from app.job_ranking.experience_skills.step import ExperienceSkillRankerStep
+from app.job_ranking.experience_skills.types import ExperienceSkillsResult
 from app.job_ranking.job_attributes.parser import JobAttributesResponseParser
 from app.job_ranking.job_attributes.prompt import JobAttributesPromptBuilder
 from app.job_ranking.job_attributes.repository import JobAttributesRepository
@@ -27,7 +31,7 @@ from app.job_ranking.occupation_skills.relevance_step import OccupationSkillsRel
 from app.job_ranking.occupation_skills.taxonomy_step import OccupationTaxonomyStep
 from app.job_ranking.prompts.repository import PromptRepository
 from app.job_ranking.ranked_document import RankedJobDocumentAssembler
-from app.job_ranking.routes.types import OccupationSkillsBlock
+from app.job_ranking.routes.types import ExperienceDetails, OccupationSkillsBlock, SkillCandidate
 from app.job_ranking.skill_ranker.parser import SkillRankerResponseParser
 from app.job_ranking.skill_ranker.prompt import SkillRankerPromptBuilder
 from app.job_ranking.skill_ranker.step import SkillRankerStep
@@ -87,6 +91,7 @@ class JobRankingService:
         skill_ranker: SkillRankerStep,
         job_attributes: JobAttributesStep,
         occupation_relevance: OccupationSkillsRelevanceStep,
+        experience_skill_ranker: ExperienceSkillRankerStep,
         assembler: RankedJobDocumentAssembler,
     ):
         self.settings = settings
@@ -94,7 +99,21 @@ class JobRankingService:
         self._skill_ranker = skill_ranker
         self._job_attributes = job_attributes
         self._occupation_relevance = occupation_relevance
+        self._experience_skill_ranker = experience_skill_ranker
         self._assembler = assembler
+
+    def rank_experience_skills(
+        self,
+        experience: ExperienceDetails,
+        candidates: list[SkillCandidate],
+        max_skills: int,
+    ) -> ExperienceSkillsResult:
+        """Rank one jobseeker experience's candidate skills (``POST /rank/skills``).
+
+        Independent of the job pipeline: one LLM call, no taxonomy lookup (the caller sends
+        each candidate's label and description).
+        """
+        return self._experience_skill_ranker.run(experience, candidates, max_skills)
 
     def rank(
         self,
@@ -339,6 +358,11 @@ class JobRankingServiceFactory:
                 self._llm,
                 OccupationSkillsRelevancePromptBuilder(templates, settings),
                 OccupationSkillsRelevanceResponseParser(),
+            ),
+            experience_skill_ranker=ExperienceSkillRankerStep(
+                self._llm,
+                ExperienceSkillRankerPromptBuilder(templates, settings),
+                ExperienceSkillRankerResponseParser(),
             ),
             assembler=RankedJobDocumentAssembler(settings, taxonomy, onet),
         )

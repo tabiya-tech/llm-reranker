@@ -42,6 +42,12 @@ class SkillRankerResponse(BaseModel, Generic[Label]):
     optional_skills: list[Label]
 
 
+class ExperienceSkillRankerResponse(BaseModel, Generic[SkillId]):
+    """``POST /rank/skills``: the candidate ids the experience shows, best first."""
+
+    ranked_skill_ids: list[SkillId]
+
+
 class AttributeEstimate(BaseModel, Generic[AttributeName, LevelId]):
     attribute_name: AttributeName
     selected_level_id: LevelId
@@ -116,6 +122,11 @@ def _json_schema(model: type[BaseModel]) -> dict[str, Any]:
 def skill_ranker_response_schema(skill_labels: Iterable[str]) -> dict[str, Any]:
     """LLM1: see :class:`SkillRankerResponse`."""
     return _json_schema(SkillRankerResponse[_menu(skill_labels)])
+
+
+def experience_skill_ranker_response_schema(skill_ids: Iterable[str]) -> dict[str, Any]:
+    """``POST /rank/skills``: see :class:`ExperienceSkillRankerResponse`."""
+    return _json_schema(ExperienceSkillRankerResponse[_menu(skill_ids)])
 
 
 def job_attributes_response_schema(
