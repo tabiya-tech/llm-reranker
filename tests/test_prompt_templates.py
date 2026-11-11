@@ -14,6 +14,7 @@ pytestmark = pytest.mark.unit
 # Every slot each template may use; the builders fill exactly these.
 SLOTS = {
     "skill_ranker": {"full_details", "skills_text", "language"},
+    "experience_skill_ranker": {"experience_details", "skills_text", "max_skills", "language"},
     "job_attributes": {
         "country",
         "opening_line",

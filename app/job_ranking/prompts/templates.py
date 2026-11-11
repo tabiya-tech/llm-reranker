@@ -19,6 +19,10 @@ class PromptTemplates(DomainModel):
         "`{work_activities_menu}`, `{extra_field_instructions}`, `{extra_field_json}`, "
         "`{language}`."
     )
+    experience_skill_ranker: str = Field(
+        description="`experience_skill_ranker.md` (`POST /rank/skills`): `{experience_details}`, "
+        "`{skills_text}`, `{max_skills}`, `{language}`."
+    )
     occupation_skills_relevance: str = Field(
         description="`occupation_skills_relevance.md` (LLM3): `{country}`, `{job_listing}`, "
         "`{listing_metadata}`, `{skills_menu}`, `{language}`."

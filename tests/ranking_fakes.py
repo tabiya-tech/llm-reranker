@@ -11,6 +11,8 @@ from typing import Any
 
 from app.config import Settings
 from app.job_context import JobDescriptionContext
+from app.job_ranking.experience_skills.step import ExperienceSkillRankerStep
+from app.job_ranking.experience_skills.types import ExperienceSkillsResult
 from app.job_ranking.job_attributes.repository import JobAttributesRepository
 from app.job_ranking.job_attributes.step import JobAttributesStep
 from app.job_ranking.job_attributes.types import AttributeEstimate, JobAttributesResult
@@ -23,7 +25,13 @@ from app.job_ranking.occupation_skills.types import (
     OccupationTaxonomyOutcome,
 )
 from app.job_ranking.ranked_document import RankedJobDocumentAssembler
-from app.job_ranking.routes.types import OccupationSkill, OccupationSkillsBlock, SkillCounts
+from app.job_ranking.routes.types import (
+    ExperienceDetails,
+    OccupationSkill,
+    OccupationSkillsBlock,
+    SkillCandidate,
+    SkillCounts,
+)
 from app.job_ranking.service import JobRankingService, JobRankingServiceFactory
 from app.job_ranking.skill_ranker.step import SkillRankerStep
 from app.job_ranking.skill_ranker.types import SkillRankerResult
@@ -240,6 +248,38 @@ class StubOccupationRelevance(OccupationSkillsRelevanceStep):
         return self.answer()
 
 
+def keep_candidates_in_order(
+    candidates: list[SkillCandidate], max_skills: int
+) -> ExperienceSkillsResult:
+    """Pretend the model kept the first ``max_skills`` candidates, in request order."""
+    ids = [c.id for c in candidates]
+    return ExperienceSkillsResult(
+        ranked_ids=ids[:max_skills], discarded_ids=ids[max_skills:], raw_response="{}"
+    )
+
+
+class StubExperienceSkillRanker(ExperienceSkillRankerStep):
+    """``POST /rank/skills`` without a model: records each call's experience and candidates."""
+
+    def __init__(
+        self,
+        answer: Callable[
+            [list[SkillCandidate], int], ExperienceSkillsResult
+        ] = keep_candidates_in_order,
+    ):
+        self.answer = answer
+        self.calls: list[tuple[ExperienceDetails, list[SkillCandidate], int]] = []
+
+    def run(
+        self,
+        experience: ExperienceDetails,
+        candidates: list[SkillCandidate],
+        max_skills: int,
+    ) -> ExperienceSkillsResult:
+        self.calls.append((experience, candidates, max_skills))
+        return self.answer(candidates, max_skills)
+
+
 class FixedOccupationTaxonomy(OccupationTaxonomyStep):
     """The taxonomy step, answering every job with the same ``occupation_to_skills`` blocks."""
 
@@ -265,6 +305,7 @@ def build_ranking_service(
     skill_ranker: SkillRankerStep | None = None,
     job_attributes: JobAttributesStep | None = None,
     occupation_relevance: OccupationSkillsRelevanceStep | None = None,
+    experience_skill_ranker: ExperienceSkillRankerStep | None = None,
 ) -> JobRankingService:
     """A :class:`JobRankingService` on the real resources, with the given steps swapped in."""
     tx = taxonomy if taxonomy is not None else TaxonomyRepository().load(settings)
@@ -275,6 +316,7 @@ def build_ranking_service(
         skill_ranker=skill_ranker or StubSkillRanker(),
         job_attributes=job_attributes or StubJobAttributes(),
         occupation_relevance=occupation_relevance or StubOccupationRelevance(),
+        experience_skill_ranker=experience_skill_ranker or StubExperienceSkillRanker(),
         assembler=RankedJobDocumentAssembler(settings, tx, onet),
     )
 

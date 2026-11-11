@@ -18,6 +18,7 @@ and response field below is also described there, with examples. The models are 
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/rank` | Rank one classified job document |
+| `POST` | `/rank/skills` | Rank one jobseeker experience's candidate skills |
 | `GET` | `/health` | Readiness, plus which language packs are supported and loaded |
 
 On Cloud Run the service deploys with authenticated invocation. Send an identity token as
@@ -148,6 +149,58 @@ never contains the rejected request body or a raw exception message.
 
 A misconfigured model (unknown provider, missing key or model id) fails at **startup**,
 not on a request: the container fails its startup probe.
+
+## `POST /rank/skills`
+
+Ranks the candidate skills of one jobseeker experience, for example the classifier's matches
+for an experience in Compass. One LLM call (prompt `resources/prompts/experience_skill_ranker.md`)
+picks the candidates the experience shows, best first, up to `max_skills`.
+
+Unlike `POST /rank` it is independent of the job pipeline: no taxonomy lookup and no job
+attributes call. The candidates' ids, labels and descriptions are used as sent, so any taxonomy
+works. The model sees short prompt ids (`S1`, `S2`, ...), labels and descriptions, never the
+caller's ids or scores.
+
+```bash
+curl -X POST 'http://localhost:8000/rank/skills' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "experience": {
+      "title": "Baker",
+      "company": "Mama'"'"'s Bakery",
+      "work_type": "SELF_EMPLOYMENT",
+      "responsibilities": ["I bake bread", "I sell bread at the market"]
+    },
+    "candidates": [
+      {"id": "a1", "label": "bake goods", "description": "...", "score": 0.82},
+      {"id": "b2", "label": "sell products", "description": "...", "score": 0.77}
+    ],
+    "max_skills": 5
+  }'
+```
+
+| Field | Description |
+|---|---|
+| `experience.title` | Required. |
+| `experience.company`, `experience.work_type` | Optional. |
+| `experience.responsibilities` | What the jobseeker did, in their own words. |
+| `candidates[]` | 1 to 200 `{id, label, description?, score?}`. Ids must be unique. `score` is not shown to the model. |
+| `max_skills` | Most skills to return, 1 to 50. Default 5. |
+| `language` | Optional; the `language` query parameter wins, as for `POST /rank`. |
+
+Response `200`:
+
+```json
+{
+  "ranked_ids": ["a1", "b2"],
+  "discarded_ids": [],
+  "timings": {"llm_s": 1.4, "total_s": 1.4},
+  "model": "gemini-2.5-flash"
+}
+```
+
+`ranked_ids` may be empty when no candidate fits. `discarded_ids` holds every other candidate, in
+request order. Errors are as for `POST /rank` (422 / 500 / 503).
 
 ## `GET /health`
 
