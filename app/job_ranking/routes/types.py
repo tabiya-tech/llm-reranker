@@ -503,9 +503,10 @@ class ExperienceDetails(BaseModel):
     """The jobseeker's experience whose candidate skills are ranked."""
 
     title: str = Field(min_length=1, description="Experience title, as the jobseeker gave it.")
-    company: str | None = Field(None, description="Company or organisation, if any.")
+    company: str | None = Field(default=None, description="Company or organisation, if any.")
     work_type: str | None = Field(
-        None, description="Kind of work, e.g. `Formal sector/Wage employment`, `Unpaid other`."
+        default=None,
+        description="Kind of work, e.g. `Formal sector/Wage employment`, `Unpaid other`.",
     )
     responsibilities: list[str] = Field(
         default_factory=list, description="What the jobseeker did, in their own words."
@@ -517,9 +518,9 @@ class SkillCandidate(BaseModel):
 
     id: str = Field(min_length=1, description="Caller's skill id, returned in `ranked_ids`.")
     label: str = Field(min_length=1, description="Skill preferred label.")
-    description: str = Field("", description="Skill description, shown to the model.")
+    description: str = Field(default="", description="Skill description, shown to the model.")
     score: float | None = Field(
-        None, description="Caller's similarity score. Not shown to the model."
+        default=None, description="Caller's similarity score. Not shown to the model."
     )
 
 
@@ -530,9 +531,12 @@ class RankSkillsRequest(BaseModel):
     candidates: list[SkillCandidate] = Field(
         min_length=1, max_length=200, description="Candidate skills; ids must be unique."
     )
-    max_skills: int = Field(5, ge=1, le=50, description="Most skills to return in `ranked_ids`.")
+    max_skills: int = Field(
+        default=5, ge=1, le=50, description="Most skills to return in `ranked_ids`."
+    )
     language: str | None = Field(
-        None, description="Language pack (`en`, `es`, ...); the `language` query parameter wins."
+        default=None,
+        description="Language pack (`en`, `es`, ...); the `language` query parameter wins.",
     )
 
     @model_validator(mode="after")
