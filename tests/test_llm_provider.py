@@ -620,6 +620,27 @@ class TestGeminiClient:
         assert call["config"].temperature == 0.2
         assert call["config"].response_mime_type == "application/json"
 
+    @pytest.mark.parametrize("timeout_s", [0, 30])
+    def test_targets_the_v1beta_api_where_json_mode_is_served(self, monkeypatch, timeout_s):
+        """The SDK's default moved to v1, which rejects ``response_mime_type`` with a 400."""
+        built: list[dict] = []
+        monkeypatch.setattr(
+            "app.llm.providers.gemini.genai.Client", lambda **kwargs: built.append(kwargs)
+        )
+        client = GeminiLlmClient(
+            LlmConfig(
+                provider="gemini",
+                client_class=PROVIDER_CLASS_PATHS["gemini"],
+                model="gemini-2.5-flash",
+                api_key="k",
+                timeout_s=timeout_s,
+            )
+        )
+        client._client()
+        (kwargs,) = built
+        assert kwargs["api_key"] == "k"
+        assert kwargs["http_options"].api_version == "v1beta"
+
     def test_response_schema_is_sent_as_response_json_schema(self, monkeypatch):
         client = GeminiLlmClient(
             LlmConfig(
