@@ -20,6 +20,10 @@ from app.observability import report_usage
 
 logger = logging.getLogger(__name__)
 
+# JSON mode (``response_mime_type``) is only served on v1beta, so the version is pinned
+# rather than left to the SDK, whose default moved to v1.
+GEMINI_API_VERSION = "v1beta"
+
 
 def _is_transient(exc: BaseException) -> bool:
     """Network-level transients, retryable API statuses (429, 5xx), and 503/overload wording."""
@@ -82,14 +86,14 @@ class GeminiLlmClient(LlmClient):
         kwargs.update(config.options())
         return genai_types.GenerateContentConfig(**kwargs)  # type: ignore[arg-type]
 
-    def _http_options(self) -> genai_types.HttpOptions | None:
-        """``None`` unless the config overrides the endpoint or timeout (SDK defaults win)."""
-        opts: dict[str, object] = {}
+    def _http_options(self) -> genai_types.HttpOptions:
+        """The pinned API version, plus the endpoint or timeout when the config overrides them."""
+        opts: dict[str, object] = {"api_version": GEMINI_API_VERSION}
         if self.config.base_url:
             opts["base_url"] = self.config.base_url
         if self.config.timeout_s > 0:
             opts["timeout"] = int(self.config.timeout_s * 1000)  # SDK expects milliseconds
-        return genai_types.HttpOptions(**opts) if opts else None  # type: ignore[arg-type]
+        return genai_types.HttpOptions(**opts)  # type: ignore[arg-type]
 
     def _client(self) -> genai.Client:
         """Lazily create (and memoise) the SDK client."""
@@ -98,12 +102,7 @@ class GeminiLlmClient(LlmClient):
             return sdk
         with self._sdk_lock:
             if self._sdk is None:
-                http_options = self._http_options()
-                self._sdk = (
-                    genai.Client(api_key=self._api_key, http_options=http_options)
-                    if http_options is not None
-                    else genai.Client(api_key=self._api_key)
-                )
+                self._sdk = genai.Client(api_key=self._api_key, http_options=self._http_options())
             return self._sdk
 
     def _reset_client(self) -> None:
